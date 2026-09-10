@@ -106,6 +106,16 @@ def agent_cycle(symbol: str = "AAPLUSDT") -> dict[str, Any]:
     return result
 
 
+@app.get("/agent-loop")
+def agent_loop_status() -> dict[str, Any]:
+    return {
+        "running": agent_loop.is_running(),
+        "interval_seconds": agent_loop.LOOP_INTERVAL_SECONDS,
+        "watched_symbols": agent_loop.WATCHED_SYMBOLS,
+        "recent_cycles": agent_loop.recent_cycles(),
+    }
+
+
 async def periodic_market_loop() -> None:
     while True:
         ticker = market_service.fetch_spot_ticker("AAPLUSDT")

@@ -12,6 +12,7 @@ from typing import Any
 from app.strategy import build_signal_from_ticker
 
 logger = logging.getLogger("priva.agent_loop")
+logger.setLevel(logging.INFO)
 LOOP_INTERVAL_SECONDS = int(os.getenv("AGENT_LOOP_INTERVAL_SECONDS", "300"))
 WATCHED_SYMBOLS = [
     symbol.strip()
@@ -95,6 +96,7 @@ async def run_cycle(symbol: str, *, market_service: Any, risk_engine: Any, execu
             "duration_seconds": round((datetime.now(timezone.utc) - cycle_start).total_seconds(), 3),
         }
         _record_cycle(result)
+        logger.info("[%s] autonomous cycle status=%s order_id=%s", symbol, result["status"], order_result.get("order_id"))
         return result
     except Exception as exc:
         logger.exception("[%s] cycle failed: %s", symbol, exc)
