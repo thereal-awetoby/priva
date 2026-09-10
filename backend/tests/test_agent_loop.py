@@ -1,6 +1,7 @@
 from app.main import process_market_cycle
 from app.agent_loop import run_cycle
 from app.risk_engine import RiskEngine
+from app.performance import calculate_unrealized_pnl
 import asyncio
 
 
@@ -89,3 +90,31 @@ def test_agent_cycle_does_not_execute_hold_signal():
 
     assert result["status"] == "logged"
     assert execution.trades == []
+
+
+def test_calculate_unrealized_pnl_for_long_and_short_cycles():
+    cycles = [
+        {
+            "symbol": "AAPLUSDT",
+            "status": "submitted",
+            "decision": {"action": "buy"},
+            "ticker": {"last_price": 100},
+            "risk_check": {"risk": {"notional": 1000}},
+        },
+        {
+            "symbol": "TSLAUSDT",
+            "status": "submitted",
+            "decision": {"action": "sell"},
+            "ticker": {"last_price": 200},
+            "risk_check": {"risk": {"notional": 1000}},
+        },
+    ]
+
+    marks = {"AAPLUSDT": 110, "TSLAUSDT": 190}
+    result = calculate_unrealized_pnl(
+        cycles,
+        mark_fetcher=lambda symbol: {"status": "live", "last_price": marks[symbol]},
+    )
+
+    assert result["unrealized_pnl"] == 150.0
+    assert result["open_positions"][0]["qty"] == 10.0

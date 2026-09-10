@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from app.market_data import BitgetMarketDataService
 from app.paper_execution import BitgetPaperExecutionClient
+from app.performance import calculate_unrealized_pnl
 from app.risk_engine import RiskEngine
 from app.strategy import build_signal_from_ticker
 from app import agent_loop
@@ -218,6 +219,13 @@ def positions() -> dict[str, Any]:
 
 @app.get("/pnl")
 def pnl() -> dict[str, Any]:
+    cycles = cycle_logger.fetch_cycles()
+    if cycles:
+        return calculate_unrealized_pnl(
+            cycles,
+            mark_fetcher=market_service.fetch_spot_ticker,
+        )
+
     return {
         "unrealized_pnl": 742.38,
         "realized_pnl": 124.9,
