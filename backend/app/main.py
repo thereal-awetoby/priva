@@ -50,9 +50,9 @@ def process_market_cycle(
     trade = {
         "symbol": symbol.upper(),
         "side": "buy" if decision["action"] == "buy" else "sell",
-        "qty": 5,
+        "qty": float(decision.get("size", 0) or 0),
         "entry_price": float(ticker.get("last_price", 0.0) or 0.0),
-        "leverage": 1.0,
+        "leverage": float(decision.get("leverage", 1.0) or 1.0),
     }
 
     risk_check = risk_engine.evaluate_trade(

@@ -37,6 +37,29 @@ def test_process_market_cycle_generates_live_decision_and_trade():
     assert result["log_entry"]["type"] == "trade"
 
 
+def test_process_market_cycle_uses_strategy_size_and_leverage(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.build_signal_from_ticker",
+        lambda ticker: {
+            "action": "buy",
+            "size": 2.0,
+            "leverage": 2.0,
+            "reason": "test strategy",
+            "signal_strength": 0.5,
+            "status": "logged",
+        },
+    )
+
+    result = process_market_cycle(
+        "AAPLUSDT",
+        market_service=FakeMarketService(),
+        risk_engine=RiskEngine(),
+    )
+
+    assert result["risk_check"]["risk"]["notional"] == 220.0
+    assert result["risk_check"]["risk"]["leverage"] == 2.0
+
+
 def test_process_market_cycle_handles_fallback_without_trade():
     result = process_market_cycle(
         "AAPLUSDT",
