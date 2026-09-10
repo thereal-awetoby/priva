@@ -19,6 +19,12 @@ class BitgetPaperExecutionClient:
     SPOT_ORDER_PATH = "/api/v2/spot/trade/place-order"
 
     @staticmethod
+    def _format_size(value: float) -> str:
+        if value == int(value):
+            return str(int(value))
+        return str(value)
+
+    @staticmethod
     def normalize_position_mode(value: Any) -> str | None:
         if value is None:
             return None
@@ -78,7 +84,7 @@ class BitgetPaperExecutionClient:
 
         body = {
             "symbol": str(trade["symbol"]).upper(),
-            "size": str(size),
+            "size": self._format_size(size),
             "side": side,
             "orderType": "market",
             "force": "gtc",

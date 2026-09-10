@@ -146,6 +146,32 @@ def test_paper_client_submits_spot_order(monkeypatch):
     assert "productType" not in body
 
 
+def test_paper_client_formats_whole_number_size_without_decimal(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    client.place_market_order({"symbol": "AAPLUSDT", "side": "buy", "qty": 1, "market": "futures"})
+
+    body = json.loads(session.calls[0][1]["data"])
+    assert body["size"] == "1"
+
+
+def test_paper_client_preserves_fractional_size(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    client.place_market_order({"symbol": "BTCUSDT", "side": "buy", "qty": 0.125, "market": "futures"})
+
+    body = json.loads(session.calls[0][1]["data"])
+    assert body["size"] == "0.125"
+
+
 def test_paper_client_submits_close_order(monkeypatch):
     monkeypatch.setenv("BITGET_API_KEY", "key")
     monkeypatch.setenv("BITGET_API_SECRET", "secret")
