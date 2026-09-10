@@ -39,10 +39,15 @@ class BitgetPaperExecutionClient:
         if market not in {"spot", "futures"}:
             return {"status": "rejected", "message": "market must be spot or futures"}
 
+        side = str(trade["side"]).lower()
+        size = float(trade["qty"])
+        if market == "spot" and side == "buy":
+            size *= float(trade.get("entry_price", 0))
+
         body = {
             "symbol": str(trade["symbol"]).upper(),
-            "size": str(trade["qty"]),
-            "side": str(trade["side"]).lower(),
+            "size": str(size),
+            "side": side,
             "orderType": "market",
             "force": "gtc",
             "clientOid": f"priva_{int(time.time() * 1000)}",

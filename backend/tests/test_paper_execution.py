@@ -64,7 +64,13 @@ def test_paper_client_submits_spot_order(monkeypatch):
     session = FakeSession()
     client = BitgetPaperExecutionClient(session=session)
     client.place_market_order(
-        {"symbol": "BTCUSDT", "side": "buy", "qty": 0.01, "market": "spot"}
+        {
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "qty": 0.01,
+            "entry_price": 100000,
+            "market": "spot",
+        }
     )
 
     url, kwargs = session.calls[0]
@@ -72,4 +78,5 @@ def test_paper_client_submits_spot_order(monkeypatch):
     assert url.endswith("/api/v2/spot/trade/place-order")
     assert kwargs["headers"]["paptrading"] == "1"
     assert body["symbol"] == "BTCUSDT"
+    assert body["size"] == "1000.0"
     assert "productType" not in body
