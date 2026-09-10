@@ -18,7 +18,7 @@ class BitgetMarketDataService:
         self.last_snapshot: dict[str, Any] | None = None
 
     def fetch_spot_ticker(self, symbol: str) -> dict[str, Any]:
-        url = f"{self.BASE_URL}/spot/market/ticker"
+        url = f"{self.BASE_URL}/spot/market/tickers"
         params = {"symbol": symbol}
 
         try:
@@ -32,6 +32,12 @@ class BitgetMarketDataService:
                 return fallback
 
             data = payload.get("data") or {}
+            if isinstance(data, list):
+                requested_symbol = symbol.upper()
+                data = next(
+                    (item for item in data if str(item.get("symbol", "")).upper() == requested_symbol),
+                    {},
+                )
             if not data:
                 fallback = self.build_fallback_ticker(symbol, "empty_data")
                 self.last_snapshot = fallback

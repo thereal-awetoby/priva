@@ -29,3 +29,21 @@ def test_fallback_when_api_error():
     assert fallback["symbol"] == "NVDAUSDT"
     assert fallback["status"] == "fallback"
     assert fallback["source"] == "bitget_public"
+
+
+def test_normalize_ticker_list_response():
+    service = BitgetMarketDataService()
+    payload = {
+        "code": "00000",
+        "data": [
+            {"symbol": "BTCUSDT", "last": "100", "open": "90", "ts": "1726000000000"},
+            {"symbol": "ETHUSDT", "last": "200", "open": "190", "ts": "1726000000000"},
+        ],
+    }
+
+    data = payload["data"]
+    selected = next(item for item in data if item["symbol"] == "ETHUSDT")
+    normalized = service.normalize_ticker_payload(selected)
+
+    assert normalized["symbol"] == "ETHUSDT"
+    assert normalized["last_price"] == 200.0
