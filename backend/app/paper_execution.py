@@ -22,6 +22,7 @@ class BitgetPaperExecutionClient:
         self.api_key = os.getenv("BITGET_API_KEY", "")
         self.api_secret = os.getenv("BITGET_API_SECRET", "")
         self.passphrase = os.getenv("BITGET_API_PASSPHRASE", "")
+        self.position_mode = os.getenv("BITGET_POSITION_MODE", "one_way").lower()
         self.session = session
 
     @property
@@ -54,16 +55,14 @@ class BitgetPaperExecutionClient:
         }
         order_path = self.SPOT_ORDER_PATH if market == "spot" else self.FUTURES_ORDER_PATH
         if market == "futures":
-            body.update(
-                {
-                    "productType": "USDT-FUTURES",
-                    "marginMode": "isolated",
-                    "marginCoin": "USDT",
-                    "tradeSide": str(trade.get("trade_side", "open")).lower(),
-                }
-            )
-            if body["tradeSide"] == "close":
-                body["holdSide"] = "long" if trade.get("position_side") == "buy" else "short"
+            trade_side = str(trade.get("trade_side", "open")).lower()
+            body.update({"productType": "USDT-FUTURES", "marginMode": "isolated", "marginCoin": "USDT"})
+            if trade_side == "close" and self.position_mode != "hedge":
+                body["reduceOnly"] = "YES"
+            else:
+                body["tradeSide"] = trade_side
+                if trade_side == "close":
+                    body["holdSide"] = "long" if trade.get("position_side") == "buy" else "short"
         body_text = json.dumps(body, separators=(",", ":"))
         timestamp = str(int(time.time() * 1000))
         prehash = timestamp + "POST" + order_path + body_text

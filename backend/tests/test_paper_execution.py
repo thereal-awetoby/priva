@@ -99,6 +99,7 @@ def test_paper_client_submits_close_order(monkeypatch):
     monkeypatch.setenv("BITGET_API_KEY", "key")
     monkeypatch.setenv("BITGET_API_SECRET", "secret")
     monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+    monkeypatch.setenv("BITGET_POSITION_MODE", "hedge")
 
     session = FakeSession()
     client = BitgetPaperExecutionClient(session=session)
@@ -119,6 +120,31 @@ def test_paper_client_submits_close_order(monkeypatch):
     assert body["tradeSide"] == "close"
     assert body["side"] == "sell"
     assert body["holdSide"] == "long"
+
+
+def test_paper_client_submits_one_way_reduce_only_close(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+    monkeypatch.delenv("BITGET_POSITION_MODE", raising=False)
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    client.place_market_order(
+        {
+            "symbol": "AAPLUSDT",
+            "side": "sell",
+            "qty": 1,
+            "market": "futures",
+            "trade_side": "close",
+            "position_side": "buy",
+        }
+    )
+
+    body = json.loads(session.calls[0][1]["data"])
+    assert body["reduceOnly"] == "YES"
+    assert "tradeSide" not in body
+    assert "holdSide" not in body
 
 
 def test_paper_client_reads_futures_positions(monkeypatch):
