@@ -286,7 +286,7 @@ def get_kill_switch() -> dict[str, Any]:
 
 
 @app.post("/kill-switch")
-def set_kill_switch(payload: KillSwitchRequest) -> dict[str, Any]:
+async def set_kill_switch(payload: KillSwitchRequest) -> dict[str, Any]:
     if payload.enabled:
         agent_loop.stop()
     else:
