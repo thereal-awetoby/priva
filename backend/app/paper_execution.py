@@ -62,6 +62,8 @@ class BitgetPaperExecutionClient:
                     "tradeSide": str(trade.get("trade_side", "open")).lower(),
                 }
             )
+            if body["tradeSide"] == "close":
+                body["holdSide"] = "long" if trade.get("position_side") == "buy" else "short"
         body_text = json.dumps(body, separators=(",", ":"))
         timestamp = str(int(time.time() * 1000))
         prehash = timestamp + "POST" + order_path + body_text

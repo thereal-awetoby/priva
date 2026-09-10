@@ -110,6 +110,7 @@ def test_paper_client_submits_close_order(monkeypatch):
             "entry_price": 325,
             "market": "futures",
             "trade_side": "close",
+            "position_side": "buy",
         }
     )
 
@@ -117,6 +118,7 @@ def test_paper_client_submits_close_order(monkeypatch):
     body = json.loads(kwargs["data"])
     assert body["tradeSide"] == "close"
     assert body["side"] == "sell"
+    assert body["holdSide"] == "long"
 
 
 def test_paper_client_reads_futures_positions(monkeypatch):
