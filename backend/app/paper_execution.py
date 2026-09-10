@@ -158,3 +158,45 @@ class BitgetPaperExecutionClient:
             return {"status": "rejected", "message": str(exc), "positions": []}
         except requests.RequestException as exc:
             return {"status": "execution_error", "message": str(exc), "positions": []}
+
+    def fetch_account_mode(self, symbol: str = "AAPLUSDT") -> dict[str, Any]:
+        """Return the Bitget futures position mode without exposing account data."""
+        if not self.configured:
+            return {"status": "not_configured"}
+
+        path = "/api/v2/mix/account/account"
+        query = f"?symbol={symbol.upper()}&marginCoin=USDT&productType=USDT-FUTURES"
+        timestamp = str(int(time.time() * 1000))
+        prehash = timestamp + "GET" + path + query
+        signature = base64.b64encode(
+            hmac.new(self.api_secret.encode(), prehash.encode(), hashlib.sha256).digest()
+        ).decode()
+        headers = {
+            "ACCESS-KEY": self.api_key,
+            "ACCESS-SIGN": signature,
+            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-PASSPHRASE": self.passphrase,
+            "paptrading": "1",
+        }
+
+        try:
+            response = self.session.get(
+                f"{self.BASE_URL}{path}{query}",
+                headers=headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in (None, "00000", 0, "0"):
+                return {"status": "rejected", "message": payload.get("msg", "Account query rejected")}
+            data = payload.get("data") or {}
+            return {
+                "status": "ok",
+                "symbol": symbol.upper(),
+                "product_type": "USDT-FUTURES",
+                "position_mode": data.get("posMode"),
+            }
+        except requests.HTTPError as exc:
+            return {"status": "rejected", "message": str(exc)}
+        except (requests.RequestException, ValueError) as exc:
+            return {"status": "execution_error", "message": str(exc)}

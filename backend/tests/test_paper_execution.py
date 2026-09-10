@@ -160,3 +160,25 @@ def test_paper_client_reads_futures_positions(monkeypatch):
     assert result["positions"][0]["symbol"] == "AAPLUSDT"
     assert url.endswith("/api/v2/mix/position/all-position?marginCoin=USDT&productType=USDT-FUTURES")
     assert kwargs["headers"]["paptrading"] == "1"
+
+
+def test_paper_client_reads_sanitized_account_mode(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    class AccountSession(FakeSession):
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return FakeResponse({"code": "00000", "data": {"posMode": "one_way_mode", "available": "999"}})
+
+    session = AccountSession()
+    result = BitgetPaperExecutionClient(session=session).fetch_account_mode()
+
+    assert result == {
+        "status": "ok",
+        "symbol": "AAPLUSDT",
+        "product_type": "USDT-FUTURES",
+        "position_mode": "one_way_mode",
+    }
+    assert "available" not in result
