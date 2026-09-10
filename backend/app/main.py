@@ -170,6 +170,29 @@ def status() -> dict[str, Any]:
 
 @app.get("/positions")
 def positions() -> dict[str, Any]:
+    exchange_positions = paper_execution_client.fetch_futures_positions()
+    if exchange_positions["status"] == "ok":
+        live_positions = []
+        for position in exchange_positions["positions"]:
+            qty = float(position.get("total", position.get("available", 0)) or 0)
+            if qty <= 0:
+                continue
+            side = "buy" if position.get("holdSide") == "long" else "sell"
+            live_positions.append(
+                {
+                    "symbol": position.get("symbol"),
+                    "side": side,
+                    "qty": qty,
+                    "entry_price": float(position.get("averageOpenPrice", 0) or 0),
+                    "mark_price": float(position.get("markPrice", 0) or 0),
+                    "notional_usd": abs(float(position.get("openCost", 0) or 0)),
+                    "unrealized_pnl": float(position.get("unrealizedPL", 0) or 0),
+                    "leverage": float(position.get("leverage", 1) or 1),
+                    "source": "bitget_paper",
+                }
+            )
+        return {"positions": live_positions, "total_positions": len(live_positions)}
+
     cycles = cycle_logger.fetch_cycles()
     if cycles:
         live_positions = calculate_unrealized_pnl(

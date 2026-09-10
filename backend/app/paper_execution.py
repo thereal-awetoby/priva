@@ -114,3 +114,38 @@ class BitgetPaperExecutionClient:
             "exchange": payload,
             "order_id": (payload.get("data") or {}).get("orderId"),
         }
+
+    def fetch_futures_positions(self) -> dict[str, Any]:
+        if not self.configured:
+            return {"status": "not_configured", "positions": []}
+
+        path = "/api/v2/mix/ position/all-position".replace(" ", "")
+        query = "?marginCoin=USDT&productType=USDT-FUTURES"
+        timestamp = str(int(time.time() * 1000))
+        prehash = timestamp + "GET" + path + query
+        signature = base64.b64encode(
+            hmac.new(self.api_secret.encode(), prehash.encode(), hashlib.sha256).digest()
+        ).decode()
+        headers = {
+            "ACCESS-KEY": self.api_key,
+            "ACCESS-SIGN": signature,
+            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-PASSPHRASE": self.passphrase,
+            "paptrading": "1",
+        }
+
+        try:
+            response = self.session.get(
+                f"{self.BASE_URL}{path}{query}",
+                headers=headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in (None, "00000", 0, "0"):
+                return {"status": "rejected", "message": payload.get("msg", "Position query rejected"), "positions": []}
+            return {"status": "ok", "positions": payload.get("data") or []}
+        except requests.HTTPError as exc:
+            return {"status": "rejected", "message": str(exc), "positions": []}
+        except requests.RequestException as exc:
+            return {"status": "execution_error", "message": str(exc), "positions": []}

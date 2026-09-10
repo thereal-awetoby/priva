@@ -22,6 +22,11 @@ class FakeSession:
         self.calls.append((url, kwargs))
         return FakeResponse({"code": "00000", "data": {"orderId": "paper-123"}})
 
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        response = FakeResponse({"code": "00000", "data": [{"symbol": "AAPLUSDT", "total": "1"}]})
+        return response
+
 
 def test_paper_client_fails_closed_without_credentials(monkeypatch):
     for key in ("BITGET_API_KEY", "BITGET_API_SECRET", "BITGET_API_PASSPHRASE"):
@@ -112,3 +117,18 @@ def test_paper_client_submits_close_order(monkeypatch):
     body = json.loads(kwargs["data"])
     assert body["tradeSide"] == "close"
     assert body["side"] == "sell"
+
+
+def test_paper_client_reads_futures_positions(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    session = FakeSession()
+    result = BitgetPaperExecutionClient(session=session).fetch_futures_positions()
+
+    url, kwargs = session.calls[0]
+    assert result["status"] == "ok"
+    assert result["positions"][0]["symbol"] == "AAPLUSDT"
+    assert url.endswith("/api/v2/mix/position/all-position?marginCoin=USDT&productType=USDT-FUTURES")
+    assert kwargs["headers"]["paptrading"] == "1"
