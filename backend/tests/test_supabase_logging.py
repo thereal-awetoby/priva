@@ -55,6 +55,7 @@ def test_supabase_logger_inserts_cycle(monkeypatch):
     assert kwargs["headers"]["Authorization"] == "Bearer secret"
     assert kwargs["json"]["symbol"] == "AAPLUSDT"
     assert kwargs["json"]["order_result"]["order_id"] == "order-1"
+    assert kwargs["json"]["session_id"]
 
 
 def test_supabase_logger_reads_cycles(monkeypatch):
@@ -66,6 +67,16 @@ def test_supabase_logger_reads_cycles(monkeypatch):
 
     assert cycles == [{"symbol": "AAPLUSDT", "status": "submitted"}]
     assert session.calls[0][1]["params"]["limit"] == 10
+
+
+def test_supabase_logger_filters_cycles_by_session(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+    session = FakeSession([])
+
+    SupabaseCycleLogger(session=session).fetch_cycles(session_id="session-1")
+
+    assert session.calls[0][1]["params"]["session_id"] == "eq.session-1"
 
 
 def test_supabase_logger_detects_open_position(monkeypatch):

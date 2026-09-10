@@ -82,10 +82,19 @@ create table if not exists public.strategy_settings (
 );
 
 alter table public.strategy_settings enable row level security;
+
+alter table public.agent_cycles
+	add column if not exists session_id text;
+
+create index if not exists agent_cycles_session_id_idx
+	on public.agent_cycles (session_id);
 ```
 
 The backend uses the singleton row `id = 'global'`. It loads that row at
 startup and upserts it when `/strategies/{strategy_id}/activate` succeeds.
+Each backend process also gets a `session_id`; realized PnL is calculated from
+cycles in the current session, while unrealized PnL comes from live Bitget
+positions.
 
 ## Useful endpoints
 

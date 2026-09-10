@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from uuid import uuid4
 from typing import Any
 
 import requests
@@ -10,10 +11,11 @@ logger = logging.getLogger("priva.supabase")
 
 
 class SupabaseCycleLogger:
-    def __init__(self, *, session: Any = requests) -> None:
+    def __init__(self, *, session: Any = requests, session_id: str | None = None) -> None:
         self.url = os.getenv("SUPABASE_URL", "").rstrip("/")
         self.service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
         self.session = session
+        self.session_id = session_id or os.getenv("PRIVA_SESSION_ID") or uuid4().hex
 
     @property
     def configured(self) -> bool:
@@ -24,6 +26,7 @@ class SupabaseCycleLogger:
             return {"status": "not_configured"}
 
         record = {
+            "session_id": self.session_id,
             "symbol": cycle.get("symbol", "UNKNOWN"),
             "status": cycle.get("status", "unknown"),
             "decision": cycle.get("decision", {}),
@@ -51,18 +54,21 @@ class SupabaseCycleLogger:
             logger.warning("Supabase cycle logging failed: %s", exc)
             return {"status": "error", "message": str(exc)}
 
-    def fetch_cycles(self, *, limit: int = 100) -> list[dict[str, Any]]:
+    def fetch_cycles(self, *, limit: int = 100, session_id: str | None = None) -> list[dict[str, Any]]:
         if not self.configured:
             return []
 
         try:
+            params = {"select": "*", "order": "created_at.desc", "limit": limit}
+            if session_id:
+                params["session_id"] = f"eq.{session_id}"
             response = self.session.get(
                 f"{self.url}/rest/v1/agent_cycles",
                 headers={
                     "apikey": self.service_role_key,
                     "Authorization": f"Bearer {self.service_role_key}",
                 },
-                params={"select": "*", "order": "created_at.desc", "limit": limit},
+                params=params,
                 timeout=15,
             )
             response.raise_for_status()

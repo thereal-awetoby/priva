@@ -28,7 +28,7 @@ class ActiveExecutionClient:
 
 def test_pnl_uses_live_positions_and_zero_realized_without_cycles(monkeypatch):
     monkeypatch.setattr(main, "paper_execution_client", EmptyExecutionClient())
-    monkeypatch.setattr(main.cycle_logger, "fetch_cycles", lambda: [])
+    monkeypatch.setattr(main.cycle_logger, "fetch_cycles", lambda **kwargs: [])
 
     result = main.pnl()
 
@@ -40,7 +40,7 @@ def test_pnl_uses_live_positions_and_zero_realized_without_cycles(monkeypatch):
 
 def test_risk_usage_reflects_live_position(monkeypatch):
     monkeypatch.setattr(main, "paper_execution_client", ActiveExecutionClient())
-    monkeypatch.setattr(main.cycle_logger, "fetch_cycles", lambda: [])
+    monkeypatch.setattr(main.cycle_logger, "fetch_cycles", lambda **kwargs: [])
 
     result = main.risk_usage()
 

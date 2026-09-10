@@ -341,7 +341,7 @@ def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]
 
 @app.get("/pnl")
 def pnl() -> dict[str, Any]:
-    cycles = cycle_logger.fetch_cycles()
+    cycles = cycle_logger.fetch_cycles(session_id=cycle_logger.session_id)
     logged_pnl = calculate_unrealized_pnl(
         cycles,
         mark_fetcher=market_service.fetch_spot_ticker,
@@ -360,6 +360,7 @@ def pnl() -> dict[str, Any]:
         "total_pnl": total_pnl,
         "currency": "USD",
         "source": "bitget_and_supabase",
+        "session_id": cycle_logger.session_id,
         "open_positions": live_positions,
     }
 
