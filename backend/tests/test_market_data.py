@@ -47,3 +47,22 @@ def test_normalize_ticker_list_response():
 
     assert normalized["symbol"] == "ETHUSDT"
     assert normalized["last_price"] == 200.0
+
+
+def test_normalize_futures_ticker_payload():
+    service = BitgetMarketDataService()
+    normalized = service.normalize_ticker_payload(
+        {
+            "symbol": "AAPLUSDT",
+            "lastPr": "223.12",
+            "open24h": "220.00",
+            "high24h": "225.50",
+            "low24h": "219.10",
+            "usdtVolume": "212350000",
+            "ts": "1726000000000",
+        }
+    )
+
+    assert normalized["symbol"] == "AAPLUSDT"
+    assert normalized["last_price"] == 223.12
+    assert normalized["open_price"] == 220.0
