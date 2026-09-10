@@ -81,6 +81,16 @@ class BitgetPaperExecutionClient:
             )
             response.raise_for_status()
             payload = response.json()
+        except requests.HTTPError as exc:
+            try:
+                exchange = response.json()
+            except ValueError:
+                exchange = {"raw": response.text}
+            return {
+                "status": "rejected",
+                "message": exchange.get("msg", str(exc)),
+                "exchange": exchange,
+            }
         except requests.RequestException as exc:
             return {"status": "execution_error", "message": str(exc)}
         if payload.get("code") not in (None, "00000", 0, "0"):
