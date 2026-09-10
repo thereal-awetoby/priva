@@ -110,7 +110,7 @@ def test_paper_client_submits_close_order(monkeypatch):
             "qty": 1,
             "entry_price": 325,
             "market": "futures",
-            "trade_side": "close",
+            "reduce_only": True,
             "position_side": "buy",
         }
     )
@@ -136,8 +136,7 @@ def test_paper_client_submits_one_way_reduce_only_close(monkeypatch):
             "side": "sell",
             "qty": 1,
             "market": "futures",
-            "trade_side": "close",
-            "position_side": "buy",
+            "reduce_only": True,
         }
     )
 

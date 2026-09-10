@@ -298,8 +298,7 @@ def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]
         "entry_price": float(current.get("mark_price", current.get("entry_price", 0))),
         "leverage": float(current.get("leverage", 1)),
         "market": "futures",
-        "trade_side": "close",
-        "position_side": payload.position_side,
+        "reduce_only": True,
     }
     execution = paper_execution_client.place_market_order(close_trade)
     if execution.get("status") != "submitted":

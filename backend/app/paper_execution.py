@@ -59,9 +59,12 @@ class BitgetPaperExecutionClient:
             if self.position_mode != "hedge":
                 body["side"] = f"{side}_single"
             body.update({"productType": "USDT-FUTURES", "marginMode": "isolated", "marginCoin": "USDT"})
-            if trade_side == "close" and self.position_mode != "hedge":
+            if trade.get("reduce_only") and self.position_mode != "hedge":
                 body["reduceOnly"] = "YES"
-            else:
+            elif trade.get("reduce_only") and self.position_mode == "hedge":
+                body["tradeSide"] = "close"
+                body["holdSide"] = "long" if trade.get("position_side") == "buy" else "short"
+            elif trade_side != "open":
                 body["tradeSide"] = trade_side
                 if trade_side == "close":
                     body["holdSide"] = "long" if trade.get("position_side") == "buy" else "short"
