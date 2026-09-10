@@ -336,35 +336,57 @@ def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]
 @app.get("/pnl")
 def pnl() -> dict[str, Any]:
     cycles = cycle_logger.fetch_cycles()
-    if cycles:
-        return calculate_unrealized_pnl(
-            cycles,
-            mark_fetcher=market_service.fetch_spot_ticker,
-        )
-
+    logged_pnl = calculate_unrealized_pnl(
+        cycles,
+        mark_fetcher=market_service.fetch_spot_ticker,
+    ) if cycles else {"realized_pnl": 0.0}
+    live_positions = positions()["positions"]
+    unrealized_pnl = round(
+        sum(float(position.get("unrealized_pnl", 0) or 0) for position in live_positions),
+        4,
+    )
+    realized_pnl = round(float(logged_pnl.get("realized_pnl", 0) or 0), 4)
+    total_pnl = round(realized_pnl + unrealized_pnl, 4)
     return {
-        "unrealized_pnl": 742.38,
-        "realized_pnl": 124.9,
-        "daily_pnl": 216.58,
-        "total_pnl": 867.28,
+        "unrealized_pnl": unrealized_pnl,
+        "realized_pnl": realized_pnl,
+        "daily_pnl": total_pnl,
+        "total_pnl": total_pnl,
         "currency": "USD",
+        "source": "bitget_and_supabase",
+        "open_positions": live_positions,
     }
 
 
 @app.get("/risk-usage")
 def risk_usage() -> dict[str, Any]:
+    live_positions = positions()["positions"]
+    position_size = round(
+        sum(float(position.get("notional_usd", 0) or 0) for position in live_positions),
+        4,
+    )
+    current_leverage = max(
+        (float(position.get("leverage", 0) or 0) for position in live_positions),
+        default=0.0,
+    )
+    current_daily_loss = max(0.0, -float(pnl()["daily_pnl"]))
+    max_position_size = float(risk_engine.max_position_size)
+    max_daily_loss = float(risk_engine.max_daily_loss)
+    max_leverage = float(risk_engine.max_leverage)
     return {
-        "max_position_size": 25000,
-        "current_position_size": 4124.88,
-        "max_daily_loss": 1500,
-        "current_daily_loss": 380.4,
-        "max_leverage": 5.0,
-        "current_leverage": 2.8,
+        "max_position_size": max_position_size,
+        "current_position_size": position_size,
+        "max_daily_loss": max_daily_loss,
+        "current_daily_loss": round(current_daily_loss, 4),
+        "max_leverage": max_leverage,
+        "current_leverage": current_leverage,
         "usage_percent": {
-            "position_size": 16.5,
-            "daily_loss": 25.4,
-            "leverage": 56.0,
+            "position_size": round(position_size / max_position_size * 100, 2) if max_position_size else 0.0,
+            "daily_loss": round(current_daily_loss / max_daily_loss * 100, 2) if max_daily_loss else 0.0,
+            "leverage": round(current_leverage / max_leverage * 100, 2) if max_leverage else 0.0,
         },
+        "positions": live_positions,
+        "source": "bitget_and_supabase",
     }
 
 
