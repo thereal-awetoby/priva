@@ -313,6 +313,9 @@ def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]
     execution["closed_position_side"] = payload.position_side
     order = {"symbol": symbol.upper(), "position_side": payload.position_side, "qty": qty}
     mark_price = float(current.get("mark_price", current.get("entry_price", 0)))
+    execution["trade_side"] = "close"
+    execution["qty"] = qty
+    execution["entry_price"] = mark_price
     cycle_logger.log_cycle(
         {
             "symbol": symbol.upper(),
