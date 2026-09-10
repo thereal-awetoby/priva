@@ -178,14 +178,28 @@ def positions() -> dict[str, Any]:
             if qty <= 0:
                 continue
             side = "buy" if position.get("holdSide") == "long" else "sell"
+            entry_price = float(
+                position.get(
+                    "openPriceAvg",
+                    position.get(
+                        "averageOpenPrice",
+                        position.get("openAvgPrice", position.get("openPrice", 0)),
+                    ),
+                )
+                or 0
+            )
+            mark_price = float(position.get("markPrice", 0) or 0)
+            notional = abs(float(position.get("openCost", 0) or 0))
+            if notional <= 0:
+                notional = entry_price * qty if entry_price > 0 else mark_price * qty
             live_positions.append(
                 {
                     "symbol": position.get("symbol"),
                     "side": side,
                     "qty": qty,
-                    "entry_price": float(position.get("averageOpenPrice", 0) or 0),
-                    "mark_price": float(position.get("markPrice", 0) or 0),
-                    "notional_usd": abs(float(position.get("openCost", 0) or 0)),
+                    "entry_price": entry_price,
+                    "mark_price": mark_price,
+                    "notional_usd": notional,
                     "unrealized_pnl": float(position.get("unrealizedPL", 0) or 0),
                     "leverage": float(position.get("leverage", 1) or 1),
                     "source": "bitget_paper",
