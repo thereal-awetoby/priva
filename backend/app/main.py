@@ -166,7 +166,7 @@ def status() -> dict[str, Any]:
 @app.get("/positions")
 def positions() -> dict[str, Any]:
     cycles = cycle_logger.fetch_cycles()
-    live_positions = []
+    position_map: dict[tuple[str, str], dict[str, Any]] = {}
     for cycle in reversed(cycles):
         order = cycle.get("order_result") or {}
         exchange_data = order.get("exchange", {}).get("data") or {}
@@ -174,19 +174,22 @@ def positions() -> dict[str, Any]:
             continue
         ticker = cycle.get("ticker") or {}
         risk = cycle.get("risk_check", {}).get("risk", {})
-        live_positions.append(
-            {
-                "symbol": cycle.get("symbol"),
-                "side": cycle.get("decision", {}).get("action"),
-                "qty": risk.get("notional", 0) / max(float(ticker.get("last_price", 0) or 1), 1),
-                "entry_price": ticker.get("last_price", 0),
-                "mark_price": ticker.get("last_price", 0),
-                "notional_usd": risk.get("notional", 0),
-                "leverage": risk.get("leverage", 1),
-                "source": "paper",
-                "order_id": exchange_data.get("orderId"),
-            }
+        symbol = str(cycle.get("symbol", ""))
+        side = str(cycle.get("decision", {}).get("action", ""))
+        entry_price = float(ticker.get("last_price", 0) or 0)
+        notional = float(risk.get("notional", 0) or 0)
+        qty = notional / max(entry_price, 1)
+        key = (symbol, side)
+        position = position_map.setdefault(
+            key,
+            {"symbol": symbol, "side": side, "qty": 0.0, "notional_usd": 0.0, "leverage": risk.get("leverage", 1), "source": "paper", "order_ids": []},
         )
+        position["qty"] += qty
+        position["notional_usd"] += notional
+        position["entry_price"] = position["notional_usd"] / position["qty"]
+        position["mark_price"] = ticker.get("last_price", 0)
+        position["order_ids"].append(exchange_data.get("orderId"))
+    live_positions = list(position_map.values())
     if live_positions:
         return {"positions": live_positions, "total_positions": len(live_positions)}
 

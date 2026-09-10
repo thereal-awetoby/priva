@@ -66,3 +66,12 @@ def test_supabase_logger_reads_cycles(monkeypatch):
 
     assert cycles == [{"symbol": "AAPLUSDT", "status": "submitted"}]
     assert session.calls[0][1]["params"]["limit"] == 10
+
+
+def test_supabase_logger_detects_open_position(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+    session = FakeSession([{"id": 1}])
+
+    assert SupabaseCycleLogger(session=session).has_open_position("AAPLUSDT") is True
+    assert session.calls[0][1]["params"]["symbol"] == "eq.AAPLUSDT"

@@ -71,3 +71,29 @@ class SupabaseCycleLogger:
         except (requests.RequestException, ValueError) as exc:
             logger.warning("Supabase cycle read failed: %s", exc)
             return []
+
+    def has_open_position(self, symbol: str) -> bool:
+        if not self.configured:
+            return False
+
+        try:
+            response = self.session.get(
+                f"{self.url}/rest/v1/agent_cycles",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                },
+                params={
+                    "select": "id",
+                    "symbol": f"eq.{symbol.upper()}",
+                    "status": "eq.submitted",
+                    "limit": 1,
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return isinstance(payload, list) and bool(payload)
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Supabase position check failed: %s", exc)
+            return True

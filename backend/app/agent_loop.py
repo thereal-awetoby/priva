@@ -94,6 +94,18 @@ async def run_cycle(
             result = {"status": "risk_rejected", "symbol": symbol.upper(), "decision": decision, "risk_check": risk_result, "order": None}
             return persist(result)
 
+        if cycle_logger is not None and cycle_logger.has_open_position(symbol):
+            result = {
+                "status": "skipped_existing_position",
+                "symbol": symbol.upper(),
+                "decision": decision,
+                "ticker": ticker,
+                "risk_check": risk_result,
+                "order": None,
+                "reason": "existing submitted position; waiting for close logic",
+            }
+            return persist(result)
+
         intent = build_encrypted_intent(symbol, decision, risk_result)
         order_result = await asyncio.to_thread(execution_client.place_market_order, trade)
         result = {
