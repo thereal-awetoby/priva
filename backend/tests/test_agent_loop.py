@@ -118,3 +118,36 @@ def test_calculate_unrealized_pnl_for_long_and_short_cycles():
 
     assert result["unrealized_pnl"] == 150.0
     assert result["open_positions"][0]["qty"] == 10.0
+
+
+def test_calculate_pnl_moves_closed_position_to_realized():
+    cycles = [
+        {
+            "symbol": "AAPLUSDT",
+            "status": "submitted",
+            "decision": {"action": "buy"},
+            "ticker": {"last_price": 100},
+            "risk_check": {"risk": {"notional": 1000}},
+        },
+        {
+            "symbol": "AAPLUSDT",
+            "status": "closed",
+            "decision": {"action": "close", "closed_position_side": "buy"},
+            "ticker": {"last_price": 110},
+            "order_result": {
+                "trade_side": "close",
+                "closed_position_side": "buy",
+                "qty": 10,
+                "entry_price": 110,
+            },
+        },
+    ]
+
+    result = calculate_unrealized_pnl(
+        cycles,
+        mark_fetcher=lambda symbol: {"status": "live", "last_price": 110},
+    )
+
+    assert result["realized_pnl"] == 100.0
+    assert result["unrealized_pnl"] == 0.0
+    assert result["open_positions"] == []

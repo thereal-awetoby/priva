@@ -49,7 +49,15 @@ def test_paper_client_submits_paper_order(monkeypatch):
 
     url, kwargs = session.calls[0]
     body = json.loads(kwargs["data"])
-    assert result == {"status": "submitted", "exchange": {"code": "00000", "data": {"orderId": "paper-123"}}, "order_id": "paper-123"}
+    assert result == {
+        "status": "submitted",
+        "trade_side": "open",
+        "side": "buy",
+        "qty": 5.0,
+        "entry_price": 0.0,
+        "exchange": {"code": "00000", "data": {"orderId": "paper-123"}},
+        "order_id": "paper-123",
+    }
     assert url.endswith("/api/v2/mix/order/place-order")
     assert kwargs["headers"]["paptrading"] == "1"
     assert body["productType"] == "USDT-FUTURES"
@@ -80,3 +88,27 @@ def test_paper_client_submits_spot_order(monkeypatch):
     assert body["symbol"] == "BTCUSDT"
     assert body["size"] == "1000.0"
     assert "productType" not in body
+
+
+def test_paper_client_submits_close_order(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    client.place_market_order(
+        {
+            "symbol": "AAPLUSDT",
+            "side": "sell",
+            "qty": 1,
+            "entry_price": 325,
+            "market": "futures",
+            "trade_side": "close",
+        }
+    )
+
+    _, kwargs = session.calls[0]
+    body = json.loads(kwargs["data"])
+    assert body["tradeSide"] == "close"
+    assert body["side"] == "sell"

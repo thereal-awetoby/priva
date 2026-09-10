@@ -91,6 +91,11 @@ class TradeRequest(BaseModel):
     market: Literal["spot", "futures"] = "futures"
 
 
+class ClosePositionRequest(BaseModel):
+    position_side: Literal["buy", "sell"]
+    qty: float | None = None
+
+
 @app.get("/market-data")
 def market_data(symbol: str = "AAPLUSDT") -> dict[str, Any]:
     snapshot = market_service.get_market_snapshot(symbol)
@@ -166,6 +171,17 @@ def status() -> dict[str, Any]:
 @app.get("/positions")
 def positions() -> dict[str, Any]:
     cycles = cycle_logger.fetch_cycles()
+    if cycles:
+        live_positions = calculate_unrealized_pnl(
+            cycles,
+            mark_fetcher=market_service.fetch_spot_ticker,
+        )["open_positions"]
+        if live_positions:
+            for position in live_positions:
+                position["leverage"] = 1.0
+                position["source"] = "paper"
+            return {"positions": live_positions, "total_positions": len(live_positions)}
+
     position_map: dict[tuple[str, str], dict[str, Any]] = {}
     for cycle in reversed(cycles):
         order = cycle.get("order_result") or {}
@@ -217,6 +233,58 @@ def positions() -> dict[str, Any]:
             },
         ],
         "total_positions": 2,
+    }
+
+
+@app.post("/positions/{symbol}/close")
+def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]:
+    current = next(
+        (
+            position
+            for position in positions()["positions"]
+            if position.get("symbol") == symbol.upper()
+            and position.get("side") == payload.position_side
+        ),
+        None,
+    )
+    if current is None:
+        return {"status": "rejected", "message": "position not found"}
+
+    qty = payload.qty if payload.qty is not None else float(current["qty"])
+    if qty <= 0 or qty > float(current["qty"]):
+        return {"status": "rejected", "message": "close quantity exceeds open position"}
+
+    close_trade = {
+        "symbol": symbol.upper(),
+        "side": "sell" if payload.position_side == "buy" else "buy",
+        "qty": qty,
+        "entry_price": float(current.get("mark_price", current.get("entry_price", 0))),
+        "leverage": float(current.get("leverage", 1)),
+        "market": "futures",
+        "trade_side": "close",
+    }
+    execution = paper_execution_client.place_market_order(close_trade)
+    if execution.get("status") != "submitted":
+        return {"order": close_trade, **execution}
+
+    execution["closed_position_side"] = payload.position_side
+    cycle_logger.log_cycle(
+        {
+            "symbol": symbol.upper(),
+            "status": "closed",
+            "decision": {"action": "close", "closed_position_side": payload.position_side},
+            "ticker": market_service.fetch_spot_ticker(symbol),
+            "risk_check": {"allowed": True, "risk": {"notional": qty * close_trade["entry_price"]}},
+            "order": execution,
+        }
+    )
+
+    return {
+        "status": "submitted",
+        "order": close_trade,
+        "closed_position_side": payload.position_side,
+        "risk": {"notional": qty * close_trade["entry_price"]},
+        **execution,
     }
 
 

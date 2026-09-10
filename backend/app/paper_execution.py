@@ -59,7 +59,7 @@ class BitgetPaperExecutionClient:
                     "productType": "USDT-FUTURES",
                     "marginMode": "isolated",
                     "marginCoin": "USDT",
-                    "tradeSide": "open",
+                    "tradeSide": str(trade.get("trade_side", "open")).lower(),
                 }
             )
         body_text = json.dumps(body, separators=(",", ":"))
@@ -107,6 +107,10 @@ class BitgetPaperExecutionClient:
 
         return {
             "status": "submitted",
+            "trade_side": str(trade.get("trade_side", "open")).lower(),
+            "side": side,
+            "qty": float(trade["qty"]),
+            "entry_price": float(trade.get("entry_price", 0) or 0),
             "exchange": payload,
             "order_id": (payload.get("data") or {}).get("orderId"),
         }
