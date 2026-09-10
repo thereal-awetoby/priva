@@ -129,16 +129,6 @@ def debug_bitget_account(symbol: str = "AAPLUSDT") -> dict[str, Any]:
     return paper_execution_client.fetch_account_mode(symbol)
 
 
-@app.post("/debug/flash-close")
-def debug_flash_close(symbol: str, position_side: str) -> dict[str, Any]:
-    return paper_execution_client.flash_close_position(symbol, position_side)
-
-
-@app.get("/debug/raw-positions")
-def debug_raw_positions() -> dict[str, Any]:
-    return paper_execution_client.fetch_futures_positions()
-
-
 async def periodic_market_loop() -> None:
     while True:
         ticker = market_service.fetch_spot_ticker("AAPLUSDT")
@@ -307,39 +297,38 @@ def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]
     if qty <= 0 or qty > float(current["qty"]):
         return {"status": "rejected", "message": "close quantity exceeds open position"}
 
-    close_trade = {
-        "symbol": symbol.upper(),
-        "side": "sell" if payload.position_side == "buy" else "buy",
-        "position_side": payload.position_side,
-        "trade_side": "close",
-        "margin_mode": current.get("margin_mode", "isolated"),
-        "qty": qty,
-        "entry_price": float(current.get("mark_price", current.get("entry_price", 0))),
-        "leverage": float(current.get("leverage", 1)),
-        "market": "futures",
-        "reduce_only": True,
-    }
-    execution = paper_execution_client.place_market_order(close_trade)
+    if qty != float(current["qty"]):
+        return {
+            "status": "rejected",
+            "message": "Partial close not currently supported - close the full position instead.",
+        }
+
+    execution = paper_execution_client.flash_close_position(symbol, payload.position_side)
     if execution.get("status") != "submitted":
-        return {"order": close_trade, **execution}
+        return {
+            "order": {"symbol": symbol.upper(), "position_side": payload.position_side, "qty": qty},
+            **execution,
+        }
 
     execution["closed_position_side"] = payload.position_side
+    order = {"symbol": symbol.upper(), "position_side": payload.position_side, "qty": qty}
+    mark_price = float(current.get("mark_price", current.get("entry_price", 0)))
     cycle_logger.log_cycle(
         {
             "symbol": symbol.upper(),
             "status": "closed",
             "decision": {"action": "close", "closed_position_side": payload.position_side},
             "ticker": market_service.fetch_spot_ticker(symbol),
-            "risk_check": {"allowed": True, "risk": {"notional": qty * close_trade["entry_price"]}},
+            "risk_check": {"allowed": True, "risk": {"notional": qty * mark_price}},
             "order": execution,
         }
     )
 
     return {
         "status": "submitted",
-        "order": close_trade,
+        "order": order,
         "closed_position_side": payload.position_side,
-        "risk": {"notional": qty * close_trade["entry_price"]},
+        "risk": {"notional": qty * mark_price},
         **execution,
     }
 
