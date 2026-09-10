@@ -66,7 +66,7 @@ def test_paper_client_includes_sent_body_on_http_rejection(monkeypatch):
     assert result["message"] == "No position to close"
     assert result["debug_sent_body"] == {
         "symbol": "AAPLUSDT",
-        "size": "1.0",
+        "size": "1",
         "side": "sell",
         "orderType": "market",
         "force": "gtc",
@@ -77,6 +77,27 @@ def test_paper_client_includes_sent_body_on_http_rejection(monkeypatch):
         "tradeSide": "close",
         "posSide": "long",
     }
+
+
+def test_paper_client_flash_closes_position(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    result = client.flash_close_position("TSLAUSDT", "sell")
+
+    url, kwargs = session.calls[0]
+    body = json.loads(kwargs["data"])
+    assert result["status"] == "submitted"
+    assert url.endswith("/api/v2/mix/order/close-positions")
+    assert body == {
+        "symbol": "TSLAUSDT",
+        "productType": "USDT-FUTURES",
+        "holdSide": "short",
+    }
+    assert kwargs["headers"]["paptrading"] == "1"
 
 
 def test_paper_client_fails_closed_without_credentials(monkeypatch):
@@ -142,7 +163,7 @@ def test_paper_client_submits_spot_order(monkeypatch):
     assert url.endswith("/api/v2/spot/trade/place-order")
     assert kwargs["headers"]["paptrading"] == "1"
     assert body["symbol"] == "BTCUSDT"
-    assert body["size"] == "1000.0"
+    assert body["size"] == "1000"
     assert "productType" not in body
 
 

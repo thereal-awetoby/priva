@@ -129,6 +129,11 @@ def debug_bitget_account(symbol: str = "AAPLUSDT") -> dict[str, Any]:
     return paper_execution_client.fetch_account_mode(symbol)
 
 
+@app.post("/debug/flash-close")
+def debug_flash_close(symbol: str, position_side: str) -> dict[str, Any]:
+    return paper_execution_client.flash_close_position(symbol, position_side)
+
+
 @app.get("/debug/raw-positions")
 def debug_raw_positions() -> dict[str, Any]:
     return paper_execution_client.fetch_futures_positions()

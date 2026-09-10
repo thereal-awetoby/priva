@@ -16,6 +16,7 @@ class BitgetPaperExecutionClient:
 
     BASE_URL = "https://api.bitget.com"
     FUTURES_ORDER_PATH = "/api/v2/mix/order/place-order"
+    FUTURES_FLASH_CLOSE_PATH = "/api/v2/mix/order/close-positions"
     SPOT_ORDER_PATH = "/api/v2/spot/trade/place-order"
 
     @staticmethod
@@ -169,6 +170,75 @@ class BitgetPaperExecutionClient:
             "entry_price": float(trade.get("entry_price", 0) or 0),
             "exchange": payload,
             "order_id": (payload.get("data") or {}).get("orderId"),
+        }
+
+    def flash_close_position(self, symbol: str, position_side: str) -> dict[str, Any]:
+        if not self.configured:
+            return {
+                "status": "not_configured",
+                "message": "Set BITGET_API_KEY, BITGET_API_SECRET, and BITGET_API_PASSPHRASE in the hosting environment.",
+            }
+
+        normalized_side = self.normalize_position_side(position_side)
+        if normalized_side not in {"buy", "sell"}:
+            return {"status": "rejected", "message": "position_side must be buy/long or sell/short"}
+
+        body = {
+            "symbol": str(symbol).upper(),
+            "productType": "USDT-FUTURES",
+            "holdSide": "long" if normalized_side == "buy" else "short",
+        }
+        body_text = json.dumps(body, separators=(",", ":"))
+        timestamp = str(int(time.time() * 1000))
+        prehash = timestamp + "POST" + self.FUTURES_FLASH_CLOSE_PATH + body_text
+        signature = base64.b64encode(
+            hmac.new(self.api_secret.encode(), prehash.encode(), hashlib.sha256).digest()
+        ).decode()
+        headers = {
+            "ACCESS-KEY": self.api_key,
+            "ACCESS-SIGN": signature,
+            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json",
+            "paptrading": "1",
+        }
+
+        try:
+            response = self.session.post(
+                f"{self.BASE_URL}{self.FUTURES_FLASH_CLOSE_PATH}",
+                headers=headers,
+                data=body_text,
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except requests.HTTPError as exc:
+            try:
+                exchange = response.json()
+            except ValueError:
+                exchange = {"raw": response.text}
+            return {
+                "status": "rejected",
+                "message": exchange.get("msg", str(exc)),
+                "exchange": exchange,
+                "debug_sent_body": body,
+            }
+        except requests.RequestException as exc:
+            return {"status": "execution_error", "message": str(exc)}
+
+        if payload.get("code") not in (None, "00000", 0, "0"):
+            return {
+                "status": "rejected",
+                "message": payload.get("msg", "Bitget flash close rejected"),
+                "exchange": payload,
+                "debug_sent_body": body,
+            }
+
+        return {
+            "status": "submitted",
+            "symbol": str(symbol).upper(),
+            "position_side": normalized_side,
+            "exchange": payload,
         }
 
     def fetch_futures_positions(self) -> dict[str, Any]:
