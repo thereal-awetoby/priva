@@ -112,8 +112,10 @@ def test_paper_client_submits_paper_order(monkeypatch):
         {"symbol": "AAPLUSDT", "side": "buy", "qty": 5}
     )
 
-    url, kwargs = session.calls[0]
-    body = json.loads(kwargs["data"])
+    leverage_url, leverage_kwargs = session.calls[0]
+    order_url, order_kwargs = session.calls[-1]
+    leverage_body = json.loads(leverage_kwargs["data"])
+    body = json.loads(order_kwargs["data"])
     assert result == {
         "status": "submitted",
         "trade_side": "open",
@@ -123,8 +125,10 @@ def test_paper_client_submits_paper_order(monkeypatch):
         "exchange": {"code": "00000", "data": {"orderId": "paper-123"}},
         "order_id": "paper-123",
     }
-    assert url.endswith("/api/v2/mix/order/place-order")
-    assert kwargs["headers"]["paptrading"] == "1"
+    assert leverage_url.endswith("/api/v2/mix/account/set-leverage")
+    assert leverage_body["leverage"] == "1"
+    assert order_url.endswith("/api/v2/mix/order/place-order")
+    assert order_kwargs["headers"]["paptrading"] == "1"
     assert body["productType"] == "USDT-FUTURES"
     assert body["symbol"] == "AAPLUSDT"
 
@@ -164,7 +168,7 @@ def test_paper_client_formats_whole_number_size_without_decimal(monkeypatch):
     client = BitgetPaperExecutionClient(session=session)
     client.place_market_order({"symbol": "AAPLUSDT", "side": "buy", "qty": 1, "market": "futures"})
 
-    body = json.loads(session.calls[0][1]["data"])
+    body = json.loads(session.calls[-1][1]["data"])
     assert body["size"] == "1"
 
 
@@ -177,7 +181,7 @@ def test_paper_client_preserves_fractional_size(monkeypatch):
     client = BitgetPaperExecutionClient(session=session)
     client.place_market_order({"symbol": "BTCUSDT", "side": "buy", "qty": 0.125, "market": "futures"})
 
-    body = json.loads(session.calls[0][1]["data"])
+    body = json.loads(session.calls[-1][1]["data"])
     assert body["size"] == "0.125"
 
 
@@ -230,7 +234,7 @@ def test_paper_client_uses_position_margin_mode_on_close(monkeypatch):
         }
     )
 
-    body = json.loads(session.calls[0][1]["data"])
+    body = json.loads(session.calls[-1][1]["data"])
     assert body["marginMode"] == "crossed"
 
 
@@ -252,7 +256,7 @@ def test_paper_client_submits_one_way_reduce_only_close(monkeypatch):
         }
     )
 
-    body = json.loads(session.calls[0][1]["data"])
+    body = json.loads(session.calls[-1][1]["data"])
     assert body["reduceOnly"] == "YES"
     assert body["side"] == "sell"
     assert "tradeSide" not in body
@@ -271,7 +275,7 @@ def test_paper_client_submits_hedge_mode_open_order(monkeypatch):
         {"symbol": "AAPLUSDT", "side": "buy", "qty": 1, "market": "futures"}
     )
 
-    body = json.loads(session.calls[0][1]["data"])
+    body = json.loads(session.calls[-1][1]["data"])
     assert body["tradeSide"] == "open"
     assert body["posSide"] == "long"
 
@@ -288,7 +292,7 @@ def test_paper_client_infers_pos_side_for_reduce_only_close(monkeypatch):
         {"symbol": "AAPLUSDT", "side": "sell", "qty": 1, "market": "futures", "reduce_only": True}
     )
 
-    body = json.loads(session.calls[0][1]["data"])
+    body = json.loads(session.calls[-1][1]["data"])
     assert body["tradeSide"] == "close"
     assert body["posSide"] == "long"
 
@@ -305,7 +309,7 @@ def test_paper_client_accepts_long_short_position_aliases(monkeypatch):
         {"symbol": "AAPLUSDT", "side": "sell", "qty": 1, "market": "futures", "trade_side": "close", "position_side": "long"}
     )
 
-    body = json.loads(session.calls[0][1]["data"])
+    body = json.loads(session.calls[-1][1]["data"])
     assert body["tradeSide"] == "close"
     assert body["posSide"] == "long"
 
@@ -357,6 +361,6 @@ def test_paper_client_normalizes_hedge_mode_aliases(monkeypatch):
     client = BitgetPaperExecutionClient(session=session)
     client.place_market_order({"symbol": "AAPLUSDT", "side": "buy", "qty": 1, "market": "futures"})
 
-    body = json.loads(session.calls[0][1]["data"])
+    body = json.loads(session.calls[-1][1]["data"])
     assert body["tradeSide"] == "open"
     assert body["posSide"] == "long"

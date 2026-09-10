@@ -16,6 +16,7 @@ class BitgetPaperExecutionClient:
 
     BASE_URL = "https://api.bitget.com"
     FUTURES_ORDER_PATH = "/api/v2/mix/order/place-order"
+    FUTURES_LEVERAGE_PATH = "/api/v2/mix/account/set-leverage"
     FUTURES_FLASH_CLOSE_PATH = "/api/v2/mix/order/close-positions"
     SPOT_ORDER_PATH = "/api/v2/spot/trade/place-order"
 
@@ -67,6 +68,57 @@ class BitgetPaperExecutionClient:
     def configured(self) -> bool:
         return bool(self.api_key and self.api_secret and self.passphrase)
 
+    def set_futures_leverage(self, trade: dict[str, Any]) -> dict[str, Any]:
+        leverage = float(trade.get("leverage", 1))
+        if leverage <= 0:
+            return {"status": "rejected", "message": "leverage must be greater than zero"}
+
+        body = {
+            "symbol": str(trade["symbol"]).upper(),
+            "productType": "USDT-FUTURES",
+            "marginCoin": "USDT",
+            "leverage": self._format_size(leverage),
+        }
+        if self.position_mode == "hedge":
+            body["holdSide"] = "long" if str(trade["side"]).lower() == "buy" else "short"
+
+        body_text = json.dumps(body, separators=(",", ":"))
+        timestamp = str(int(time.time() * 1000))
+        prehash = timestamp + "POST" + self.FUTURES_LEVERAGE_PATH + body_text
+        signature = base64.b64encode(
+            hmac.new(self.api_secret.encode(), prehash.encode(), hashlib.sha256).digest()
+        ).decode()
+        headers = {
+            "ACCESS-KEY": self.api_key,
+            "ACCESS-SIGN": signature,
+            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json",
+            "paptrading": "1",
+        }
+
+        try:
+            response = self.session.post(
+                f"{self.BASE_URL}{self.FUTURES_LEVERAGE_PATH}",
+                headers=headers,
+                data=body_text,
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except requests.HTTPError as exc:
+            try:
+                exchange = response.json()
+            except ValueError:
+                exchange = {"raw": response.text}
+            return {"status": "rejected", "message": exchange.get("msg", str(exc)), "exchange": exchange}
+        except requests.RequestException as exc:
+            return {"status": "execution_error", "message": str(exc)}
+
+        if payload.get("code") not in (None, "00000", 0, "0"):
+            return {"status": "rejected", "message": payload.get("msg", "Bitget leverage rejected"), "exchange": payload}
+        return {"status": "submitted", "exchange": payload}
+
     def place_market_order(self, trade: dict[str, Any]) -> dict[str, Any]:
         if not self.configured:
             return {
@@ -93,6 +145,10 @@ class BitgetPaperExecutionClient:
         }
         order_path = self.SPOT_ORDER_PATH if market == "spot" else self.FUTURES_ORDER_PATH
         if market == "futures":
+            if str(trade.get("trade_side", "open")).lower() == "open" and not trade.get("reduce_only"):
+                leverage_result = self.set_futures_leverage(trade)
+                if leverage_result["status"] != "submitted":
+                    return leverage_result
             # NOTE: `side` stays plain "buy"/"sell" here. Bitget's V2 place-order
             # endpoint does NOT use a "_single" suffix for one-way mode - that
             # convention only applies to the older V1 API. Sending "sell_single"
