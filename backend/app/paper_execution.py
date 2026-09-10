@@ -144,6 +144,7 @@ class BitgetPaperExecutionClient:
                 "status": "rejected",
                 "message": exchange.get("msg", str(exc)),
                 "exchange": exchange,
+                "debug_sent_body": body,
             }
         except requests.RequestException as exc:
             return {"status": "execution_error", "message": str(exc)}

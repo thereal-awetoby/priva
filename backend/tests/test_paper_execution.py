@@ -1,5 +1,7 @@
 import json
 
+import requests
+
 from app.paper_execution import BitgetPaperExecutionClient
 
 
@@ -26,6 +28,55 @@ class FakeSession:
         self.calls.append((url, kwargs))
         response = FakeResponse({"code": "00000", "data": [{"symbol": "AAPLUSDT", "total": "1"}]})
         return response
+
+
+class ErrorResponse(FakeResponse):
+    def raise_for_status(self):
+        raise requests.HTTPError("request failed")
+
+
+class ErrorSession(FakeSession):
+    def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return ErrorResponse({"code": "22002", "msg": "No position to close"})
+
+
+def test_paper_client_includes_sent_body_on_http_rejection(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+    monkeypatch.setenv("BITGET_POSITION_MODE", "hedge")
+
+    session = ErrorSession()
+    client = BitgetPaperExecutionClient(session=session)
+    result = client.place_market_order(
+        {
+            "symbol": "AAPLUSDT",
+            "side": "sell",
+            "qty": 1,
+            "market": "futures",
+            "position_side": "buy",
+            "trade_side": "close",
+            "margin_mode": "crossed",
+            "reduce_only": True,
+        }
+    )
+
+    assert result["status"] == "rejected"
+    assert result["message"] == "No position to close"
+    assert result["debug_sent_body"] == {
+        "symbol": "AAPLUSDT",
+        "size": "1.0",
+        "side": "sell",
+        "orderType": "market",
+        "force": "gtc",
+        "clientOid": result["debug_sent_body"]["clientOid"],
+        "productType": "USDT-FUTURES",
+        "marginMode": "crossed",
+        "marginCoin": "USDT",
+        "tradeSide": "close",
+        "posSide": "long",
+    }
 
 
 def test_paper_client_fails_closed_without_credentials(monkeypatch):
