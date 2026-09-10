@@ -19,7 +19,7 @@ class BitgetMarketDataService:
 
     def fetch_spot_ticker(self, symbol: str) -> dict[str, Any]:
         url = f"{self.BASE_URL}/spot/market/tickers"
-        params = {"symbol": symbol}
+        params = {"category": "SPOT"}
 
         try:
             response = requests.get(url, params=params, timeout=15)
