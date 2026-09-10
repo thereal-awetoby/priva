@@ -23,6 +23,31 @@ Then open:
 - http://127.0.0.1:8001/positions
 - http://127.0.0.1:8001/strategies
 
+## Bitget paper execution
+
+The `/paper-trade` route runs the risk engine first, then submits an authenticated
+spot or USDT-futures market order to Bitget's paper environment. Configure these secrets
+in Render's environment settings:
+
+- `BITGET_API_KEY`
+- `BITGET_API_SECRET`
+- `BITGET_API_PASSPHRASE`
+
+The client always sends Bitget's `paptrading: 1` header. Without all three
+secrets, the route returns `not_configured` and does not call the exchange.
+
+Example request:
+
+```bash
+curl -s -X POST "https://YOUR-SERVICE.onrender.com/paper-trade" \
+	-H "Content-Type: application/json" \
+	-d '{"symbol":"AAPLUSDT","side":"buy","qty":5,"entry_price":320.06,"leverage":1,"market":"futures"}' \
+	| python -m json.tool
+```
+
+Successful exchange submission returns `status: "submitted"` and a Bitget
+`order_id`. The risk engine rejects an order before any exchange request is made.
+
 ## Main files
 
 - app/main.py — FastAPI app and mock API routes

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI
 from pydantic import BaseModel
 
 from app.market_data import BitgetMarketDataService
+from app.paper_execution import BitgetPaperExecutionClient
 from app.risk_engine import RiskEngine
 
 app = FastAPI(
@@ -17,6 +18,7 @@ app = FastAPI(
 
 market_service = BitgetMarketDataService()
 risk_engine = RiskEngine()
+paper_execution_client = BitgetPaperExecutionClient()
 
 
 def build_signal_from_ticker(ticker: dict[str, Any]) -> dict[str, Any]:
@@ -111,6 +113,7 @@ class TradeRequest(BaseModel):
     qty: float
     entry_price: float
     leverage: float = 1.0
+    market: Literal["spot", "futures"] = "futures"
 
 
 @app.get("/market-data")
@@ -319,8 +322,9 @@ def risk_check(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.post("/paper-trade")
 def paper_trade(payload: TradeRequest) -> dict[str, Any]:
+    order = payload.model_dump()
     result = risk_engine.evaluate_trade(
-        trade=payload.model_dump(),
+        trade=order,
         current_positions=[],
         current_daily_pnl=0.0,
     )
@@ -328,18 +332,13 @@ def paper_trade(payload: TradeRequest) -> dict[str, Any]:
     if not result["allowed"]:
         return {
             "status": "rejected",
-            "order": payload.model_dump(),
+            "order": order,
             "reasons": result["reasons"],
             "risk": result["risk"],
         }
 
-    return {
-        "status": "accepted",
-        "order": payload.model_dump(),
-        "order_id": f"paper_{payload.symbol.lower()}_{int(payload.entry_price * 100)}",
-        "message": "Paper trade created and passed risk checks.",
-        "risk": result["risk"],
-    }
+    execution = paper_execution_client.place_market_order(order)
+    return {"order": order, "risk": result["risk"], **execution}
 
 
 @app.get("/")
