@@ -18,11 +18,29 @@ class BitgetPaperExecutionClient:
     FUTURES_ORDER_PATH = "/api/v2/mix/order/place-order"
     SPOT_ORDER_PATH = "/api/v2/spot/trade/place-order"
 
+    @staticmethod
+    def normalize_position_mode(value: Any) -> str | None:
+        if value is None:
+            return None
+        raw = str(value).strip().lower()
+        aliases = {
+            "one_way": "one_way",
+            "one_way_mode": "one_way",
+            "single": "one_way",
+            "single_mode": "one_way",
+            "hedge": "hedge",
+            "hedge_mode": "hedge",
+            "double": "hedge",
+            "double_mode": "hedge",
+        }
+        return aliases.get(raw, raw)
+
     def __init__(self, *, session: Any = requests) -> None:
         self.api_key = os.getenv("BITGET_API_KEY", "")
         self.api_secret = os.getenv("BITGET_API_SECRET", "")
         self.passphrase = os.getenv("BITGET_API_PASSPHRASE", "")
-        self.position_mode = os.getenv("BITGET_POSITION_MODE", "one_way").lower()
+        configured_mode = os.getenv("BITGET_POSITION_MODE", "one_way")
+        self.position_mode = self.normalize_position_mode(configured_mode) or "one_way"
         self.session = session
 
     @property
@@ -64,9 +82,10 @@ class BitgetPaperExecutionClient:
             body.update({"productType": "USDT-FUTURES", "marginMode": "isolated", "marginCoin": "USDT"})
             if trade.get("reduce_only") and self.position_mode != "hedge":
                 body["reduceOnly"] = "YES"
-            elif trade.get("reduce_only") and self.position_mode == "hedge":
-                body["tradeSide"] = "close"
-                body["posSide"] = "long" if trade.get("position_side") == "buy" else "short"
+            elif self.position_mode == "hedge":
+                body["tradeSide"] = "close" if trade.get("reduce_only") else trade_side
+                position_side = trade.get("position_side", side)
+                body["posSide"] = "long" if position_side == "buy" else "short"
             elif trade_side != "open":
                 body["tradeSide"] = trade_side
                 if trade_side == "close":
@@ -194,7 +213,7 @@ class BitgetPaperExecutionClient:
                 "status": "ok",
                 "symbol": symbol.upper(),
                 "product_type": "USDT-FUTURES",
-                "position_mode": data.get("posMode"),
+                "position_mode": self.normalize_position_mode(data.get("posMode")),
             }
         except requests.HTTPError as exc:
             return {"status": "rejected", "message": str(exc)}
