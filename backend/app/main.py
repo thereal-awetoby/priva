@@ -164,6 +164,31 @@ def status() -> dict[str, Any]:
 
 @app.get("/positions")
 def positions() -> dict[str, Any]:
+    cycles = cycle_logger.fetch_cycles()
+    live_positions = []
+    for cycle in reversed(cycles):
+        order = cycle.get("order_result") or {}
+        exchange_data = order.get("exchange", {}).get("data") or {}
+        if cycle.get("status") != "submitted" or not exchange_data.get("orderId"):
+            continue
+        ticker = cycle.get("ticker") or {}
+        risk = cycle.get("risk_check", {}).get("risk", {})
+        live_positions.append(
+            {
+                "symbol": cycle.get("symbol"),
+                "side": cycle.get("decision", {}).get("action"),
+                "qty": risk.get("notional", 0) / max(float(ticker.get("last_price", 0) or 1), 1),
+                "entry_price": ticker.get("last_price", 0),
+                "mark_price": ticker.get("last_price", 0),
+                "notional_usd": risk.get("notional", 0),
+                "leverage": risk.get("leverage", 1),
+                "source": "paper",
+                "order_id": exchange_data.get("orderId"),
+            }
+        )
+    if live_positions:
+        return {"positions": live_positions, "total_positions": len(live_positions)}
+
     return {
         "positions": [
             {
@@ -221,6 +246,24 @@ def risk_usage() -> dict[str, Any]:
 
 @app.get("/activity-log")
 def activity_log() -> dict[str, Any]:
+    cycles = cycle_logger.fetch_cycles()
+    if cycles:
+        return {
+            "entries": [
+                {
+                    "id": (cycle.get("order_result") or {}).get("order_id") or f"cycle_{cycle.get('created_at', '')}",
+                    "type": "trade" if cycle.get("order_result") else "agent_cycle",
+                    "symbol": cycle.get("symbol"),
+                    "action": (cycle.get("decision") or {}).get("action"),
+                    "status": cycle.get("status"),
+                    "risk_check": cycle.get("risk_check"),
+                    "intent_hash": (cycle.get("intent") or {}).get("intent_hash"),
+                    "timestamp": cycle.get("created_at"),
+                }
+                for cycle in cycles
+            ]
+        }
+
     return {
         "entries": [
             {

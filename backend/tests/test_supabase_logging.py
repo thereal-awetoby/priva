@@ -7,12 +7,19 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self):
+    def __init__(self, payload=None):
         self.calls = []
+        self.payload = payload or []
 
     def post(self, url, **kwargs):
         self.calls.append((url, kwargs))
         return FakeResponse()
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        response = FakeResponse()
+        response.json = lambda: self.payload
+        return response
 
 
 def test_supabase_logger_skips_when_unconfigured(monkeypatch):
@@ -48,3 +55,14 @@ def test_supabase_logger_inserts_cycle(monkeypatch):
     assert kwargs["headers"]["Authorization"] == "Bearer secret"
     assert kwargs["json"]["symbol"] == "AAPLUSDT"
     assert kwargs["json"]["order_result"]["order_id"] == "order-1"
+
+
+def test_supabase_logger_reads_cycles(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+    session = FakeSession([{"symbol": "AAPLUSDT", "status": "submitted"}])
+
+    cycles = SupabaseCycleLogger(session=session).fetch_cycles(limit=10)
+
+    assert cycles == [{"symbol": "AAPLUSDT", "status": "submitted"}]
+    assert session.calls[0][1]["params"]["limit"] == 10

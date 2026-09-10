@@ -50,3 +50,24 @@ class SupabaseCycleLogger:
         except requests.RequestException as exc:
             logger.warning("Supabase cycle logging failed: %s", exc)
             return {"status": "error", "message": str(exc)}
+
+    def fetch_cycles(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+
+        try:
+            response = self.session.get(
+                f"{self.url}/rest/v1/agent_cycles",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                },
+                params={"select": "*", "order": "created_at.desc", "limit": limit},
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, list) else []
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Supabase cycle read failed: %s", exc)
+            return []
