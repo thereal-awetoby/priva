@@ -10,7 +10,7 @@ from app.market_data import BitgetMarketDataService
 from app.paper_execution import BitgetPaperExecutionClient
 from app.performance import calculate_unrealized_pnl
 from app.risk_engine import RiskEngine
-from app.strategy import build_signal_from_ticker
+from app.strategy import STRATEGIES, activate_strategy as set_active_strategy, build_signal_from_ticker, get_active_strategy_id
 from app import agent_loop
 from app.supabase_logging import SupabaseCycleLogger
 
@@ -448,18 +448,18 @@ def strategies() -> dict[str, Any]:
     return {
         "strategies": [
             {
-                "id": "playbook_momentum",
+                "id": "momentum_breakout",
                 "name": "Momentum Breakout",
                 "type": "playbook",
-                "status": "inactive",
+                "status": "active" if get_active_strategy_id() == "momentum_breakout" else "inactive",
                 "description": "Long when trend and volume accelerate above baseline.",
             },
             {
-                "id": "custom_rsi",
-                "name": "RSI Mean Reversion",
-                "type": "custom",
-                "status": "active",
-                "description": "Buy oversold conditions and close when momentum fades.",
+                "id": "mean_reversion",
+                "name": "Mean Reversion",
+                "type": "prebuilt",
+                "status": "active" if get_active_strategy_id() == "mean_reversion" else "inactive",
+                "description": "Fade moves that extend at least 1% away from the opening price.",
             },
         ]
     }
@@ -467,6 +467,8 @@ def strategies() -> dict[str, Any]:
 
 @app.post("/strategies/{strategy_id}/activate")
 def activate_strategy(strategy_id: str) -> dict[str, Any]:
+    if not set_active_strategy(strategy_id):
+        return {"strategy_id": strategy_id, "status": "rejected", "message": "unknown strategy"}
     return {
         "strategy_id": strategy_id,
         "status": "activated",

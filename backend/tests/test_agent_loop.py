@@ -2,6 +2,7 @@ from app.main import process_market_cycle
 from app.agent_loop import run_cycle
 from app.risk_engine import RiskEngine
 from app.performance import calculate_unrealized_pnl
+from app.strategy import activate_strategy, build_signal_from_ticker, get_active_strategy_id
 import asyncio
 
 
@@ -45,6 +46,18 @@ def test_process_market_cycle_handles_fallback_without_trade():
 
     assert result["decision"]["action"] == "hold"
     assert result["log_entry"]["type"] == "market_data"
+
+
+def test_strategy_activation_changes_signal_behavior():
+    activate_strategy("mean_reversion")
+    try:
+        result = build_signal_from_ticker(
+            {"status": "live", "last_price": 102.0, "open_price": 100.0}
+        )
+        assert result["action"] == "sell"
+        assert get_active_strategy_id() == "mean_reversion"
+    finally:
+        activate_strategy("momentum_breakout")
 
 
 class FakeExecutionClient:
@@ -91,6 +104,33 @@ def test_agent_cycle_runs_signal_risk_intent_and_execution():
     assert result["risk_check"]["allowed"] is True
     assert result["intent"]["intent_hash"]
     assert execution.trades[0]["market"] == "futures"
+
+
+def test_agent_cycle_uses_strategy_decision_size_and_leverage(monkeypatch):
+    monkeypatch.setattr(
+        "app.agent_loop.build_signal_from_ticker",
+        lambda ticker: {
+            "action": "buy",
+            "size": 2.0,
+            "leverage": 2.0,
+            "reason": "test strategy",
+            "signal_strength": 0.5,
+            "status": "logged",
+        },
+    )
+    execution = FakeExecutionClient()
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+        )
+    )
+
+    assert result["status"] == "submitted"
+    assert execution.trades[0]["qty"] == 2.0
+    assert execution.trades[0]["leverage"] == 2.0
 
 
 def test_agent_cycle_does_not_execute_hold_signal():

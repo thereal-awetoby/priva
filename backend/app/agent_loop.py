@@ -102,9 +102,9 @@ async def run_cycle(
         trade = {
             "symbol": symbol.upper(),
             "side": decision["action"],
-            "qty": ORDER_QTY,
+            "qty": float(decision.get("size") or ORDER_QTY),
             "entry_price": float(ticker.get("last_price", 0.0) or 0.0),
-            "leverage": 1.0,
+            "leverage": float(decision.get("leverage", 1.0) or 1.0),
             "market": "futures",
         }
         risk_result = risk_engine.evaluate_trade(
