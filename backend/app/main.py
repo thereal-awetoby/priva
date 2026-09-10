@@ -129,6 +129,11 @@ def debug_bitget_account(symbol: str = "AAPLUSDT") -> dict[str, Any]:
     return paper_execution_client.fetch_account_mode(symbol)
 
 
+@app.get("/debug/raw-positions")
+def debug_raw_positions() -> dict[str, Any]:
+    return paper_execution_client.fetch_futures_positions()
+
+
 async def periodic_market_loop() -> None:
     while True:
         ticker = market_service.fetch_spot_ticker("AAPLUSDT")
