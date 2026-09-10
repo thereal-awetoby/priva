@@ -46,7 +46,20 @@ def build_encrypted_intent(symbol: str, decision: dict[str, Any], risk_result: d
     return {"intent_hash": hashlib.sha256(serialized).hexdigest(), "intent": intent}
 
 
-async def run_cycle(symbol: str, *, market_service: Any, risk_engine: Any, execution_client: Any) -> dict[str, Any]:
+async def run_cycle(
+    symbol: str,
+    *,
+    market_service: Any,
+    risk_engine: Any,
+    execution_client: Any,
+    cycle_logger: Any | None = None,
+) -> dict[str, Any]:
+    def persist(result: dict[str, Any]) -> dict[str, Any]:
+        _record_cycle(result)
+        if cycle_logger is not None:
+            result["persistence"] = cycle_logger.log_cycle(result)
+        return result
+
     cycle_start = datetime.now(timezone.utc)
     try:
         ticker = await asyncio.to_thread(market_service.fetch_spot_ticker, symbol)
@@ -62,8 +75,7 @@ async def run_cycle(symbol: str, *, market_service: Any, risk_engine: Any, execu
                 "risk_check": {"allowed": False, "reasons": ["no_trade_signal"]},
                 "order": None,
             }
-            _record_cycle(result)
-            return result
+            return persist(result)
 
         trade = {
             "symbol": symbol.upper(),
@@ -80,8 +92,7 @@ async def run_cycle(symbol: str, *, market_service: Any, risk_engine: Any, execu
         )
         if not risk_result["allowed"]:
             result = {"status": "risk_rejected", "symbol": symbol.upper(), "decision": decision, "risk_check": risk_result, "order": None}
-            _record_cycle(result)
-            return result
+            return persist(result)
 
         intent = build_encrypted_intent(symbol, decision, risk_result)
         order_result = await asyncio.to_thread(execution_client.place_market_order, trade)
@@ -95,23 +106,29 @@ async def run_cycle(symbol: str, *, market_service: Any, risk_engine: Any, execu
             "order": order_result,
             "duration_seconds": round((datetime.now(timezone.utc) - cycle_start).total_seconds(), 3),
         }
-        _record_cycle(result)
+        persist(result)
         logger.info("[%s] autonomous cycle status=%s order_id=%s", symbol, result["status"], order_result.get("order_id"))
         return result
     except Exception as exc:
         logger.exception("[%s] cycle failed: %s", symbol, exc)
         result = {"status": "error", "symbol": symbol.upper(), "error": str(exc)}
-        _record_cycle(result)
+        persist(result)
         return result
 
 
-async def agent_loop(*, market_service: Any, risk_engine: Any, execution_client: Any) -> None:
+async def agent_loop(*, market_service: Any, risk_engine: Any, execution_client: Any, cycle_logger: Any | None = None) -> None:
     logger.info("Agent loop starting: interval=%ss symbols=%s", LOOP_INTERVAL_SECONDS, WATCHED_SYMBOLS)
     while not _stop_event.is_set():
         for symbol in WATCHED_SYMBOLS:
             if _stop_event.is_set():
                 break
-            await run_cycle(symbol, market_service=market_service, risk_engine=risk_engine, execution_client=execution_client)
+            await run_cycle(
+                symbol,
+                market_service=market_service,
+                risk_engine=risk_engine,
+                execution_client=execution_client,
+                cycle_logger=cycle_logger,
+            )
         try:
             await asyncio.wait_for(_stop_event.wait(), timeout=LOOP_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
@@ -119,12 +136,17 @@ async def agent_loop(*, market_service: Any, risk_engine: Any, execution_client:
     logger.info("Agent loop stopped")
 
 
-def start(*, market_service: Any, risk_engine: Any, execution_client: Any) -> None:
+def start(*, market_service: Any, risk_engine: Any, execution_client: Any, cycle_logger: Any | None = None) -> None:
     global _loop_task
     if _loop_task is None or _loop_task.done():
         _stop_event.clear()
         _loop_task = asyncio.create_task(
-            agent_loop(market_service=market_service, risk_engine=risk_engine, execution_client=execution_client)
+            agent_loop(
+                market_service=market_service,
+                risk_engine=risk_engine,
+                execution_client=execution_client,
+                cycle_logger=cycle_logger,
+            )
         )
 
 

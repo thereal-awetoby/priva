@@ -11,6 +11,7 @@ from app.paper_execution import BitgetPaperExecutionClient
 from app.risk_engine import RiskEngine
 from app.strategy import build_signal_from_ticker
 from app import agent_loop
+from app.supabase_logging import SupabaseCycleLogger
 
 app = FastAPI(
     title="Priva Backend",
@@ -21,6 +22,7 @@ app = FastAPI(
 market_service = BitgetMarketDataService()
 risk_engine = RiskEngine()
 paper_execution_client = BitgetPaperExecutionClient()
+cycle_logger = SupabaseCycleLogger()
 
 
 def process_market_cycle(
@@ -133,6 +135,7 @@ async def startup_event() -> None:
         market_service=market_service,
         risk_engine=risk_engine,
         execution_client=paper_execution_client,
+        cycle_logger=cycle_logger,
     )
 
 
@@ -294,6 +297,7 @@ async def set_kill_switch(payload: KillSwitchRequest) -> dict[str, Any]:
             market_service=market_service,
             risk_engine=risk_engine,
             execution_client=paper_execution_client,
+            cycle_logger=cycle_logger,
         )
     return {
         "enabled": payload.enabled,
