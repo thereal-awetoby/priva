@@ -84,7 +84,12 @@ class BitgetPaperExecutionClient:
                 body["reduceOnly"] = "YES"
             elif self.position_mode == "hedge":
                 body["tradeSide"] = "close" if trade.get("reduce_only") else trade_side
-                position_side = trade.get("position_side", side)
+                if trade.get("position_side") is not None:
+                    position_side = str(trade["position_side"]).lower()
+                elif trade.get("reduce_only"):
+                    position_side = "buy" if side == "sell" else "sell"
+                else:
+                    position_side = side
                 body["posSide"] = "long" if position_side == "buy" else "short"
             elif trade_side != "open":
                 body["tradeSide"] = trade_side

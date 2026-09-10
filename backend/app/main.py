@@ -299,6 +299,7 @@ def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]
     close_trade = {
         "symbol": symbol.upper(),
         "side": "sell" if payload.position_side == "buy" else "buy",
+        "position_side": payload.position_side,
         "qty": qty,
         "entry_price": float(current.get("mark_price", current.get("entry_price", 0))),
         "leverage": float(current.get("leverage", 1)),

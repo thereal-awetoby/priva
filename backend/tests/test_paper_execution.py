@@ -147,6 +147,40 @@ def test_paper_client_submits_one_way_reduce_only_close(monkeypatch):
     assert "holdSide" not in body
 
 
+def test_paper_client_submits_hedge_mode_open_order(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+    monkeypatch.setenv("BITGET_POSITION_MODE", "hedge")
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    client.place_market_order(
+        {"symbol": "AAPLUSDT", "side": "buy", "qty": 1, "market": "futures"}
+    )
+
+    body = json.loads(session.calls[0][1]["data"])
+    assert body["tradeSide"] == "open"
+    assert body["posSide"] == "long"
+
+
+def test_paper_client_infers_pos_side_for_reduce_only_close(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+    monkeypatch.setenv("BITGET_POSITION_MODE", "hedge")
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    client.place_market_order(
+        {"symbol": "AAPLUSDT", "side": "sell", "qty": 1, "market": "futures", "reduce_only": True}
+    )
+
+    body = json.loads(session.calls[0][1]["data"])
+    assert body["tradeSide"] == "close"
+    assert body["posSide"] == "long"
+
+
 def test_paper_client_reads_futures_positions(monkeypatch):
     monkeypatch.setenv("BITGET_API_KEY", "key")
     monkeypatch.setenv("BITGET_API_SECRET", "secret")
@@ -179,6 +213,21 @@ def test_paper_client_reads_sanitized_account_mode(monkeypatch):
         "status": "ok",
         "symbol": "AAPLUSDT",
         "product_type": "USDT-FUTURES",
-        "position_mode": "one_way_mode",
+        "position_mode": "one_way",
     }
     assert "available" not in result
+
+
+def test_paper_client_normalizes_hedge_mode_aliases(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+    monkeypatch.setenv("BITGET_POSITION_MODE", "hedge_mode")
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    client.place_market_order({"symbol": "AAPLUSDT", "side": "buy", "qty": 1, "market": "futures"})
+
+    body = json.loads(session.calls[0][1]["data"])
+    assert body["tradeSide"] == "open"
+    assert body["posSide"] == "long"
