@@ -56,6 +56,26 @@ class FakeExecutionClient:
         return {"status": "submitted", "order_id": "paper-loop-1"}
 
 
+class FakeCycleLogger:
+    def __init__(self, has_open_position=True):
+        self.has_open_position_value = has_open_position
+
+    def has_open_position(self, symbol):
+        return self.has_open_position_value
+
+    def log_cycle(self, result):
+        return {"status": "logged"}
+
+
+class LivePositionsExecutionClient(FakeExecutionClient):
+    def __init__(self, positions):
+        super().__init__()
+        self.positions = positions
+
+    def fetch_futures_positions(self):
+        return {"status": "ok", "positions": self.positions}
+
+
 def test_agent_cycle_runs_signal_risk_intent_and_execution():
     execution = FakeExecutionClient()
     result = asyncio.run(
@@ -89,6 +109,38 @@ def test_agent_cycle_does_not_execute_hold_signal():
     )
 
     assert result["status"] == "logged"
+    assert execution.trades == []
+
+
+def test_agent_cycle_uses_empty_live_positions_over_stale_logger():
+    execution = LivePositionsExecutionClient([])
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+            cycle_logger=FakeCycleLogger(has_open_position=True),
+        )
+    )
+
+    assert result["status"] == "submitted"
+    assert len(execution.trades) == 1
+
+
+def test_agent_cycle_skips_when_live_position_exists():
+    execution = LivePositionsExecutionClient([{"symbol": "AAPLUSDT", "total": "1"}])
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+            cycle_logger=FakeCycleLogger(has_open_position=False),
+        )
+    )
+
+    assert result["status"] == "skipped_existing_position"
     assert execution.trades == []
 
 

@@ -46,6 +46,28 @@ def build_encrypted_intent(symbol: str, decision: dict[str, Any], risk_result: d
     return {"intent_hash": hashlib.sha256(serialized).hexdigest(), "intent": intent}
 
 
+def _live_position_state(symbol: str, execution_client: Any) -> bool | None:
+    fetch_positions = getattr(execution_client, "fetch_futures_positions", None)
+    if not callable(fetch_positions):
+        return None
+
+    try:
+        result = fetch_positions()
+    except Exception as exc:
+        logger.warning("Live position check failed for %s: %s", symbol, exc)
+        return None
+
+    if result.get("status") != "ok":
+        return None
+
+    target_symbol = symbol.upper()
+    return any(
+        str(position.get("symbol", "")).upper() == target_symbol
+        and float(position.get("total", position.get("available", 0)) or 0) > 0
+        for position in result.get("positions", [])
+    )
+
+
 async def run_cycle(
     symbol: str,
     *,
@@ -94,7 +116,13 @@ async def run_cycle(
             result = {"status": "risk_rejected", "symbol": symbol.upper(), "decision": decision, "risk_check": risk_result, "order": None}
             return persist(result)
 
-        if cycle_logger is not None and cycle_logger.has_open_position(symbol):
+        live_position_state = _live_position_state(symbol, execution_client)
+        has_existing_position = live_position_state is True or (
+            live_position_state is None
+            and cycle_logger is not None
+            and cycle_logger.has_open_position(symbol)
+        )
+        if has_existing_position:
             result = {
                 "status": "skipped_existing_position",
                 "symbol": symbol.upper(),
@@ -102,7 +130,7 @@ async def run_cycle(
                 "ticker": ticker,
                 "risk_check": risk_result,
                 "order": None,
-                "reason": "existing submitted position; waiting for close logic",
+                "reason": "existing live position; waiting for close logic",
             }
             return persist(result)
 
