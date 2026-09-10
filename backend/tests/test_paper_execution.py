@@ -119,7 +119,7 @@ def test_paper_client_submits_close_order(monkeypatch):
     body = json.loads(kwargs["data"])
     assert body["tradeSide"] == "close"
     assert body["side"] == "sell"
-    assert body["holdSide"] == "long"
+    assert body["posSide"] == "long"
 
 
 def test_paper_client_submits_one_way_reduce_only_close(monkeypatch):
@@ -142,7 +142,7 @@ def test_paper_client_submits_one_way_reduce_only_close(monkeypatch):
 
     body = json.loads(session.calls[0][1]["data"])
     assert body["reduceOnly"] == "YES"
-    assert body["side"] == "sell_single"
+    assert body["side"] == "sell"
     assert "tradeSide" not in body
     assert "holdSide" not in body
 

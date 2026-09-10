@@ -55,19 +55,22 @@ class BitgetPaperExecutionClient:
         }
         order_path = self.SPOT_ORDER_PATH if market == "spot" else self.FUTURES_ORDER_PATH
         if market == "futures":
+            # NOTE: `side` stays plain "buy"/"sell" here. Bitget's V2 place-order
+            # endpoint does NOT use a "_single" suffix for one-way mode - that
+            # convention only applies to the older V1 API. Sending "sell_single"
+            # etc. to this V2 endpoint is invalid and was the root cause of the
+            # 40774 / 400172 rejections.
             trade_side = str(trade.get("trade_side", "open")).lower()
-            if self.position_mode != "hedge":
-                body["side"] = f"{side}_single"
             body.update({"productType": "USDT-FUTURES", "marginMode": "isolated", "marginCoin": "USDT"})
             if trade.get("reduce_only") and self.position_mode != "hedge":
                 body["reduceOnly"] = "YES"
             elif trade.get("reduce_only") and self.position_mode == "hedge":
                 body["tradeSide"] = "close"
-                body["holdSide"] = "long" if trade.get("position_side") == "buy" else "short"
+                body["posSide"] = "long" if trade.get("position_side") == "buy" else "short"
             elif trade_side != "open":
                 body["tradeSide"] = trade_side
                 if trade_side == "close":
-                    body["holdSide"] = "long" if trade.get("position_side") == "buy" else "short"
+                    body["posSide"] = "long" if trade.get("position_side") == "buy" else "short"
         body_text = json.dumps(body, separators=(",", ":"))
         timestamp = str(int(time.time() * 1000))
         prehash = timestamp + "POST" + order_path + body_text
