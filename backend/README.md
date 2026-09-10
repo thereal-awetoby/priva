@@ -69,6 +69,24 @@ Full closes use Bitget's dedicated flash-close endpoint because the generic
 `tradeSide: close` path is unreliable for these tokenized-stock futures. Partial
 closes are currently rejected intentionally.
 
+### Supabase strategy persistence
+
+Run this once in the Supabase SQL editor to persist the active strategy across
+Render restarts:
+
+```sql
+create table if not exists public.strategy_settings (
+	id text primary key,
+	strategy_id text not null,
+	updated_at timestamptz not null default now()
+);
+
+alter table public.strategy_settings enable row level security;
+```
+
+The backend uses the singleton row `id = 'global'`. It loads that row at
+startup and upserts it when `/strategies/{strategy_id}/activate` succeeds.
+
 ## Useful endpoints
 
 ```text

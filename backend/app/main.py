@@ -142,6 +142,9 @@ async def periodic_market_loop() -> None:
 
 @app.on_event("startup")
 async def startup_event() -> None:
+    persisted_strategy = cycle_logger.fetch_active_strategy()
+    if persisted_strategy:
+        set_active_strategy(persisted_strategy)
     agent_loop.start(
         market_service=market_service,
         risk_engine=risk_engine,
@@ -469,11 +472,15 @@ def strategies() -> dict[str, Any]:
 def activate_strategy(strategy_id: str) -> dict[str, Any]:
     if not set_active_strategy(strategy_id):
         return {"strategy_id": strategy_id, "status": "rejected", "message": "unknown strategy"}
+    persistence = cycle_logger.save_active_strategy(strategy_id)
+    if cycle_logger.configured and persistence["status"] != "saved":
+        return {"strategy_id": strategy_id, "status": "rejected", "message": "strategy could not be persisted"}
     return {
         "strategy_id": strategy_id,
         "status": "activated",
         "mode": "strategy",
         "active": True,
+        "persistence": persistence["status"],
     }
 
 

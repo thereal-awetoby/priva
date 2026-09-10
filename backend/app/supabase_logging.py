@@ -97,3 +97,49 @@ class SupabaseCycleLogger:
         except (requests.RequestException, ValueError) as exc:
             logger.warning("Supabase position check failed: %s", exc)
             return True
+
+    def fetch_active_strategy(self) -> str | None:
+        if not self.configured:
+            return None
+
+        try:
+            response = self.session.get(
+                f"{self.url}/rest/v1/strategy_settings",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                },
+                params={"select": "strategy_id", "id": "eq.global", "limit": 1},
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, list) and payload:
+                strategy_id = payload[0].get("strategy_id")
+                return str(strategy_id) if strategy_id else None
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Supabase strategy read failed: %s", exc)
+        return None
+
+    def save_active_strategy(self, strategy_id: str) -> dict[str, Any]:
+        if not self.configured:
+            return {"status": "not_configured"}
+
+        try:
+            response = self.session.post(
+                f"{self.url}/rest/v1/strategy_settings",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates,return=minimal",
+                },
+                params={"on_conflict": "id"},
+                json={"id": "global", "strategy_id": strategy_id},
+                timeout=15,
+            )
+            response.raise_for_status()
+            return {"status": "saved"}
+        except requests.RequestException as exc:
+            logger.warning("Supabase strategy write failed: %s", exc)
+            return {"status": "error", "message": str(exc)}
