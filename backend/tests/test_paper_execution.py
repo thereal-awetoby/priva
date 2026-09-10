@@ -143,6 +143,7 @@ def test_paper_client_submits_one_way_reduce_only_close(monkeypatch):
 
     body = json.loads(session.calls[0][1]["data"])
     assert body["reduceOnly"] == "YES"
+    assert body["side"] == "sell_single"
     assert "tradeSide" not in body
     assert "holdSide" not in body
 

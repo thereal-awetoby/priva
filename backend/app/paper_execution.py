@@ -56,6 +56,8 @@ class BitgetPaperExecutionClient:
         order_path = self.SPOT_ORDER_PATH if market == "spot" else self.FUTURES_ORDER_PATH
         if market == "futures":
             trade_side = str(trade.get("trade_side", "open")).lower()
+            if self.position_mode != "hedge":
+                body["side"] = f"{side}_single"
             body.update({"productType": "USDT-FUTURES", "marginMode": "isolated", "marginCoin": "USDT"})
             if trade_side == "close" and self.position_mode != "hedge":
                 body["reduceOnly"] = "YES"
