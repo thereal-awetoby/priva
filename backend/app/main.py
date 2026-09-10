@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from app.market_data import BitgetMarketDataService
 from app.paper_execution import BitgetPaperExecutionClient
 from app.risk_engine import RiskEngine
+from app.strategy import build_signal_from_ticker
+from app import agent_loop
 
 app = FastAPI(
     title="Priva Backend",
@@ -19,36 +21,6 @@ app = FastAPI(
 market_service = BitgetMarketDataService()
 risk_engine = RiskEngine()
 paper_execution_client = BitgetPaperExecutionClient()
-
-
-def build_signal_from_ticker(ticker: dict[str, Any]) -> dict[str, Any]:
-    if ticker.get("status") != "live":
-        return {
-            "action": "hold",
-            "reason": "market feed unavailable; fallback mode active",
-            "signal_strength": 0.0,
-            "status": "logged",
-        }
-
-    last_price = float(ticker.get("last_price", 0.0) or 0.0)
-    open_price = float(ticker.get("open_price", 0.0) or 0.0)
-
-    if last_price > open_price:
-        signal = "buy"
-        strength = min(1.0, max(0.0, (last_price - open_price) / max(open_price, 1.0)))
-    elif last_price < open_price:
-        signal = "sell"
-        strength = min(1.0, max(0.0, (open_price - last_price) / max(open_price, 1.0)))
-    else:
-        signal = "hold"
-        strength = 0.0
-
-    return {
-        "action": signal,
-        "reason": "simple price-vs-open momentum signal",
-        "signal_strength": round(strength, 4),
-        "status": "logged",
-    }
 
 
 def process_market_cycle(
@@ -147,7 +119,11 @@ async def periodic_market_loop() -> None:
 
 @app.on_event("startup")
 async def startup_event() -> None:
-    asyncio.create_task(periodic_market_loop())
+    agent_loop.start(
+        market_service=market_service,
+        risk_engine=risk_engine,
+        execution_client=paper_execution_client,
+    )
 
 
 @app.get("/health")
@@ -301,8 +277,17 @@ def get_kill_switch() -> dict[str, Any]:
 
 @app.post("/kill-switch")
 def set_kill_switch(payload: KillSwitchRequest) -> dict[str, Any]:
+    if payload.enabled:
+        agent_loop.stop()
+    else:
+        agent_loop.start(
+            market_service=market_service,
+            risk_engine=risk_engine,
+            execution_client=paper_execution_client,
+        )
     return {
         "enabled": payload.enabled,
+        "running": agent_loop.is_running(),
         "message": "Kill switch updated." if payload.enabled else "Agent loop restarted.",
     }
 
