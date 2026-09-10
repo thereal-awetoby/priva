@@ -35,6 +35,19 @@ class BitgetPaperExecutionClient:
         }
         return aliases.get(raw, raw)
 
+    @staticmethod
+    def normalize_position_side(value: Any) -> str | None:
+        if value is None:
+            return None
+        raw = str(value).strip().lower()
+        aliases = {
+            "buy": "buy",
+            "long": "buy",
+            "sell": "sell",
+            "short": "sell",
+        }
+        return aliases.get(raw, raw)
+
     def __init__(self, *, session: Any = requests) -> None:
         self.api_key = os.getenv("BITGET_API_KEY", "")
         self.api_secret = os.getenv("BITGET_API_SECRET", "")
@@ -79,22 +92,25 @@ class BitgetPaperExecutionClient:
             # etc. to this V2 endpoint is invalid and was the root cause of the
             # 40774 / 400172 rejections.
             trade_side = str(trade.get("trade_side", "open")).lower()
-            body.update({"productType": "USDT-FUTURES", "marginMode": "isolated", "marginCoin": "USDT"})
+            margin_mode = str(trade.get("margin_mode", "isolated")).lower()
+            body.update({"productType": "USDT-FUTURES", "marginMode": margin_mode, "marginCoin": "USDT"})
             if trade.get("reduce_only") and self.position_mode != "hedge":
                 body["reduceOnly"] = "YES"
             elif self.position_mode == "hedge":
-                body["tradeSide"] = "close" if trade.get("reduce_only") else trade_side
-                if trade.get("position_side") is not None:
-                    position_side = str(trade["position_side"]).lower()
-                elif trade.get("reduce_only"):
-                    position_side = "buy" if side == "sell" else "sell"
+                if trade_side == "close" or trade.get("reduce_only"):
+                    body["tradeSide"] = "close"
                 else:
-                    position_side = side
-                body["posSide"] = "long" if position_side == "buy" else "short"
+                    body["tradeSide"] = trade_side
+                position_side = self.normalize_position_side(
+                    trade.get("position_side")
+                    if trade.get("position_side") is not None
+                    else ("buy" if side == "sell" else "sell" if trade.get("reduce_only") else side)
+                )
+                body["posSide"] = "long" if position_side in {"buy", "long"} else "short"
             elif trade_side != "open":
                 body["tradeSide"] = trade_side
                 if trade_side == "close":
-                    body["posSide"] = "long" if trade.get("position_side") == "buy" else "short"
+                    body["posSide"] = "long" if self.normalize_position_side(trade.get("position_side")) == "buy" else "short"
         body_text = json.dumps(body, separators=(",", ":"))
         timestamp = str(int(time.time() * 1000))
         prehash = timestamp + "POST" + order_path + body_text

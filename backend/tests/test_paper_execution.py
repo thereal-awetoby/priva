@@ -120,6 +120,32 @@ def test_paper_client_submits_close_order(monkeypatch):
     assert body["tradeSide"] == "close"
     assert body["side"] == "sell"
     assert body["posSide"] == "long"
+    assert body["marginMode"] == "isolated"
+
+
+def test_paper_client_uses_position_margin_mode_on_close(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+    monkeypatch.setenv("BITGET_POSITION_MODE", "hedge")
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    client.place_market_order(
+        {
+            "symbol": "AAPLUSDT",
+            "side": "sell",
+            "qty": 1,
+            "entry_price": 325,
+            "market": "futures",
+            "reduce_only": True,
+            "position_side": "buy",
+            "margin_mode": "crossed",
+        }
+    )
+
+    body = json.loads(session.calls[0][1]["data"])
+    assert body["marginMode"] == "crossed"
 
 
 def test_paper_client_submits_one_way_reduce_only_close(monkeypatch):
@@ -174,6 +200,23 @@ def test_paper_client_infers_pos_side_for_reduce_only_close(monkeypatch):
     client = BitgetPaperExecutionClient(session=session)
     client.place_market_order(
         {"symbol": "AAPLUSDT", "side": "sell", "qty": 1, "market": "futures", "reduce_only": True}
+    )
+
+    body = json.loads(session.calls[0][1]["data"])
+    assert body["tradeSide"] == "close"
+    assert body["posSide"] == "long"
+
+
+def test_paper_client_accepts_long_short_position_aliases(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+    monkeypatch.setenv("BITGET_POSITION_MODE", "hedge")
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    client.place_market_order(
+        {"symbol": "AAPLUSDT", "side": "sell", "qty": 1, "market": "futures", "trade_side": "close", "position_side": "long"}
     )
 
     body = json.loads(session.calls[0][1]["data"])

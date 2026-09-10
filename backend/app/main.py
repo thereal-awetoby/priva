@@ -207,6 +207,7 @@ def positions() -> dict[str, Any]:
                     "notional_usd": notional,
                     "unrealized_pnl": float(position.get("unrealizedPL", 0) or 0),
                     "leverage": float(position.get("leverage", 1) or 1),
+                    "margin_mode": position.get("marginMode"),
                     "source": "bitget_paper",
                 }
             )
@@ -300,6 +301,8 @@ def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]
         "symbol": symbol.upper(),
         "side": "sell" if payload.position_side == "buy" else "buy",
         "position_side": payload.position_side,
+        "trade_side": "close",
+        "margin_mode": current.get("margin_mode", "isolated"),
         "qty": qty,
         "entry_price": float(current.get("mark_price", current.get("entry_price", 0))),
         "leverage": float(current.get("leverage", 1)),
