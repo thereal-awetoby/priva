@@ -200,7 +200,7 @@ position so the loop cannot immediately open another one.
 2. Add return, win rate, Sharpe ratio, and maximum drawdown metrics.
 3. Add `POST /strategies/{id}/backtest` with a shared metrics response.
 4. Add separate natural-language and structured-form strategy paths.
-5. Add Qwen JSON parsing and strict validation for natural-language strategies.
+5. Add Grok JSON parsing and strict validation for natural-language strategies.
 6. Add configurable risk/settings endpoints and allowed-symbol validation.
 7. Add strategy and metrics views to the Builder A frontend.
 8. Keep paper-trading logs running and prepare the final demo and submission.

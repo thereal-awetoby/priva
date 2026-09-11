@@ -227,21 +227,26 @@ def _extract_json_from_content(content: str) -> dict[str, Any]:
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError as exc:
-        raise ValueError("Qwen response was not valid JSON") from exc
+        raise ValueError("provider response was not valid JSON") from exc
 
     if not isinstance(parsed, dict):
-        raise ValueError("Qwen response did not contain a JSON object")
+        raise ValueError("provider response did not contain a JSON object")
 
     return parsed
 
 
-def _parse_with_qwen(text: str) -> dict[str, Any]:
-    api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+def _parse_with_grok(text: str) -> dict[str, Any]:
+    api_key = (
+        os.getenv("GROK_API_KEY")
+        or os.getenv("XAI_API_KEY")
+        or os.getenv("QWEN_API_KEY")
+        or os.getenv("DASHSCOPE_API_KEY")
+    )
     if not api_key:
-        raise ValueError("Qwen API key is required. Set QWEN_API_KEY or DASHSCOPE_API_KEY.")
+        raise ValueError("Grok API key is required. Set GROK_API_KEY or XAI_API_KEY.")
 
-    base_url = (os.getenv("QWEN_API_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1").rstrip("/")
-    model = os.getenv("QWEN_MODEL") or "qwen-plus-latest"
+    base_url = (os.getenv("GROK_API_BASE_URL") or os.getenv("QWEN_API_BASE_URL") or "https://api.x.ai/v1").rstrip("/")
+    model = os.getenv("GROK_MODEL") or os.getenv("QWEN_MODEL") or "grok-2-latest"
 
     response = requests.post(
         f"{base_url}/chat/completions",
@@ -269,42 +274,50 @@ def _parse_with_qwen(text: str) -> dict[str, Any]:
 
     if response.status_code >= 400:
         raise ValueError(
-            f"Qwen parsing request failed with status {response.status_code}: {response.text}"
+            f"Grok parsing request failed with status {response.status_code}: {response.text}"
         )
 
     try:
         payload = response.json()
     except ValueError as exc:
-        raise ValueError("Qwen response was not valid JSON") from exc
+        raise ValueError("Grok response was not valid JSON") from exc
 
     choices = payload.get("choices") or []
     if not choices or not isinstance(choices, list):
-        raise ValueError("Qwen response did not include any chat choices")
+        raise ValueError("Grok response did not include any chat choices")
 
     message = choices[0].get("message", {})
     content = message.get("content")
     if not content:
-        raise ValueError("Qwen response did not include message content")
+        raise ValueError("Grok response did not include message content")
 
     parsed = _extract_json_from_content(content)
 
     if parsed.get("kind") == "builtin":
         if parsed.get("target_strategy") not in {"mean_reversion", "momentum_breakout"}:
-            raise ValueError("Qwen returned an unsupported builtin strategy")
+            raise ValueError("Grok returned an unsupported builtin strategy")
         if parsed.get("threshold_pct") is None:
-            raise ValueError("Qwen response is missing threshold_pct")
+            raise ValueError("Grok response is missing threshold_pct")
         return parsed
 
-    raise ValueError("Qwen returned an unsupported strategy shape")
+    raise ValueError("Grok returned an unsupported strategy shape")
 
 
-def parse_natural_language_strategy(text: str, *, use_qwen: bool = False) -> dict[str, Any]:
+def parse_natural_language_strategy(
+    text: str,
+    *,
+    use_grok: bool = False,
+    use_qwen: bool | None = None,
+) -> dict[str, Any]:
     normalized = (text or "").strip()
     if not normalized:
         raise ValueError("strategy text is required")
 
-    if use_qwen:
-        return _parse_with_qwen(normalized)
+    if use_qwen is not None:
+        use_grok = use_grok or use_qwen
+
+    if use_grok:
+        return _parse_with_grok(normalized)
 
     lowered = normalized.lower()
     threshold_match = re.search(r"(\d+(?:\.\d+)?)\s*%", lowered)

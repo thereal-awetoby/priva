@@ -543,9 +543,9 @@ def parse_strategy(payload: dict[str, Any]) -> dict[str, Any]:
         text = payload.get("text")
         if not isinstance(text, str) or not text.strip():
             return {"status": "rejected", "message": "text must be a non-empty string"}
-        use_qwen = bool(payload.get("use_qwen", False))
+        use_grok = bool(payload.get("use_grok", False) or payload.get("use_qwen", False))
         try:
-            return {"status": "parsed", **parse_natural_language_strategy(text, use_qwen=use_qwen)}
+            return {"status": "parsed", **parse_natural_language_strategy(text, use_grok=use_grok)}
         except ValueError as exc:
             return {"status": "rejected", "message": str(exc)}
 

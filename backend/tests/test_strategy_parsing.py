@@ -38,8 +38,8 @@ def test_parse_structured_strategy_rejects_invalid_comparison():
         })
 
 
-def test_parse_natural_language_strategy_supports_qwen_json(monkeypatch):
-    monkeypatch.setenv("QWEN_API_KEY", "test-key")
+def test_parse_natural_language_strategy_supports_grok_json(monkeypatch):
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
 
     class DummyResponse:
         status_code = 200
@@ -62,7 +62,7 @@ def test_parse_natural_language_strategy_supports_qwen_json(monkeypatch):
 
     monkeypatch.setattr("app.strategy.requests.post", fake_post)
 
-    parsed = parse_natural_language_strategy("fade moves at least 1% away from the opening price", use_qwen=True)
+    parsed = parse_natural_language_strategy("fade moves at least 1% away from the opening price", use_grok=True)
 
     assert parsed["kind"] == "builtin"
     assert parsed["target_strategy"] == "mean_reversion"
