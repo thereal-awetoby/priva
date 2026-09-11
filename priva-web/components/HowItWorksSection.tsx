@@ -18,7 +18,7 @@ const steps = [
   
   export default function HowItWorksSection() {
     return (
-      <section className="content-section">
+      <section className="content-section" id="how-it-works">
         <div className="wrap content-split">
           <div>
             <div className="content-eyebrow">How Priva works</div>
