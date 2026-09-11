@@ -235,77 +235,90 @@ def _extract_json_from_content(content: str) -> dict[str, Any]:
     return parsed
 
 
-def _parse_with_grok(text: str) -> dict[str, Any]:
+def _parse_with_gemini(text: str) -> dict[str, Any]:
     api_key = (
-        os.getenv("GROK_API_KEY")
+        os.getenv("GEMINI_API_KEY")
+        or os.getenv("GOOGLE_API_KEY")
+        or os.getenv("GROK_API_KEY")
         or os.getenv("XAI_API_KEY")
         or os.getenv("QWEN_API_KEY")
         or os.getenv("DASHSCOPE_API_KEY")
     )
     if not api_key:
-        raise ValueError("Grok API key is required. Set GROK_API_KEY or XAI_API_KEY.")
+        raise ValueError("Gemini API key is required. Set GEMINI_API_KEY or GOOGLE_API_KEY.")
 
-    base_url = (os.getenv("GROK_API_BASE_URL") or "https://api.x.ai/v1").rstrip("/")
-    model = os.getenv("GROK_MODEL") or "grok-4.6"
+    base_url = (os.getenv("GEMINI_API_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+    model = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
 
     response = requests.post(
-        f"{base_url}/chat/completions",
+        f"{base_url}/models/{model}:generateContent?key={api_key}",
         headers={
-            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
         json={
-            "model": model,
-            "messages": [
+            "contents": [
                 {
-                    "role": "system",
-                    "content": (
-                        "You convert a natural-language trading strategy into JSON. Return a JSON object only. "
-                        "Supported object shapes: {\"kind\":\"builtin\",\"target_strategy\":\"mean_reversion\",\"threshold_pct\":1.0} "
-                        "or {\"kind\":\"builtin\",\"target_strategy\":\"momentum_breakout\",\"threshold_pct\":1.0}."
-                    ),
-                },
-                {"role": "user", "content": text},
+                    "parts": [
+                        {
+                            "text": (
+                                "You convert a natural-language trading strategy into JSON. Return a JSON object only. "
+                                "Supported object shapes: {\"kind\":\"builtin\",\"target_strategy\":\"mean_reversion\",\"threshold_pct\":1.0} "
+                                "or {\"kind\":\"builtin\",\"target_strategy\":\"momentum_breakout\",\"threshold_pct\":1.0}.\n\n"
+                                f"{text}"
+                            )
+                        }
+                    ]
+                }
             ],
-            "temperature": 0,
+            "generationConfig": {"temperature": 0},
         },
         timeout=30,
     )
 
     if response.status_code >= 400:
         raise ValueError(
-            f"Grok parsing request failed with status {response.status_code}: {response.text}"
+            f"Gemini parsing request failed with status {response.status_code}: {response.text}"
         )
 
     try:
         payload = response.json()
     except ValueError as exc:
-        raise ValueError("Grok response was not valid JSON") from exc
+        raise ValueError("Gemini response was not valid JSON") from exc
 
-    choices = payload.get("choices") or []
-    if not choices or not isinstance(choices, list):
-        raise ValueError("Grok response did not include any chat choices")
+    candidates = payload.get("candidates") or []
+    if not candidates or not isinstance(candidates, list):
+        raise ValueError("Gemini response did not include any candidates")
 
-    message = choices[0].get("message", {})
-    content = message.get("content")
-    if not content:
-        raise ValueError("Grok response did not include message content")
+    candidate = candidates[0]
+    content = candidate.get("content", {})
+    parts = content.get("parts") or []
+    if not parts or not isinstance(parts, list):
+        raise ValueError("Gemini response did not include any content parts")
 
-    parsed = _extract_json_from_content(content)
+    text_blocks = []
+    for part in parts:
+        if isinstance(part, dict) and part.get("text"):
+            text_blocks.append(part.get("text", ""))
+
+    if not text_blocks:
+        raise ValueError("Gemini response did not include text content")
+
+    parsed = _extract_json_from_content("".join(text_blocks))
 
     if parsed.get("kind") == "builtin":
         if parsed.get("target_strategy") not in {"mean_reversion", "momentum_breakout"}:
-            raise ValueError("Grok returned an unsupported builtin strategy")
+            raise ValueError("Gemini returned an unsupported builtin strategy")
         if parsed.get("threshold_pct") is None:
-            raise ValueError("Grok response is missing threshold_pct")
+            raise ValueError("Gemini response is missing threshold_pct")
         return parsed
 
-    raise ValueError("Grok returned an unsupported strategy shape")
+    raise ValueError("Gemini returned an unsupported strategy shape")
 
 
 def parse_natural_language_strategy(
     text: str,
     *,
+    use_gemini: bool = False,
     use_grok: bool = False,
     use_qwen: bool | None = None,
 ) -> dict[str, Any]:
@@ -314,10 +327,10 @@ def parse_natural_language_strategy(
         raise ValueError("strategy text is required")
 
     if use_qwen is not None:
-        use_grok = use_grok or use_qwen
+        use_gemini = use_gemini or use_qwen
 
-    if use_grok:
-        return _parse_with_grok(normalized)
+    if use_gemini or use_grok:
+        return _parse_with_gemini(normalized)
 
     lowered = normalized.lower()
     threshold_match = re.search(r"(\d+(?:\.\d+)?)\s*%", lowered)
