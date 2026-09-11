@@ -90,7 +90,7 @@ def test_parse_natural_language_strategy_prefers_grok_settings_over_stale_qwen_e
 
     def fake_post(url, headers, json, timeout):
         assert url == "https://api.x.ai/v1/chat/completions"
-        assert json["model"] == "grok-2-latest"
+        assert json["model"] == "grok-4.6"
         return DummyResponse()
 
     monkeypatch.setattr("app.strategy.requests.post", fake_post)
