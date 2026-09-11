@@ -12,7 +12,9 @@ Camp trading project for tokenized U.S. stock futures.
 - Live Bitget positions, PnL, risk usage, and Supabase cycle logging
 - Risk checks for position size, daily loss, and leverage
 - Kill switch and full-position close via Bitget flash-close
-- Regression tests for execution, risk, agent-loop, and metrics behavior
+- Two built-in strategies with a shared decision contract
+- Supabase persistence for active strategy and per-process PnL sessions
+- Regression tests for execution, risk, agent-loop, strategy, and metrics behavior
 
 ## Run locally
 
@@ -69,6 +71,41 @@ Full closes use Bitget's dedicated flash-close endpoint because the generic
 `tradeSide: close` path is unreliable for these tokenized-stock futures. Partial
 closes are currently rejected intentionally.
 
+The supported tokenized-stock futures symbols are currently `AAPLUSDT` and
+`TSLAUSDT`. `MSFTUSDT` is not recognized by the configured Bitget paper market
+and must not be included in `AGENT_WATCHED_SYMBOLS`.
+
+## Strategy system
+
+Each active strategy returns the same decision shape consumed by risk checks and
+execution:
+
+```json
+{
+	"action": "buy",
+	"size": 1.0,
+	"leverage": 1.0,
+	"reason": "...",
+	"signal_strength": 0.5
+}
+```
+
+Implemented strategies:
+
+- `momentum_breakout` — compares current price with the opening price
+- `mean_reversion` — fades moves at least 1% away from the opening price
+
+Activate one with:
+
+```bash
+curl.exe -X POST \
+	"https://YOUR-SERVICE.onrender.com/strategies/mean_reversion/activate" \
+	| python -m json.tool
+```
+
+The selected strategy is persisted in Supabase and restored at startup. If
+Supabase is not configured, activation remains process-local.
+
 ### Supabase strategy persistence
 
 Run this once in the Supabase SQL editor to persist the active strategy across
@@ -118,15 +155,52 @@ position so the loop cannot immediately open another one.
 
 ## Main files
 
-- app/main.py — FastAPI app and mock API routes
+- app/main.py — FastAPI routes and live dashboard calculations
+- app/agent_loop.py — autonomous scheduler and live-position gate
+- app/strategy.py — strategy registry and decision contract
+- app/paper_execution.py — authenticated Bitget paper execution
+- app/performance.py — session realized and live unrealized PnL calculations
+- app/risk_engine.py — hard-rule risk checks
+- app/supabase_logging.py — cycle and strategy persistence
+- tests/ — regression coverage for the backend
 - requirements.txt — Python dependencies
 - render.yaml — Render deployment config
 
-## Current status
+## Completed
 
-The live paper-trading path is operational: market data, risk checks, leverage
-configuration, order submission, live positions, PnL, risk usage, Supabase
-logging, kill switch, and full-position closing are implemented. Remaining
-hackathon work includes strategy backtesting and activation, configurable risk
-settings, final performance metrics, documentation polish, and maintaining the
-paper-trading log through submission.
+- Render deployment and health/status endpoints
+- Real Bitget market data for supported stock-futures symbols
+- Paper futures opens with explicit leverage configuration
+- Live Bitget position inspection with leverage and margin mode
+- Full-position closing through Bitget flash-close
+- Live unrealized PnL and risk usage
+- Session-scoped realized PnL calculation
+- Supabase cycle logging and encrypted intent hashes
+- Live Bitget position checks in the autonomous loop
+- Functional kill switch
+- Functional built-in strategy activation
+- Supabase persistence for the active strategy
+- `43` automated tests passing locally
+
+## Known limitations
+
+- Partial position closes are intentionally unsupported.
+- `/agent-cycle` evaluates a decision but does not submit an order; the
+	autonomous loop and `/paper-trade` perform execution.
+- The configured Bitget paper account supports AAPLUSDT and TSLAUSDT, not
+	MSFTUSDT.
+- Realized PnL is scoped to the current backend session. Historical cycles
+	created before `session_id` was added are not used for the current session.
+- Strategy persistence requires the Supabase migration and environment
+	variables documented above.
+
+## Remaining work
+
+1. Build a reusable historical-candle backtester for both built-in strategies.
+2. Add return, win rate, Sharpe ratio, and maximum drawdown metrics.
+3. Add `POST /strategies/{id}/backtest` with a shared metrics response.
+4. Add separate natural-language and structured-form strategy paths.
+5. Add Qwen JSON parsing and strict validation for natural-language strategies.
+6. Add configurable risk/settings endpoints and allowed-symbol validation.
+7. Add strategy and metrics views to the Builder A frontend.
+8. Keep paper-trading logs running and prepare the final demo and submission.

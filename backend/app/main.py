@@ -10,7 +10,7 @@ from app.market_data import BitgetMarketDataService
 from app.paper_execution import BitgetPaperExecutionClient
 from app.performance import calculate_unrealized_pnl
 from app.risk_engine import RiskEngine
-from app.strategy import STRATEGIES, activate_strategy as set_active_strategy, build_signal_from_ticker, get_active_strategy_id
+from app.strategy import STRATEGIES, activate_strategy as set_active_strategy, backtest_strategy, build_signal_from_ticker, get_active_strategy_id
 from app import agent_loop
 from app.supabase_logging import SupabaseCycleLogger
 
@@ -483,6 +483,23 @@ def activate_strategy(strategy_id: str) -> dict[str, Any]:
         "active": True,
         "persistence": persistence["status"],
     }
+
+
+@app.post("/strategies/{strategy_id}/backtest")
+def backtest_strategy_endpoint(strategy_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = payload or {}
+    if strategy_id not in STRATEGIES:
+        return {"strategy_id": strategy_id, "status": "rejected", "message": "unknown strategy"}
+
+    candles = payload.get("candles", [])
+    if candles is None or not isinstance(candles, list):
+        return {"strategy_id": strategy_id, "status": "rejected", "message": "candles must be a list"}
+
+    try:
+        initial_capital = float(payload.get("initial_capital", 10000.0))
+        return backtest_strategy(strategy_id, candles, initial_capital=initial_capital)
+    except ValueError as exc:
+        return {"strategy_id": strategy_id, "status": "rejected", "message": str(exc)}
 
 
 @app.get("/kill-switch")
