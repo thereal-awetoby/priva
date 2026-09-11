@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import asdict, dataclass
 from math import sqrt
 from typing import Any, Literal
+
+import requests
 
 
 @dataclass(frozen=True)
@@ -211,10 +215,96 @@ def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_c
     }
 
 
-def parse_natural_language_strategy(text: str) -> dict[str, Any]:
+def _extract_json_from_content(content: str) -> dict[str, Any]:
+    stripped = (content or "").strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*|\s*```$", "", stripped, flags=re.IGNORECASE)
+
+    json_match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
+    if json_match:
+        stripped = json_match.group(0)
+
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Qwen response was not valid JSON") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError("Qwen response did not contain a JSON object")
+
+    return parsed
+
+
+def _parse_with_qwen(text: str) -> dict[str, Any]:
+    api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+    if not api_key:
+        raise ValueError("Qwen API key is required. Set QWEN_API_KEY or DASHSCOPE_API_KEY.")
+
+    base_url = (os.getenv("QWEN_API_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1").rstrip("/")
+    model = os.getenv("QWEN_MODEL") or "qwen-plus-latest"
+
+    response = requests.post(
+        f"{base_url}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You convert a natural-language trading strategy into JSON. Return a JSON object only. "
+                        "Supported object shapes: {\"kind\":\"builtin\",\"target_strategy\":\"mean_reversion\",\"threshold_pct\":1.0} "
+                        "or {\"kind\":\"builtin\",\"target_strategy\":\"momentum_breakout\",\"threshold_pct\":1.0}."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            "temperature": 0,
+        },
+        timeout=30,
+    )
+
+    if response.status_code >= 400:
+        raise ValueError(
+            f"Qwen parsing request failed with status {response.status_code}: {response.text}"
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ValueError("Qwen response was not valid JSON") from exc
+
+    choices = payload.get("choices") or []
+    if not choices or not isinstance(choices, list):
+        raise ValueError("Qwen response did not include any chat choices")
+
+    message = choices[0].get("message", {})
+    content = message.get("content")
+    if not content:
+        raise ValueError("Qwen response did not include message content")
+
+    parsed = _extract_json_from_content(content)
+
+    if parsed.get("kind") == "builtin":
+        if parsed.get("target_strategy") not in {"mean_reversion", "momentum_breakout"}:
+            raise ValueError("Qwen returned an unsupported builtin strategy")
+        if parsed.get("threshold_pct") is None:
+            raise ValueError("Qwen response is missing threshold_pct")
+        return parsed
+
+    raise ValueError("Qwen returned an unsupported strategy shape")
+
+
+def parse_natural_language_strategy(text: str, *, use_qwen: bool = False) -> dict[str, Any]:
     normalized = (text or "").strip()
     if not normalized:
         raise ValueError("strategy text is required")
+
+    if use_qwen:
+        return _parse_with_qwen(normalized)
 
     lowered = normalized.lower()
     threshold_match = re.search(r"(\d+(?:\.\d+)?)\s*%", lowered)

@@ -38,6 +38,37 @@ def test_parse_structured_strategy_rejects_invalid_comparison():
         })
 
 
+def test_parse_natural_language_strategy_supports_qwen_json(monkeypatch):
+    monkeypatch.setenv("QWEN_API_KEY", "test-key")
+
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "```json\n{\"kind\":\"builtin\",\"target_strategy\":\"mean_reversion\",\"threshold_pct\":1.0}\n```"
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(url, headers, json, timeout):
+        assert url.endswith("/chat/completions")
+        assert headers["Authorization"] == "Bearer test-key"
+        return DummyResponse()
+
+    monkeypatch.setattr("app.strategy.requests.post", fake_post)
+
+    parsed = parse_natural_language_strategy("fade moves at least 1% away from the opening price", use_qwen=True)
+
+    assert parsed["kind"] == "builtin"
+    assert parsed["target_strategy"] == "mean_reversion"
+    assert parsed["threshold_pct"] == 1.0
+
+
 def test_parse_strategy_endpoint_rejects_ambiguous_payloads():
     parsed = parse_strategy_endpoint({
         "text": "fade moves at least 1% away from the opening price",
