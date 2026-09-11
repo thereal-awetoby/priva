@@ -137,14 +137,13 @@ positions.
 
 ```text
 GET  /health
-GET  /agent-loop
-GET  /market-data?symbol=AAPLUSDT
-GET  /positions
-GET  /pnl
-GET  /risk-usage
-GET  /activity-log
+GET  /strategies
+GET  /risk-settings
+POST /risk-settings
+POST /strategies/parse
+POST /strategies/{strategy_id}/backtest
+POST /risk-check
 POST /paper-trade
-POST /positions/{symbol}/close
 GET  /kill-switch
 POST /kill-switch
 ```
@@ -152,6 +151,37 @@ POST /kill-switch
 For a full close, send `position_side: "buy"` for a long or
 `position_side: "sell"` for a short. Stop the agent before manually closing a
 position so the loop cannot immediately open another one.
+
+## Builder A integration notes
+
+Builder A is intentionally kept separate from the backend work, but it can use
+this backend as a clean API layer. The current live backend base URL is:
+
+```text
+https://priva-499h.onrender.com
+```
+
+Recommended Builder A workflow:
+
+1. `GET /strategies` to fetch the available strategy catalog.
+2. `POST /strategies/parse` with natural-language text to convert a user prompt
+   into a structured strategy payload. Builder A should send `use_gemini: true`
+   when it wants the provider-backed parser path; the backend handles the Gemini
+   API key on the server side.
+3. `GET /risk-settings` and `POST /risk-settings` to expose or update allowed
+   symbols and risk limits.
+4. `POST /risk-check` before submitting an order to validate a trade against the
+   current risk engine state.
+5. `POST /paper-trade` for execution in the Bitget paper environment.
+6. `POST /strategies/{strategy_id}/backtest` to run a historical backtest and
+   retrieve metrics.
+
+Important Builder A guidance:
+
+- Builder A should not collect or store provider API keys in the browser.
+- All provider-backed parsing is server-side and uses the backend environment.
+- The backend currently supports `use_gemini`, while older `use_qwen` / `use_grok`
+  payloads are still tolerated for compatibility.
 
 ## Main files
 
@@ -180,7 +210,11 @@ position so the loop cannot immediately open another one.
 - Functional kill switch
 - Functional built-in strategy activation
 - Supabase persistence for the active strategy
-- `43` automated tests passing locally
+- Natural-language strategy parsing with strict validation
+- Gemini-backed strategy parsing via the backend provider path
+- Configurable risk/settings endpoints and allowed-symbol validation
+- `POST /strategies/{id}/backtest` with shared metrics output
+- `53` automated tests passing locally
 
 ## Known limitations
 
@@ -196,11 +230,11 @@ position so the loop cannot immediately open another one.
 
 ## Remaining work
 
-1. Build a reusable historical-candle backtester for both built-in strategies.
-2. Add return, win rate, Sharpe ratio, and maximum drawdown metrics.
-3. Add `POST /strategies/{id}/backtest` with a shared metrics response.
-4. Add separate natural-language and structured-form strategy paths.
-5. Add Grok JSON parsing and strict validation for natural-language strategies.
-6. Add configurable risk/settings endpoints and allowed-symbol validation.
-7. Add strategy and metrics views to the Builder A frontend.
-8. Keep paper-trading logs running and prepare the final demo and submission.
+1. Keep paper-trading logs running and prepare the final demo and submission.
+2. Update Builder A to consume the verified backend API contract and display the
+   live strategy, risk, and metrics responses.
+3. Revisit any follow-up improvements after Builder A handoff, such as richer
+   metrics visualization or additional strategy UX polish.
+
+> Note: the core backend backlog is effectively complete. Builder A remains a
+> separate frontend stream and should use the API contract documented above.
