@@ -10,7 +10,15 @@ from app.market_data import BitgetMarketDataService
 from app.paper_execution import BitgetPaperExecutionClient
 from app.performance import calculate_unrealized_pnl
 from app.risk_engine import RiskEngine
-from app.strategy import STRATEGIES, activate_strategy as set_active_strategy, backtest_strategy, build_signal_from_ticker, get_active_strategy_id
+from app.strategy import (
+    STRATEGIES,
+    activate_strategy as set_active_strategy,
+    backtest_strategy,
+    build_signal_from_ticker,
+    get_active_strategy_id,
+    parse_natural_language_strategy,
+    parse_structured_strategy,
+)
 from app import agent_loop
 from app.supabase_logging import SupabaseCycleLogger
 
@@ -392,9 +400,27 @@ def risk_usage() -> dict[str, Any]:
             "daily_loss": round(current_daily_loss / max_daily_loss * 100, 2) if max_daily_loss else 0.0,
             "leverage": round(current_leverage / max_leverage * 100, 2) if max_leverage else 0.0,
         },
+        "allowed_symbols": list(risk_engine.allowed_symbols) if risk_engine.allowed_symbols else [],
         "positions": live_positions,
         "source": "bitget_and_supabase",
     }
+
+
+@app.get("/risk-settings")
+def risk_settings() -> dict[str, Any]:
+    return {"status": "ok", **risk_engine.get_settings()}
+
+
+@app.post("/risk-settings")
+def update_risk_settings(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    if payload is None or not isinstance(payload, dict):
+        return {"status": "rejected", "message": "payload must be an object"}
+
+    try:
+        settings = risk_engine.update_settings(payload)
+        return {"status": "updated", **settings}
+    except ValueError as exc:
+        return {"status": "rejected", "message": str(exc)}
 
 
 @app.get("/activity-log")
@@ -500,6 +526,38 @@ def backtest_strategy_endpoint(strategy_id: str, payload: dict[str, Any] | None 
         return backtest_strategy(strategy_id, candles, initial_capital=initial_capital)
     except ValueError as exc:
         return {"strategy_id": strategy_id, "status": "rejected", "message": str(exc)}
+
+
+@app.post("/strategies/parse")
+def parse_strategy(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"status": "rejected", "message": "payload must be an object"}
+
+    has_text = "text" in payload
+    has_strategy = "strategy" in payload
+
+    if has_text and has_strategy:
+        return {"status": "rejected", "message": "payload must include either text or strategy, not both"}
+
+    if has_text:
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return {"status": "rejected", "message": "text must be a non-empty string"}
+        try:
+            return {"status": "parsed", **parse_natural_language_strategy(text)}
+        except ValueError as exc:
+            return {"status": "rejected", "message": str(exc)}
+
+    if has_strategy:
+        strategy = payload.get("strategy")
+        if not isinstance(strategy, dict):
+            return {"status": "rejected", "message": "strategy must be an object"}
+        try:
+            return {"status": "parsed", **parse_structured_strategy(strategy)}
+        except ValueError as exc:
+            return {"status": "rejected", "message": str(exc)}
+
+    return {"status": "rejected", "message": "payload must include either text or strategy"}
 
 
 @app.get("/kill-switch")

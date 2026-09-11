@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from math import sqrt
 from typing import Any, Literal
@@ -207,6 +208,65 @@ def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_c
             "max_drawdown": round(max_drawdown, 4),
         },
         "trade_count": len(closed_trades),
+    }
+
+
+def parse_natural_language_strategy(text: str) -> dict[str, Any]:
+    normalized = (text or "").strip()
+    if not normalized:
+        raise ValueError("strategy text is required")
+
+    lowered = normalized.lower()
+    threshold_match = re.search(r"(\d+(?:\.\d+)?)\s*%", lowered)
+    if not threshold_match:
+        raise ValueError("natural-language strategy requires an explicit percentage threshold")
+
+    threshold_pct = float(threshold_match.group(1))
+
+    if "mean reversion" in lowered or "fade moves" in lowered or "fades moves" in lowered:
+        return {
+            "kind": "builtin",
+            "target_strategy": "mean_reversion",
+            "threshold_pct": threshold_pct,
+            "raw_text": normalized,
+        }
+
+    if "momentum" in lowered or "breakout" in lowered:
+        return {
+            "kind": "builtin",
+            "target_strategy": "momentum_breakout",
+            "threshold_pct": threshold_pct,
+            "raw_text": normalized,
+        }
+
+    raise ValueError("unsupported natural-language strategy")
+
+
+def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("strategy payload must be an object")
+
+    action = str(payload.get("action", "buy")).lower()
+    if action not in {"buy", "sell"}:
+        raise ValueError("structured strategy action must be buy or sell")
+
+    comparison = str(payload.get("comparison", "open")).lower()
+    if comparison not in {"open", "close"}:
+        raise ValueError("structured strategy comparison must be open or close")
+
+    threshold_pct = payload.get("threshold_pct", payload.get("threshold"))
+    if threshold_pct is None:
+        raise ValueError("structured strategy requires a threshold_pct value")
+    try:
+        threshold_pct = float(threshold_pct)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("structured strategy threshold_pct must be numeric") from exc
+
+    return {
+        "kind": "custom",
+        "action": action,
+        "comparison": comparison,
+        "threshold_pct": threshold_pct,
     }
 
 
