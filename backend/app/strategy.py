@@ -245,8 +245,8 @@ def _parse_with_grok(text: str) -> dict[str, Any]:
     if not api_key:
         raise ValueError("Grok API key is required. Set GROK_API_KEY or XAI_API_KEY.")
 
-    base_url = (os.getenv("GROK_API_BASE_URL") or os.getenv("QWEN_API_BASE_URL") or "https://api.x.ai/v1").rstrip("/")
-    model = os.getenv("GROK_MODEL") or os.getenv("QWEN_MODEL") or "grok-2-latest"
+    base_url = (os.getenv("GROK_API_BASE_URL") or "https://api.x.ai/v1").rstrip("/")
+    model = os.getenv("GROK_MODEL") or "grok-2-latest"
 
     response = requests.post(
         f"{base_url}/chat/completions",

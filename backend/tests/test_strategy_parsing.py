@@ -69,6 +69,38 @@ def test_parse_natural_language_strategy_supports_grok_json(monkeypatch):
     assert parsed["threshold_pct"] == 1.0
 
 
+def test_parse_natural_language_strategy_prefers_grok_settings_over_stale_qwen_env(monkeypatch):
+    monkeypatch.setenv("GROK_API_KEY", "test-key")
+    monkeypatch.setenv("QWEN_MODEL", "qwen-plus-latest")
+    monkeypatch.setenv("QWEN_API_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "```json\n{\"kind\":\"builtin\",\"target_strategy\":\"mean_reversion\",\"threshold_pct\":1.0}\n```"
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(url, headers, json, timeout):
+        assert url == "https://api.x.ai/v1/chat/completions"
+        assert json["model"] == "grok-2-latest"
+        return DummyResponse()
+
+    monkeypatch.setattr("app.strategy.requests.post", fake_post)
+
+    parsed = parse_natural_language_strategy("fade moves at least 1% away from the opening price", use_grok=True)
+
+    assert parsed["kind"] == "builtin"
+    assert parsed["target_strategy"] == "mean_reversion"
+
+
 def test_parse_strategy_endpoint_rejects_ambiguous_payloads():
     parsed = parse_strategy_endpoint({
         "text": "fade moves at least 1% away from the opening price",
