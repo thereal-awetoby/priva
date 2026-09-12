@@ -1,5 +1,6 @@
 "use client";
 
+import TradingLimitsForm from "@/components/app/panels/risk/TradingLimitsForm";
 import { useState } from "react";
 
 type Permission = {
@@ -157,6 +158,8 @@ export default function RiskAccessPanel() {
                   </div>
                 </div>
       </div>
+
+      <TradingLimitsForm />
     </div>
   );
 }
