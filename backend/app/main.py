@@ -4,6 +4,7 @@ import asyncio
 from typing import Any, Literal
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.market_data import BitgetMarketDataService
@@ -26,6 +27,17 @@ app = FastAPI(
     title="Priva Backend",
     description="Builder B backend scaffolding for Priva trading agent",
     version="0.1.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 market_service = BitgetMarketDataService()
