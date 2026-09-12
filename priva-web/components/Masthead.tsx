@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 export default function Masthead() {
   return (
     <header className="masthead">
@@ -12,9 +10,14 @@ export default function Masthead() {
           <a href="#">Security</a>
           <a href="#">Docs</a>
         </nav>
-        <Link className="btn btn-primary" href="#dashboard">
+                <a
+          className="btn btn-primary"
+          href="/app"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
           Launch app
-        </Link>
+        </a>
       </div>
     </header>
   );
