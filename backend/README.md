@@ -182,6 +182,10 @@ Important Builder A guidance:
 - All provider-backed parsing is server-side and uses the backend environment.
 - The backend currently supports `use_gemini`, while older `use_qwen` / `use_grok`
   payloads are still tolerated for compatibility.
+- The `/strategies/parse` endpoint accepts either a `text` payload or a
+  `strategy` payload. It does not read raw form field names directly, so Builder
+  A should convert the form into the JSON shape expected by the backend before
+  calling the endpoint.
 
 ## Main files
 
