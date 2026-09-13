@@ -1,5 +1,5 @@
 from app.main import parse_strategy as parse_strategy_endpoint
-from app.strategy import parse_natural_language_strategy, parse_structured_strategy
+from app.strategy import STRATEGY_CATALOG, build_signal_from_ticker, get_active_strategy_id, list_strategy_catalog, parse_natural_language_strategy, parse_structured_strategy, register_custom_strategy, activate_strategy
 
 import pytest
 
@@ -22,6 +22,26 @@ def test_parse_structured_strategy_builds_custom_strategy_config():
     assert parsed["kind"] == "custom"
     assert parsed["action"] == "buy"
     assert parsed["threshold_pct"] == 1.5
+
+
+def test_parse_structured_strategy_supports_position_size():
+    parsed = parse_structured_strategy({
+        "action": "buy",
+        "comparison": "open",
+        "threshold_pct": 1.5,
+        "position_size": 0.5,
+    })
+
+    assert parsed["kind"] == "custom"
+    assert parsed["position_size"] == 0.5
+
+    strategy_id = "custom_buy_open_150_0_5"
+    register_custom_strategy(strategy_id, parsed)
+    assert activate_strategy(strategy_id) is True
+
+    ticker = {"status": "live", "last_price": 101.5, "open_price": 100.0}
+    signal = build_signal_from_ticker(ticker)
+    assert signal["size"] == 0.5
 
 
 def test_parse_natural_language_strategy_requires_explicit_threshold():
@@ -88,3 +108,45 @@ def test_parse_strategy_endpoint_rejects_non_string_text():
 
     assert parsed["status"] == "rejected"
     assert "text must be a non-empty string" in parsed["message"]
+
+
+def test_parse_strategy_endpoint_preserves_strategy_metadata_for_text_inputs():
+    parsed = parse_strategy_endpoint({
+        "text": "fade moves at least 1% away from the opening price",
+        "name": "My Mean Reversion",
+        "description": "Fade short-lived dislocations around the open.",
+    })
+
+    assert parsed["status"] == "parsed"
+    assert parsed["name"] == "My Mean Reversion"
+    assert parsed["description"] == "Fade short-lived dislocations around the open."
+    assert parsed["strategy_id"] == "mean_reversion"
+
+
+def test_strategy_catalog_exposes_prebuilt_strategy_definitions():
+    assert set(STRATEGY_CATALOG) == {"momentum_breakout", "mean_reversion"}
+
+    for strategy_id, definition in STRATEGY_CATALOG.items():
+        assert definition["id"] == strategy_id
+        assert definition["type"] == "prebuilt"
+        assert definition["description"]
+
+
+def test_parse_strategy_endpoint_registers_structured_strategy_for_activation():
+    parsed = parse_strategy_endpoint({
+        "strategy": {
+            "action": "buy",
+            "comparison": "open",
+            "threshold_pct": 1.5,
+        }
+    })
+
+    assert parsed["status"] == "parsed"
+    assert parsed["strategy_id"].startswith("custom_buy_open_")
+    assert parsed["strategy_id"] in list_strategy_catalog()
+    assert activate_strategy(parsed["strategy_id"]) is True
+    assert get_active_strategy_id() == parsed["strategy_id"]
+
+    ticker = {"status": "live", "last_price": 101.5, "open_price": 100.0}
+    signal = build_signal_from_ticker(ticker)
+    assert signal["action"] == "buy"

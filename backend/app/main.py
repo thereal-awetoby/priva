@@ -13,12 +13,16 @@ from app.performance import calculate_unrealized_pnl
 from app.risk_engine import RiskEngine
 from app.strategy import (
     STRATEGIES,
+    STRATEGY_CATALOG,
     activate_strategy as set_active_strategy,
     backtest_strategy,
     build_signal_from_ticker,
+    configure_builtin_strategy,
     get_active_strategy_id,
+    list_strategy_catalog,
     parse_natural_language_strategy,
     parse_structured_strategy,
+    register_custom_strategy,
 )
 from app import agent_loop
 from app.supabase_logging import SupabaseCycleLogger
@@ -100,6 +104,17 @@ def process_market_cycle(
 
 class KillSwitchRequest(BaseModel):
     enabled: bool
+
+
+class IntentEvaluationRequest(BaseModel):
+    strategy_id: str | None = None
+    symbol: str
+    side: Literal["buy", "sell"]
+    qty: float
+    entry_price: float
+    leverage: float = 1.0
+    current_positions: list[dict[str, Any]] | None = None
+    current_daily_pnl: float = 0.0
 
 
 class TradeRequest(BaseModel):
@@ -373,11 +388,14 @@ def pnl() -> dict[str, Any]:
     )
     realized_pnl = round(float(logged_pnl.get("realized_pnl", 0) or 0), 4)
     total_pnl = round(realized_pnl + unrealized_pnl, 4)
+    trade_metrics = _trade_metrics(cycles)
     return {
         "unrealized_pnl": unrealized_pnl,
         "realized_pnl": realized_pnl,
         "daily_pnl": total_pnl,
         "total_pnl": total_pnl,
+        "win_rate_pct": trade_metrics["win_rate_pct"],
+        "max_drawdown_pct": trade_metrics["max_drawdown_pct"],
         "currency": "USD",
         "source": "bitget_and_supabase",
         "session_id": cycle_logger.session_id,
@@ -449,6 +467,7 @@ def activity_log() -> dict[str, Any]:
                     "status": cycle.get("status"),
                     "risk_check": cycle.get("risk_check"),
                     "intent_hash": (cycle.get("intent") or {}).get("intent_hash"),
+                    "mode": cycle.get("mode", "autonomous"),
                     "timestamp": cycle.get("created_at"),
                 }
                 for cycle in cycles
@@ -464,6 +483,7 @@ def activity_log() -> dict[str, Any]:
                 "action": "buy",
                 "amount_usd": 2100,
                 "status": "filled",
+                "mode": "autonomous",
                 "timestamp": "2026-09-10T00:00:20Z",
             },
             {
@@ -472,6 +492,7 @@ def activity_log() -> dict[str, Any]:
                 "symbol": "NVDA",
                 "result": "approved",
                 "reason": "within max leverage",
+                "mode": "strategy",
                 "timestamp": "2026-09-10T00:02:10Z",
             },
             {
@@ -479,6 +500,7 @@ def activity_log() -> dict[str, Any]:
                 "type": "intent",
                 "symbol": "MSFT",
                 "status": "encrypted",
+                "mode": "autonomous",
                 "timestamp": "2026-09-10T00:03:00Z",
             },
         ]
@@ -487,24 +509,15 @@ def activity_log() -> dict[str, Any]:
 
 @app.get("/strategies")
 def strategies() -> dict[str, Any]:
-    return {
-        "strategies": [
+    catalog = []
+    for strategy_id, definition in list_strategy_catalog().items():
+        catalog.append(
             {
-                "id": "momentum_breakout",
-                "name": "Momentum Breakout",
-                "type": "playbook",
-                "status": "active" if get_active_strategy_id() == "momentum_breakout" else "inactive",
-                "description": "Long when trend and volume accelerate above baseline.",
-            },
-            {
-                "id": "mean_reversion",
-                "name": "Mean Reversion",
-                "type": "prebuilt",
-                "status": "active" if get_active_strategy_id() == "mean_reversion" else "inactive",
-                "description": "Fade moves that extend at least 1% away from the opening price.",
-            },
-        ]
-    }
+                **definition,
+                "status": "active" if get_active_strategy_id() == strategy_id else "inactive",
+            }
+        )
+    return {"strategies": catalog}
 
 
 @app.post("/strategies/{strategy_id}/activate")
@@ -551,13 +564,42 @@ def parse_strategy(payload: dict[str, Any]) -> dict[str, Any]:
     if has_text and has_strategy:
         return {"status": "rejected", "message": "payload must include either text or strategy, not both"}
 
+    def _attach_metadata(response: dict[str, Any]) -> dict[str, Any]:
+        name = payload.get("name")
+        description = payload.get("description")
+
+        if isinstance(name, str) and name.strip():
+            response["name"] = name.strip()
+        if isinstance(description, str) and description.strip():
+            response["description"] = description.strip()
+
+        return response
+
     if has_text:
         text = payload.get("text")
         if not isinstance(text, str) or not text.strip():
             return {"status": "rejected", "message": "text must be a non-empty string"}
         use_gemini = bool(payload.get("use_gemini", False) or payload.get("use_grok", False) or payload.get("use_qwen", False))
         try:
-            return {"status": "parsed", **parse_natural_language_strategy(text, use_gemini=use_gemini)}
+            parsed = parse_natural_language_strategy(text, use_gemini=use_gemini)
+            if parsed.get("kind") == "builtin":
+                config = {}
+                for key, parsed_key in (
+                    ("threshold_pct", "threshold_pct"),
+                    ("position_size", "position_size"),
+                    ("size", "position_size"),
+                    ("leverage", "leverage"),
+                    ("take_profit_pct", "take_profit_pct"),
+                    ("take_profit", "take_profit_pct"),
+                    ("stop_loss_pct", "stop_loss_pct"),
+                    ("stop_loss", "stop_loss_pct"),
+                ):
+                    if key in payload:
+                        config[parsed_key] = payload[key]
+                if config:
+                    configure_builtin_strategy(parsed["target_strategy"], config)
+                    parsed.update(config)
+            return _attach_metadata({"status": "parsed", **parsed, "strategy_id": parsed.get("target_strategy", parsed.get("strategy_id"))})
         except ValueError as exc:
             return {"status": "rejected", "message": str(exc)}
 
@@ -566,7 +608,19 @@ def parse_strategy(payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(strategy, dict):
             return {"status": "rejected", "message": "strategy must be an object"}
         try:
-            return {"status": "parsed", **parse_structured_strategy(strategy)}
+            parsed = parse_structured_strategy(strategy)
+            if parsed.get("kind") == "builtin":
+                configure_builtin_strategy(parsed["target_strategy"], parsed)
+                response = {"status": "parsed", **parsed, "strategy_id": parsed["target_strategy"]}
+                return _attach_metadata(response)
+
+            strategy_id = payload.get("strategy_id") or (
+                f"custom_{parsed['action']}_{parsed['comparison']}_{int(parsed['threshold_pct'] * 100)}_"
+                f"{str(parsed['position_size']).replace('.', '_')}"
+            )
+            register_custom_strategy(strategy_id, parsed)
+            response = {"status": "parsed", **parsed, "strategy_id": strategy_id}
+            return _attach_metadata(response)
         except ValueError as exc:
             return {"status": "rejected", "message": str(exc)}
 
@@ -593,6 +647,205 @@ async def set_kill_switch(payload: KillSwitchRequest) -> dict[str, Any]:
         "enabled": payload.enabled,
         "running": agent_loop.is_running(),
         "message": "Kill switch updated." if payload.enabled else "Agent loop restarted.",
+    }
+
+
+def _market_provenance(symbol: str) -> dict[str, Any]:
+    snapshot = market_service.get_market_snapshot(symbol)
+    data = snapshot.get("data") if isinstance(snapshot.get("data"), dict) else {}
+    return {
+        "symbol": snapshot.get("symbol", symbol.upper()),
+        "status": snapshot.get("status", data.get("status", "unknown")),
+        "source": data.get("source", "bitget_public"),
+        "fetched_at": snapshot.get("fetched_at"),
+        "timestamp_iso": data.get("timestamp_iso"),
+        "last_price": data.get("last_price"),
+        "open_price": data.get("open_price"),
+        "high_24h": data.get("high_24h"),
+        "low_24h": data.get("low_24h"),
+        "error": data.get("error"),
+    }
+
+
+def _position_notional(position: dict[str, Any]) -> float:
+    if not isinstance(position, dict):
+        return 0.0
+
+    qty = float(position.get("qty", position.get("total", position.get("available", 0)) or 0) or 0)
+    if qty <= 0:
+        return 0.0
+
+    entry_price = float(position.get("entry_price", position.get("averageOpenPrice", position.get("openPrice", 0)) or 0) or 0)
+    if entry_price <= 0:
+        return 0.0
+
+    return abs(qty * entry_price)
+
+
+def _usage_summary(current_positions: list[dict[str, Any]], current_daily_pnl: float) -> dict[str, Any]:
+    current_position_size = round(
+        sum(_position_notional(position) for position in current_positions),
+        4,
+    )
+    current_daily_loss = max(0.0, -float(current_daily_pnl))
+    max_position_size = float(risk_engine.max_position_size)
+    max_daily_loss = float(risk_engine.max_daily_loss)
+    position_usage_pct = round(current_position_size / max_position_size * 100, 2) if max_position_size else 0.0
+    daily_loss_usage_pct = round(current_daily_loss / max_daily_loss * 100, 2) if max_daily_loss else 0.0
+    return {
+        "max_position_size": max_position_size,
+        "current_position_size": current_position_size,
+        "max_daily_loss": max_daily_loss,
+        "current_daily_loss": round(current_daily_loss, 4),
+        "position_usage_pct": position_usage_pct,
+        "daily_loss_usage_pct": daily_loss_usage_pct,
+    }
+
+
+def _action_plan_from_usage(position_usage_pct: float, daily_loss_usage_pct: float) -> str:
+    if position_usage_pct >= 90.0 or daily_loss_usage_pct >= 90.0:
+        return "FLATTEN"
+    if position_usage_pct >= 75.0 or daily_loss_usage_pct >= 75.0:
+        return "TRIM"
+    return "HOLD"
+
+
+def _trade_metrics(cycles: list[dict[str, Any]]) -> dict[str, float]:
+    if not cycles:
+        return {"win_rate_pct": 0.0, "max_drawdown_pct": 0.0}
+
+    closed_pnls: list[float] = []
+    open_lots: dict[tuple[str, str], list[dict[str, float]]] = {}
+    ordered_cycles = sorted(cycles, key=lambda cycle: cycle.get("created_at") or "")
+
+    for cycle in ordered_cycles:
+        status = cycle.get("status")
+        symbol = str(cycle.get("symbol", ""))
+        decision = cycle.get("decision") or {}
+
+        if status == "submitted":
+            side = decision.get("action")
+            if side not in {"buy", "sell"}:
+                continue
+            ticker = cycle.get("ticker") or {}
+            entry_price = float(ticker.get("last_price", 0.0) or 0.0)
+            risk = cycle.get("risk_check", {}).get("risk", {})
+            notional = float(risk.get("notional", 0.0) or 0.0)
+            if entry_price <= 0 or notional <= 0:
+                continue
+            qty = notional / entry_price
+            open_lots.setdefault((symbol, side), []).append({"entry_price": entry_price, "qty": qty})
+            continue
+
+        if status != "closed":
+            continue
+
+        order = cycle.get("order_result") or {}
+        close_side = order.get("closed_position_side") or decision.get("closed_position_side")
+        if close_side not in {"buy", "sell"}:
+            continue
+
+        qty = float(order.get("qty", 0.0) or 0.0)
+        if qty <= 0:
+            continue
+
+        exit_price = float(order.get("entry_price", 0.0) or (cycle.get("ticker") or {}).get("last_price", 0.0) or 0.0)
+        if exit_price <= 0:
+            continue
+
+        lots = open_lots.get((symbol, close_side), [])
+        remaining = qty
+
+        while lots and remaining > 0:
+            lot = lots[0]
+            closed_qty = min(remaining, lot["qty"])
+            pnl = (exit_price - lot["entry_price"]) * closed_qty if close_side == "buy" else (lot["entry_price"] - exit_price) * closed_qty
+            closed_pnls.append(pnl)
+            remaining -= closed_qty
+            lot["qty"] -= closed_qty
+            if lot["qty"] <= 0:
+                lots.pop(0)
+
+    if not closed_pnls:
+        return {"win_rate_pct": 0.0, "max_drawdown_pct": 0.0}
+
+    win_rate_pct = round((sum(1 for pnl in closed_pnls if pnl > 0) / len(closed_pnls)) * 100, 2)
+    max_drawdown_pct = 0.0
+    return {"win_rate_pct": win_rate_pct, "max_drawdown_pct": max_drawdown_pct}
+
+
+@app.post("/intent/evaluate")
+def evaluate_intent(payload: IntentEvaluationRequest) -> dict[str, Any]:
+    strategy_id = payload.strategy_id or get_active_strategy_id()
+
+    if strategy_id not in STRATEGIES:
+        return {
+            "status": "rejected",
+            "verdict": "REJECT",
+            "action_plan": "REJECT",
+            "strategy_id": strategy_id,
+            "market_provenance": _market_provenance(payload.symbol),
+            "message": "unknown strategy",
+        }
+
+    trade = {
+        "symbol": payload.symbol.upper(),
+        "side": payload.side,
+        "qty": float(payload.qty),
+        "entry_price": float(payload.entry_price),
+        "leverage": float(payload.leverage),
+    }
+
+    current_positions = payload.current_positions or []
+    result = risk_engine.evaluate_trade(
+        trade=trade,
+        current_positions=current_positions,
+        current_daily_pnl=float(payload.current_daily_pnl),
+    )
+
+    market_provenance = _market_provenance(payload.symbol)
+    usage = _usage_summary(current_positions, float(payload.current_daily_pnl))
+
+    if result["allowed"]:
+        verdict = "ALLOW_CAPPED" if usage["position_usage_pct"] >= 75.0 or usage["daily_loss_usage_pct"] >= 75.0 else "ALLOW"
+        action_plan = _action_plan_from_usage(usage["position_usage_pct"], usage["daily_loss_usage_pct"])
+        status = "ok"
+        message = "intent allowed by risk firewall"
+        if verdict == "ALLOW_CAPPED":
+            message = "intent allowed by risk firewall but should be trimmed to preserve buffer"
+    else:
+        verdict = "REJECT"
+        action_plan = "REJECT"
+        status = "rejected"
+        message = "intent rejected by risk firewall"
+
+    return {
+        "status": status,
+        "verdict": verdict,
+        "action_plan": action_plan,
+        "strategy_id": strategy_id,
+        "active_strategy": get_active_strategy_id(),
+        "trade": trade,
+        "risk_check": result,
+        "risk_usage": usage,
+        "market_provenance": market_provenance,
+        "message": message,
+    }
+
+
+@app.get("/risk-view")
+def risk_view(symbol: str = "AAPLUSDT") -> dict[str, Any]:
+    live_positions = positions().get("positions", [])
+    pnl_snapshot = pnl()
+    usage = _usage_summary(live_positions, float(pnl_snapshot.get("daily_pnl", 0.0) or 0.0))
+    action_plan = _action_plan_from_usage(usage["position_usage_pct"], usage["daily_loss_usage_pct"])
+    return {
+        "symbol": symbol.upper(),
+        "action_plan": action_plan,
+        "risk_usage": usage,
+        "market_provenance": _market_provenance(symbol),
+        "positions": live_positions,
+        "pnl": pnl_snapshot,
     }
 
 

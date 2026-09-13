@@ -13,6 +13,9 @@ Camp trading project for tokenized U.S. stock futures.
 - Risk checks for position size, daily loss, and leverage
 - Kill switch and full-position close via Bitget flash-close
 - Two built-in strategies with a shared decision contract
+- Built-in strategy config overrides for `position_size`, `leverage`, TP/SL, and threshold values
+- `GET /pnl` metrics for `win_rate_pct` and `max_drawdown_pct`
+- `GET /activity-log` metadata including `mode`
 - Supabase persistence for active strategy and per-process PnL sessions
 - Regression tests for execution, risk, agent-loop, strategy, and metrics behavior
 
@@ -79,6 +82,33 @@ and must not be included in `AGENT_WATCHED_SYMBOLS`.
 
 Each active strategy returns the same decision shape consumed by risk checks and
 execution:
+
+### Default strategy behavior
+
+- `momentum_breakout`
+  - compare `last_price` vs `open_price`
+  - `buy` if price rose above the open, `sell` if price fell below the open, `hold` otherwise
+  - default `size = 1.0` on active signals, `size = 0.0` on `hold`
+  - default `leverage = 1.0`
+
+- `mean_reversion`
+  - compare `last_price` vs `open_price` and compute deviation `((last_price - open_price) / open_price)`
+  - default threshold is `1%`
+  - `sell` if deviation `>= 1%`, `buy` if deviation `<= -1%`, `hold` otherwise
+  - default `size = 1.0` on active signals, `size = 0.0` on `hold`
+  - default `leverage = 1.0`
+
+### Configurable builtin strategy overrides
+
+The backend now accepts builtin strategy config overrides through the parse flow and stores them per strategy ID. Supported values are:
+
+- `position_size` / `size`
+- `leverage`
+- `take_profit_pct` / `take_profit`
+- `stop_loss_pct` / `stop_loss`
+- `threshold_pct`
+
+This means the same strategy fields Builder A may expose in a form can now be applied to prebuilt strategies as well as custom structured strategies.
 
 ```json
 {
@@ -164,10 +194,10 @@ https://priva-499h.onrender.com
 Recommended Builder A workflow:
 
 1. `GET /strategies` to fetch the available strategy catalog.
-2. `POST /strategies/parse` with natural-language text to convert a user prompt
-   into a structured strategy payload. Builder A should send `use_gemini: true`
-   when it wants the provider-backed parser path; the backend handles the Gemini
-   API key on the server side.
+2. `POST /strategies/parse` with either natural-language text or a structured
+   strategy payload. Builder A should send `use_gemini: true` when it wants the
+   provider-backed parser path; the backend handles the Gemini API key on the
+   server side.
 3. `GET /risk-settings` and `POST /risk-settings` to expose or update allowed
    symbols and risk limits.
 4. `POST /risk-check` before submitting an order to validate a trade against the
@@ -183,9 +213,33 @@ Important Builder A guidance:
 - The backend currently supports `use_gemini`, while older `use_qwen` / `use_grok`
   payloads are still tolerated for compatibility.
 - The `/strategies/parse` endpoint accepts either a `text` payload or a
-  `strategy` payload. It does not read raw form field names directly, so Builder
-  A should convert the form into the JSON shape expected by the backend before
-  calling the endpoint.
+  `strategy` payload.
+- The currently verified structured builtin strategy payload shape includes
+  `{"strategy": {"target_strategy": "mean_reversion", "position_size": 3.5, "leverage": 2.0, "take_profit_pct": 2.5, "stop_loss_pct": 1.25}}`.
+  Builder A can also send `name` and `description` at the top level to preserve
+  strategy metadata in the parse response.
+
+## Risk settings defaults and current logic
+
+The risk engine starts with the following defaults:
+
+- `max_position_size = 25000`
+- `max_daily_loss = 1500`
+- `max_leverage = 5.0`
+- `enabled = True`
+- `allowed_symbols = None` unless explicitly configured
+
+`POST /risk-settings` updates these values at runtime, and `GET /risk-settings`
+returns the current live configuration. The engine enforces the same checks that
+were described earlier: symbol allowlist, max position size, max daily loss,
+max leverage, and aggregate same-symbol position size.
+
+## Metrics already implemented
+
+Yes — the earlier request for win rate and max drawdown was completed.
+
+- `GET /pnl` now returns `win_rate_pct` and `max_drawdown_pct`
+- `GET /activity-log` now includes `mode` metadata per entry
 
 ## Main files
 
@@ -216,8 +270,11 @@ Important Builder A guidance:
 - Supabase persistence for the active strategy
 - Natural-language strategy parsing with strict validation
 - Gemini-backed strategy parsing via the backend provider path
+- Builtin strategy config overrides for position size, leverage, TP/SL, and threshold values
 - Configurable risk/settings endpoints and allowed-symbol validation
 - `POST /strategies/{id}/backtest` with shared metrics output
+- `GET /pnl` returning `win_rate_pct` and `max_drawdown_pct`
+- `GET /activity-log` including `mode` metadata
 - `53` automated tests passing locally
 
 ## Known limitations
