@@ -51,6 +51,70 @@ The backend has already been verified for:
 - `POST /risk-check`
 - `POST /paper-trade`
 - `POST /strategies/{strategy_id}/backtest`
+- `GET /pnl` (including `win_rate_pct` and `max_drawdown_pct`)
+- `GET /activity-log` (including `mode` metadata)
+
+## 5.1 Risk settings defaults and current logic
+
+The backend risk engine currently starts with these hardcoded defaults in `RiskEngine.__init__()`:
+
+- `max_position_size = 25000`
+- `max_daily_loss = 1500`
+- `max_leverage = 5.0`
+- `enabled = True`
+- `allowed_symbols = None` (unrestricted unless explicitly set)
+
+The live enforcement logic in `evaluate_trade()` is:
+
+- compute `notional = qty * entry_price`
+- reject if the symbol is not in `allowed_symbols` when the allowlist is active
+- reject if `notional > max_position_size`
+- reject if `current_daily_pnl <= -max_daily_loss`
+- reject if `leverage > max_leverage`
+- reject if adding the proposed notional to any same-symbol existing position would exceed `max_position_size`
+
+Builder A should treat `GET /risk-settings` and `POST /risk-settings` as the source of truth for current live settings and use them in the UI when exposing risk controls.
+
+## 5.2 Strategy defaults and current logic
+
+The backend currently exposes two built-in strategies:
+
+### Momentum Breakout
+
+- Trigger: compare `last_price` versus `open_price`
+- Decision rules:
+  - `buy` if `last_price > open_price`
+  - `sell` if `last_price < open_price`
+  - `hold` if approximately equal
+- Default outputs:
+  - `size = 1.0` when a trade is active
+  - `size = 0.0` when `hold`
+  - `leverage = 1.0`
+  - `signal_strength` is normalized to a value in `[0, 1]`
+
+### Mean Reversion
+
+- Trigger: compare `last_price` to `open_price` and compute deviation `((last_price - open_price) / open_price)`
+- Default threshold: `1%`
+- Decision rules:
+  - `sell` if deviation `>= 1%`
+  - `buy` if deviation `<= -1%`
+  - `hold` otherwise
+- Default outputs:
+  - `size = 1.0` when a trade is active
+  - `size = 0.0` when `hold`
+  - `leverage = 1.0`
+  - `signal_strength` is the absolute normalized deviation, capped at `1.0`
+
+The backend now also supports per-strategy configuration overrides for built-ins via the same strategy-config contract used by custom strategies, including:
+
+- `position_size` / `size`
+- `leverage`
+- `take_profit_pct` / `take_profit`
+- `stop_loss_pct` / `stop_loss`
+- `threshold_pct`
+
+These override values are accepted in the parse path and applied to the chosen builtin strategy before the strategy is returned or used in a backtest.
 
 ## 6. Current strategy and execution contract
 
@@ -69,6 +133,24 @@ The backend has already been verified for:
 ### Parser output
 
 The parser can return either a builtin strategy match or a structured strategy payload, and it performs strict validation before accepting input.
+
+### Supported parse payloads
+
+The backend currently supports both of these request modes:
+
+1. Natural-language text:
+   - `{"text": "..."}`
+   - optional provider path: `{"text": "...", "use_gemini": true}`
+2. Structured strategy payload:
+   - `{"strategy": {"action": "buy|sell", "comparison": "open|close", "threshold_pct": 1.0}}`
+   - additional supported config fields for built-ins include `position_size`, `size`, `leverage`, `take_profit_pct`, `take_profit`, `stop_loss_pct`, and `stop_loss`
+
+### Metrics already implemented
+
+Yes — the `win rate` and `max drawdown` work was added earlier and is live in the backend:
+
+- `GET /pnl` now returns `win_rate_pct` and `max_drawdown_pct`
+- `GET /activity-log` now includes `mode` metadata for each entry
 
 ## 7. Builder A checklist
 
