@@ -66,32 +66,49 @@ export default function TradingLimitsForm() {
         Changes apply the next time Priva checks a proposed trade.
       </p>
 
-      <div className="form-row-split">
-        <div className="form-field">
-          <label className="form-label">Max position size (%)</label>
-          <input
-            className="form-input"
-            type="number"
-            value={maxPositionSize}
-            onChange={(e) => setMaxPositionSize(e.target.value)}
-          />
+            <div className="slider-row">
+        <div className="slider-label-row">
+          <label className="form-label">Max position size</label>
+          <span className="slider-value">{maxPositionSize}%</span>
         </div>
-        <div className="form-field">
-          <label className="form-label">Max daily loss (%)</label>
-          <input
-            className="form-input"
-            type="number"
-            value={maxDailyLoss}
-            onChange={(e) => setMaxDailyLoss(e.target.value)}
-          />
-        </div>
+        <input
+          className="form-slider"
+          type="range"
+          min="1"
+          max="100"
+          step="1"
+          value={maxPositionSize}
+          onChange={(e) => setMaxPositionSize(e.target.value)}
+        />
       </div>
 
-      <div className="form-field">
-        <label className="form-label">Max leverage (x)</label>
+      <div className="slider-row">
+        <div className="slider-label-row">
+          <label className="form-label">Max daily loss</label>
+          <span className="slider-value">{maxDailyLoss}%</span>
+        </div>
         <input
-          className="form-input"
-          type="number"
+          className="form-slider"
+          type="range"
+          min="1"
+          max="50"
+          step="1"
+          value={maxDailyLoss}
+          onChange={(e) => setMaxDailyLoss(e.target.value)}
+        />
+      </div>
+
+      <div className="slider-row">
+        <div className="slider-label-row">
+          <label className="form-label">Max leverage</label>
+          <span className="slider-value">{maxLeverage}x</span>
+        </div>
+        <input
+          className="form-slider"
+          type="range"
+          min="1"
+          max="10"
+          step="0.5"
           value={maxLeverage}
           onChange={(e) => setMaxLeverage(e.target.value)}
         />

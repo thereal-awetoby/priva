@@ -466,3 +466,54 @@ table.positions tr:last-child td{ border-bottom:none; }
   font-size: 11.5px;
   margin-top: 12px;
 }
+
+/* ---------- Range sliders ---------- */
+
+.slider-row{ margin-bottom: 18px; }
+.slider-row:last-child{ margin-bottom: 0; }
+
+.slider-label-row{
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+.slider-label-row .form-label{ margin-bottom: 0; }
+.slider-value{
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.form-slider{
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--rule);
+  outline: none;
+  cursor: pointer;
+}
+.form-slider::-webkit-slider-thumb{
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+}
+.form-slider::-moz-range-thumb{
+  width: 14px;
+  height: 14px;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+  border-radius: 0;
+}
+.form-slider::-moz-range-track{
+  height: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--rule);
+}
