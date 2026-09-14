@@ -19,6 +19,7 @@ class BitgetPaperExecutionClient:
     FUTURES_LEVERAGE_PATH = "/api/v2/mix/account/set-leverage"
     FUTURES_FLASH_CLOSE_PATH = "/api/v2/mix/order/close-positions"
     SPOT_ORDER_PATH = "/api/v2/spot/trade/place-order"
+    SPOT_ASSETS_PATH = "/api/v2/spot/account/assets"
 
     @staticmethod
     def _format_size(value: float) -> str:
@@ -67,6 +68,16 @@ class BitgetPaperExecutionClient:
     @property
     def configured(self) -> bool:
         return bool(self.api_key and self.api_secret and self.passphrase)
+
+    def configure_credentials(self, api_key: str, api_secret: str, passphrase: str) -> None:
+        self.api_key = api_key.strip()
+        self.api_secret = api_secret.strip()
+        self.passphrase = passphrase.strip()
+
+    def clear_credentials(self) -> None:
+        self.api_key = ""
+        self.api_secret = ""
+        self.passphrase = ""
 
     def set_futures_leverage(self, trade: dict[str, Any]) -> dict[str, Any]:
         leverage = float(trade.get("leverage", 1))
@@ -328,6 +339,35 @@ class BitgetPaperExecutionClient:
             return {"status": "rejected", "message": str(exc), "positions": []}
         except requests.RequestException as exc:
             return {"status": "execution_error", "message": str(exc), "positions": []}
+
+    def fetch_spot_assets(self) -> dict[str, Any]:
+        if not self.configured:
+            return {"status": "not_configured", "assets": []}
+
+        path = self.SPOT_ASSETS_PATH
+        timestamp = str(int(time.time() * 1000))
+        prehash = timestamp + "GET" + path
+        signature = base64.b64encode(
+            hmac.new(self.api_secret.encode(), prehash.encode(), hashlib.sha256).digest()
+        ).decode()
+        headers = {
+            "ACCESS-KEY": self.api_key,
+            "ACCESS-SIGN": signature,
+            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-PASSPHRASE": self.passphrase,
+            "paptrading": "1",
+        }
+        try:
+            response = self.session.get(f"{self.BASE_URL}{path}", headers=headers, timeout=15)
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in (None, "00000", 0, "0"):
+                return {"status": "rejected", "message": payload.get("msg", "Spot assets query rejected"), "assets": []}
+            return {"status": "ok", "assets": payload.get("data") or []}
+        except requests.HTTPError as exc:
+            return {"status": "rejected", "message": str(exc), "assets": []}
+        except (requests.RequestException, ValueError) as exc:
+            return {"status": "execution_error", "message": str(exc), "assets": []}
 
     def fetch_account_mode(self, symbol: str = "AAPLUSDT") -> dict[str, Any]:
         """Return the Bitget futures position mode without exposing account data."""

@@ -1,5 +1,6 @@
 from app.main import parse_strategy as parse_strategy_endpoint
-from app.strategy import STRATEGY_CATALOG, build_signal_from_ticker, get_active_strategy_id, list_strategy_catalog, parse_natural_language_strategy, parse_structured_strategy, register_custom_strategy, activate_strategy
+from app import main
+from app.strategy import STRATEGY_CATALOG, build_signal_from_ticker, configure_symbol_strategies, get_active_strategy_id, list_strategy_catalog, parse_natural_language_strategy, parse_structured_strategy, register_custom_strategy, activate_strategy
 
 import pytest
 
@@ -130,6 +131,65 @@ def test_strategy_catalog_exposes_prebuilt_strategy_definitions():
         assert definition["id"] == strategy_id
         assert definition["type"] == "prebuilt"
         assert definition["description"]
+
+
+def test_builtin_strategies_adapt_leverage_to_signal_strength():
+    activate_strategy("momentum_breakout")
+
+    weak = build_signal_from_ticker({"status": "live", "last_price": 101.0, "open_price": 100.0})
+    strong = build_signal_from_ticker({"status": "live", "last_price": 180.0, "open_price": 100.0})
+
+    assert weak["leverage"] == 1.0
+    assert strong["leverage"] == 3.0
+
+    activate_strategy("mean_reversion")
+    threshold_signal = build_signal_from_ticker({"status": "live", "last_price": 101.0, "open_price": 100.0})
+    strong_reversion = build_signal_from_ticker({"status": "live", "last_price": 130.0, "open_price": 100.0})
+
+    assert threshold_signal["leverage"] == 1.0
+    assert strong_reversion["leverage"] == 3.0
+    activate_strategy("momentum_breakout")
+
+
+def test_symbol_strategy_mapping_selects_strategy_per_stock():
+    configure_symbol_strategies({"AAPLUSDT": "momentum_breakout", "TSLAUSDT": "mean_reversion"})
+    try:
+        aapl = build_signal_from_ticker({"symbol": "AAPLUSDT", "status": "live", "last_price": 102.0, "open_price": 100.0})
+        tsla = build_signal_from_ticker({"symbol": "TSLAUSDT", "status": "live", "last_price": 102.0, "open_price": 100.0})
+
+        assert aapl["action"] == "buy"
+        assert tsla["action"] == "sell"
+    finally:
+        configure_symbol_strategies({})
+
+
+def test_strategy_activation_applies_selected_symbols(monkeypatch):
+    monkeypatch.setattr(main.cycle_logger, "save_active_strategy", lambda strategy_id: {"status": "skipped"})
+    main.agent_loop.configure_watched_symbols(["AAPLUSDT", "TSLAUSDT"])
+
+    result = main.activate_strategy(
+        "mean_reversion",
+        main.StrategyActivationRequest(symbols=["tslausdt"]),
+    )
+
+    assert result["status"] == "activated"
+    assert result["symbols"] == ["TSLAUSDT"]
+    assert main.agent_loop.WATCHED_SYMBOLS == ["TSLAUSDT"]
+    activate_strategy("momentum_breakout")
+
+
+def test_strategy_activation_rejects_unsupported_symbols_without_mutation(monkeypatch):
+    main.agent_loop.configure_watched_symbols(["AAPLUSDT"])
+    activate_strategy("momentum_breakout")
+
+    result = main.activate_strategy(
+        "mean_reversion",
+        main.StrategyActivationRequest(symbols=["MSFTUSDT"]),
+    )
+
+    assert result["status"] == "rejected"
+    assert get_active_strategy_id() == "momentum_breakout"
+    assert main.agent_loop.WATCHED_SYMBOLS == ["AAPLUSDT"]
 
 
 def test_parse_strategy_endpoint_registers_structured_strategy_for_activation():

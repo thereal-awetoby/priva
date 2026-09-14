@@ -17,6 +17,8 @@ Camp trading project for tokenized U.S. stock futures.
 - `GET /pnl` metrics for `win_rate_pct` and `max_drawdown_pct`
 - `GET /activity-log` metadata including `mode`
 - Supabase persistence for active strategy and per-process PnL sessions
+- Supabase bearer-token verification and encrypted per-user Bitget credential vault
+- Authenticated `/auth/session`, connection, and manual trade routes
 - Regression tests for execution, risk, agent-loop, strategy, and metrics behavior
 
 ## Run locally
@@ -53,9 +55,38 @@ Bitget's paper environment. Configure these secrets in Render's environment sett
 - `BITGET_API_PASSPHRASE`
 - `BITGET_POSITION_MODE` (use `hedge` for the configured futures account)
 - `AGENT_WATCHED_SYMBOLS` (use `AAPLUSDT,TSLAUSDT`)
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `PRIVA_AUTH_REQUIRED=true` to require Supabase sessions
+- `PRIVA_CREDENTIAL_ENCRYPTION_KEY` (Fernet key generated locally)
 
 The client always sends Bitget's `paptrading: 1` header. Without all three
 secrets, the route returns `not_configured` and does not call the exchange.
+
+For the single-workspace demo, users can connect credentials through
+`POST /connection/bitget`. The backend verifies them against Bitget before
+using them for the authenticated user's execution client. Credentials are
+never returned to the frontend or persisted in plaintext. `POST /connection/bitget/disconnect`
+clears the runtime credentials. The backend now provides Supabase
+authentication and an encrypted per-user runtime vault when the variables
+above are configured.
+
+Authenticated requests must include `Authorization: Bearer <Supabase access token>`.
+The connection route verifies credentials with Bitget before encrypting them in
+the per-user runtime vault. Secrets are never returned to the client.
+
+User-scoped autonomous controls are available through:
+
+```text
+GET  /user/agent-loop
+GET  /user/agent-settings
+POST /user/agent-settings
+```
+
+These settings persist the selected strategy, per-symbol strategy assignments,
+symbols, market, TP/SL rules, opposite-signal exits, and risk limits. The
+authenticated worker restores them after a backend restart.
 
 Example request:
 
@@ -89,14 +120,19 @@ execution:
   - compare `last_price` vs `open_price`
   - `buy` if price rose above the open, `sell` if price fell below the open, `hold` otherwise
   - default `size = 1.0` on active signals, `size = 0.0` on `hold`
-  - default `leverage = 1.0`
+   - adaptive futures leverage from `1.0x` to `3.0x` based on signal strength
 
 - `mean_reversion`
   - compare `last_price` vs `open_price` and compute deviation `((last_price - open_price) / open_price)`
   - default threshold is `1%`
   - `sell` if deviation `>= 1%`, `buy` if deviation `<= -1%`, `hold` otherwise
   - default `size = 1.0` on active signals, `size = 0.0` on `hold`
-  - default `leverage = 1.0`
+   - adaptive futures leverage from `1.0x` to `3.0x` based on distance beyond the threshold
+
+Built-in strategies choose leverage per trade using bounded confidence tiers:
+weak signals use `1x`, medium signals use `2x`, and strong signals use `3x`.
+Explicit strategy leverage overrides still take precedence, and the risk engine
+rejects any trade above the configured `max_leverage`.
 
 ### Configurable builtin strategy overrides
 
@@ -133,6 +169,34 @@ curl.exe -X POST \
 	| python -m json.tool
 ```
 
+The activation route also accepts an optional symbol selection. This updates
+the running agent loop for the current backend process:
+
+```bash
+curl.exe -X POST \
+   "https://YOUR-SERVICE.onrender.com/strategies/mean_reversion/activate" \
+   -H "Content-Type: application/json" \
+   -d '{"symbols":["AAPLUSDT","TSLAUSDT"]}' \
+   | python -m json.tool
+```
+
+Only `AAPLUSDT` and `TSLAUSDT` are accepted. The selection is process-local
+and resets to `AGENT_WATCHED_SYMBOLS` after a backend restart.
+
+Different strategies can be assigned to different symbols in the same request:
+
+```json
+{
+   "symbols": ["AAPLUSDT", "TSLAUSDT"],
+   "strategy_by_symbol": {
+      "AAPLUSDT": "momentum_breakout",
+      "TSLAUSDT": "mean_reversion"
+   }
+}
+```
+
+Symbols without an assignment use the globally activated strategy.
+
 The selected strategy is persisted in Supabase and restored at startup. If
 Supabase is not configured, activation remains process-local.
 
@@ -157,6 +221,12 @@ create index if not exists agent_cycles_session_id_idx
 	on public.agent_cycles (session_id);
 ```
 
+For multi-user credential persistence and user-scoped cycle logs, also run
+[`supabase_multi_user.sql`](supabase_multi_user.sql) once in the Supabase SQL
+Editor. It creates the encrypted-credential and user-settings tables and adds
+`user_id` to `agent_cycles`. The backend uses the service-role key server-side;
+encrypted credentials must never be exposed through client policies.
+
 The backend uses the singleton row `id = 'global'`. It loads that row at
 startup and upserts it when `/strategies/{strategy_id}/activate` succeeds.
 Each backend process also gets a `session_id`; realized PnL is calculated from
@@ -168,6 +238,8 @@ positions.
 ```text
 GET  /health
 GET  /strategies
+GET  /agent-settings
+POST /agent-settings
 GET  /risk-settings
 POST /risk-settings
 POST /strategies/parse
@@ -177,6 +249,26 @@ POST /paper-trade
 GET  /kill-switch
 POST /kill-switch
 ```
+
+Autonomous execution defaults to USDT futures and can be switched at runtime
+with `POST /agent-settings` using `{"market":"futures"}` or
+`{"market":"spot"}`. The setting is process-local and resets to
+`AGENT_MARKET_TYPE` (or futures) after restart.
+
+The same endpoint controls autonomous exits. It defaults to a `5%` take-profit,
+a `2%` stop-loss, and closing when the next signal opposes the open position:
+
+```json
+{
+   "market": "futures",
+   "take_profit_pct": 5,
+   "stop_loss_pct": 2,
+   "close_on_signal_violation": true
+}
+```
+
+The agent evaluates these rules before adding to or opening a position. Futures
+positions use Bitget flash-close; spot positions use an opposite market order.
 
 For a full close, send `position_side: "buy"` for a long or
 `position_side: "sell"` for a short. Stop the agent before manually closing a
@@ -275,7 +367,7 @@ Yes — the earlier request for win rate and max drawdown was completed.
 - `POST /strategies/{id}/backtest` with shared metrics output
 - `GET /pnl` returning `win_rate_pct` and `max_drawdown_pct`
 - `GET /activity-log` including `mode` metadata
-- `53` automated tests passing locally
+- `77` automated tests passing locally
 
 ## Known limitations
 
@@ -288,6 +380,13 @@ Yes — the earlier request for win rate and max drawdown was completed.
 	created before `session_id` was added are not used for the current session.
 - Strategy persistence requires the Supabase migration and environment
 	variables documented above.
+- Credentials are encrypted in memory and persisted to Supabase when the
+   multi-user migration and service-role configuration are present; without
+   those, credentials are lost when Render restarts.
+- Authenticated users receive separate runtime workers, Bitget clients, risk
+   engines, settings, and user-filtered cycle logs. Remaining production work
+   includes frontend adoption of the authenticated endpoints and user-scoping
+   all legacy read-only dashboard routes.
 
 ## Remaining work
 

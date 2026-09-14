@@ -16,6 +16,37 @@ Priva is an autonomous AI trading agent for tokenized U.S. stocks. It trades bot
 - **Bitget:** Agent Hub + MCP, Agentic Account, `--paper-trading` mode (zero real funds needed)
 - Everything is free-tier — no cost to build or demo
 
+### Current authentication and account-connection state
+
+The backend supports Supabase bearer-token verification and an encrypted
+per-user runtime vault for Bitget demo credentials. Authenticated users can
+connect, verify, inspect, and disconnect their own Bitget account through:
+
+- `GET /auth/session`
+- `POST /connection/bitget`
+- `GET /debug/bitget-account`
+- `POST /connection/bitget/disconnect`
+- `POST /paper-trade`
+- `GET /user/agent-loop`
+- `GET /user/agent-settings`
+- `POST /user/agent-settings`
+
+The backend reads `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
+`PRIVA_AUTH_REQUIRED`, and `PRIVA_CREDENTIAL_ENCRYPTION_KEY`. The frontend
+must send the Supabase access token as `Authorization: Bearer ...` and must
+never persist Bitget secrets.
+
+Authenticated users now receive separate runtime workers, Bitget clients, risk
+engines, persisted strategy/risk/exit settings, and user-filtered cycle logs.
+Credentials require the multi-user migration and service-role configuration to
+restore after restart. The frontend still needs to adopt the authenticated
+user-scoped endpoints before multi-user dashboard isolation is production-ready.
+
+The multi-user Supabase migration is in `backend/supabase_multi_user.sql` and
+must be run before enabling durable credential restoration. It adds encrypted
+credential storage, user agent settings, and `user_id` filtering for
+`agent_cycles`.
+
 ## 3. Builder B's System, End to End
 
 ```

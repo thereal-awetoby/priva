@@ -111,6 +111,10 @@ class LivePositionsExecutionClient(FakeExecutionClient):
     def fetch_futures_positions(self):
         return {"status": "ok", "positions": self.positions}
 
+    def flash_close_position(self, symbol, position_side):
+        self.closed = {"symbol": symbol, "position_side": position_side}
+        return {"status": "submitted", "order_id": "close-1"}
+
 
 def test_agent_cycle_runs_signal_risk_intent_and_execution():
     execution = FakeExecutionClient()
@@ -156,6 +160,22 @@ def test_agent_cycle_uses_strategy_decision_size_and_leverage(monkeypatch):
     assert execution.trades[0]["leverage"] == 2.0
 
 
+def test_agent_cycle_uses_selected_spot_market():
+    execution = FakeExecutionClient()
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+            market_type="spot",
+        )
+    )
+
+    assert result["status"] == "submitted"
+    assert execution.trades[0]["market"] == "spot"
+
+
 def test_agent_cycle_does_not_execute_hold_signal():
     class FlatMarketService:
         def fetch_spot_ticker(self, symbol):
@@ -192,7 +212,7 @@ def test_agent_cycle_uses_empty_live_positions_over_stale_logger():
 
 
 def test_agent_cycle_skips_when_live_position_exists():
-    execution = LivePositionsExecutionClient([{"symbol": "AAPLUSDT", "total": "1"}])
+    execution = LivePositionsExecutionClient([{"symbol": "AAPLUSDT", "total": "1", "holdSide": "long", "openPriceAvg": "111", "unrealizedPL": "-1"}])
     result = asyncio.run(
         run_cycle(
             "AAPLUSDT",
@@ -205,6 +225,66 @@ def test_agent_cycle_skips_when_live_position_exists():
 
     assert result["status"] == "skipped_existing_position"
     assert execution.trades == []
+
+
+def test_agent_cycle_adds_to_profitable_same_direction_position():
+    execution = LivePositionsExecutionClient(
+        [
+            {
+                "symbol": "AAPLUSDT",
+                "total": "1",
+                "holdSide": "long",
+                "openPriceAvg": "108",
+                "unrealizedPL": "1",
+            }
+        ]
+    )
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(max_position_size=250),
+            execution_client=execution,
+        )
+    )
+
+    assert result["status"] == "submitted"
+    assert len(execution.trades) == 1
+    assert result["risk_check"]["risk"]["notional"] == 110.0
+
+
+def test_agent_cycle_closes_position_at_take_profit(monkeypatch):
+    monkeypatch.setattr("app.agent_loop.TAKE_PROFIT_PCT", 5.0)
+    execution = LivePositionsExecutionClient(
+        [{"symbol": "AAPLUSDT", "total": "1", "holdSide": "long", "openPriceAvg": "100", "unrealizedPL": "6"}]
+    )
+
+    result = asyncio.run(
+        run_cycle("AAPLUSDT", market_service=FakeMarketService(), risk_engine=RiskEngine(), execution_client=execution)
+    )
+
+    assert result["status"] == "closed"
+    assert result["exit_reason"] == "take_profit"
+    assert execution.closed["position_side"] == "buy"
+
+
+def test_agent_cycle_closes_position_on_opposite_signal(monkeypatch):
+    monkeypatch.setattr("app.agent_loop.CLOSE_ON_SIGNAL_VIOLATION", True)
+    monkeypatch.setattr("app.agent_loop.TAKE_PROFIT_PCT", 50.0)
+    monkeypatch.setattr(
+        "app.agent_loop.build_signal_from_ticker",
+        lambda ticker: {"action": "sell", "size": 1.0, "leverage": 1.0, "signal_strength": 0.5, "reason": "reversal"},
+    )
+    execution = LivePositionsExecutionClient(
+        [{"symbol": "AAPLUSDT", "total": "1", "holdSide": "long", "openPriceAvg": "100", "unrealizedPL": "1"}]
+    )
+
+    result = asyncio.run(
+        run_cycle("AAPLUSDT", market_service=FakeMarketService(), risk_engine=RiskEngine(), execution_client=execution)
+    )
+
+    assert result["status"] == "closed"
+    assert result["exit_reason"] == "signal_violation"
 
 
 def test_calculate_unrealized_pnl_for_long_and_short_cycles():

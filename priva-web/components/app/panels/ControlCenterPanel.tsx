@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8001";
 
 const autonomousLog = [
   { time: "14:02", text: "Encrypted intent submitted — NVDA long 2x" },
@@ -18,7 +20,50 @@ const strategyLog = [
 
 export default function ControlCenterPanel() {
   const [mode, setMode] = useState<"autonomous" | "strategy">("autonomous");
+  const [market, setMarket] = useState<"futures" | "spot">("futures");
+  const [takeProfit, setTakeProfit] = useState("5");
+  const [stopLoss, setStopLoss] = useState("2");
+  const [closeOnViolation, setCloseOnViolation] = useState(true);
+  const [savingMarket, setSavingMarket] = useState(false);
   const log = mode === "autonomous" ? autonomousLog : strategyLog;
+
+  useEffect(() => {
+    fetch(`${API_BASE}/agent-settings`)
+      .then((response) => response.json() as Promise<{ market?: "futures" | "spot" }>)
+      .then((payload) => {
+        if (payload.market === "spot" || payload.market === "futures") {
+          setMarket(payload.market);
+        }
+        if (payload.take_profit_pct != null) setTakeProfit(String(payload.take_profit_pct));
+        if (payload.stop_loss_pct != null) setStopLoss(String(payload.stop_loss_pct));
+        if (payload.close_on_signal_violation != null) setCloseOnViolation(payload.close_on_signal_violation);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const updateMarket = async (nextMarket: "futures" | "spot") => {
+    setMarket(nextMarket);
+    setSavingMarket(true);
+    try {
+      const response = await fetch(`${API_BASE}/agent-settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          market: nextMarket,
+          take_profit_pct: Number(takeProfit),
+          stop_loss_pct: Number(stopLoss),
+          close_on_signal_violation: closeOnViolation,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error("Unable to update market");
+      }
+    } catch {
+      setMarket(nextMarket === "futures" ? "spot" : "futures");
+    } finally {
+      setSavingMarket(false);
+    }
+  };
 
   return (
     <div>
@@ -31,6 +76,38 @@ export default function ControlCenterPanel() {
           <a className="btn" href="#">Pause</a>
           <a className="btn btn-danger" href="#">Kill switch</a>
         </div>
+      </div>
+
+      <div className="config-panel" style={{ marginBottom: 24 }}>
+        <div className="config-head">
+          <h3 className="config-title">Autonomous execution market</h3>
+        </div>
+        <p className="config-desc">Choose whether autonomous orders use Bitget spot or USDT futures.</p>
+        <div className="mode-switch" aria-label="Autonomous execution market">
+          <button className={market === "futures" ? "active" : ""} onClick={() => updateMarket("futures")} disabled={savingMarket}>
+            Futures
+          </button>
+          <button className={market === "spot" ? "active" : ""} onClick={() => updateMarket("spot")} disabled={savingMarket}>
+            Spot
+          </button>
+        </div>
+        <div className="config-rows" style={{ marginTop: 16 }}>
+          <label className="config-row">
+            <span className="config-key">Take profit (%)</span>
+            <input className="activity-search" type="number" min="0.1" step="0.1" value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} />
+          </label>
+          <label className="config-row">
+            <span className="config-key">Stop loss (%)</span>
+            <input className="activity-search" type="number" min="0.1" step="0.1" value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} />
+          </label>
+          <label className="config-row">
+            <span className="config-key">Close on opposite signal</span>
+            <input type="checkbox" checked={closeOnViolation} onChange={(event) => setCloseOnViolation(event.target.checked)} />
+          </label>
+        </div>
+        <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={() => updateMarket(market)} disabled={savingMarket}>
+          {savingMarket ? "Saving…" : "Save autonomous rules"}
+        </button>
       </div>
 
       <div className="perf-row">

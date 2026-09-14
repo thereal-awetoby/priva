@@ -19,6 +19,22 @@ Use these endpoints from Builder A:
 - `POST /risk-check` — validate a proposed trade before submitting it
 - `POST /paper-trade` — submit a trade to the Bitget paper environment
 - `POST /strategies/{strategy_id}/backtest` — run a backtest and get metrics
+- `GET /auth/session` — verify the signed-in Supabase user
+- `POST /connection/bitget` — verify and connect the user's Bitget demo credentials
+- `POST /connection/bitget/disconnect` — clear the user's connected credentials
+- `GET /user/agent-loop` — authenticated worker status
+- `GET /user/agent-settings` — load that user's persisted settings
+- `POST /user/agent-settings` — save that user's strategy, risk, market, and exit settings
+
+Strategy activation accepts an optional body such as
+`{"symbols":["AAPLUSDT","TSLAUSDT"]}`. The backend applies this selection to
+the running agent loop; only those two paper symbols are supported.
+
+User-account requests must include:
+
+```text
+Authorization: Bearer <Supabase access token>
+```
 
 ## 3. Recommended Builder A flow
 
@@ -32,7 +48,10 @@ Use these endpoints from Builder A:
 
 ## 4. Important Builder A rules
 
-- Do not collect or store provider API keys in the browser.
+- Do not collect or store LLM/provider API keys in the browser.
+- Bitget demo credentials may be collected in the connection form only to send
+  them over HTTPS to `POST /connection/bitget`; never store them in browser
+  storage or return them in UI state.
 - All provider-backed parsing is handled server-side by the backend.
 - The backend currently supports `use_gemini`; older `use_qwen` and `use_grok` payloads are tolerated for compatibility but should not be used as the target path.
 - Supported Bitget paper symbols are currently `AAPLUSDT` and `TSLAUSDT`.
@@ -53,6 +72,8 @@ The backend has already been verified for:
 - `POST /strategies/{strategy_id}/backtest`
 - `GET /pnl` (including `win_rate_pct` and `max_drawdown_pct`)
 - `GET /activity-log` (including `mode` metadata)
+- `GET /auth/session` (with a valid Supabase access token)
+- `POST /connection/bitget` (credentials verified without returning secrets)
 
 ## 5.1 Risk settings defaults and current logic
 
@@ -169,6 +190,11 @@ Yes — the `win rate` and `max drawdown` work was added earlier and is live in 
 - The configured Bitget paper account supports only `AAPLUSDT` and `TSLAUSDT`.
 - `MSFTUSDT` should not be used in the current paper environment.
 - The backend handles provider secrets server-side; Builder A should not expose them.
+- The current credential vault is process-memory backed, so a Render restart
+  requires the Supabase migration and service-role configuration for restoration.
+- Authenticated users receive separate runtime workers, Bitget clients, risk
+  engines, persisted settings, and cycle logs. The frontend must use the
+  authenticated user-scoped endpoints before multi-user dashboard isolation is complete.
 
 ## 9. Next step after this handoff
 

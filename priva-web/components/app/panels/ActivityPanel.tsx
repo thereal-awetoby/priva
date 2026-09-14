@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 
 type EventItem = {
   id: string;
@@ -10,7 +10,21 @@ type EventItem = {
   time: string;
   value: string;
   valueClass?: "up" | "down" | "";
+  openedAt?: string;
 };
+
+type ActivityEntry = {
+  id?: string;
+  type?: string;
+  symbol?: string;
+  action?: string;
+  status?: string;
+  mode?: string;
+  timestamp?: string | null;
+  opened_at?: string | null;
+};
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8001";
 
 const events: EventItem[] = [
   {
@@ -104,9 +118,42 @@ const filters: { id: "all" | EventItem["tag"]; label: string }[] = [
 export default function ActivityPanel() {
   const [activeFilter, setActiveFilter] = useState<"all" | EventItem["tag"]>("all");
   const [search, setSearch] = useState("");
+  const [activityEvents, setActivityEvents] = useState<EventItem[]>(events);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/activity-log`)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("Unable to load activity");
+        }
+        return response.json() as Promise<{ entries?: ActivityEntry[] }>;
+      })
+      .then((payload) => {
+        const liveEvents = (payload.entries ?? []).map((entry, index): EventItem => {
+          const isTrade = entry.type === "trade";
+          const symbol = entry.symbol ?? "Unknown symbol";
+          const action = entry.action ?? entry.type ?? "event";
+          const timestamp = entry.timestamp ?? undefined;
+          return {
+            id: entry.id ?? `activity-${index}`,
+            title: isTrade ? `${action === "buy" ? "Opened" : action} ${symbol}` : `${entry.type ?? "System"} ${symbol}`,
+            tag: isTrade ? "trade" : entry.status === "rejected" ? "blocked" : "system",
+            description: `${entry.mode ?? "autonomous"} mode · ${entry.status ?? "logged"}`,
+            time: timestamp ? new Date(timestamp).toLocaleString() : "Time unavailable",
+            value: entry.status ?? "Logged",
+            valueClass: entry.status === "rejected" ? "down" : "",
+            openedAt: entry.opened_at ?? undefined,
+          };
+        });
+        if (liveEvents.length > 0) {
+          setActivityEvents(liveEvents);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
 
   const filteredEvents = useMemo(() => {
-    return events.filter((e) => {
+    return activityEvents.filter((e) => {
       const matchesFilter = activeFilter === "all" || e.tag === activeFilter;
       const matchesSearch =
         search.trim() === "" ||
@@ -114,7 +161,7 @@ export default function ActivityPanel() {
         e.description.toLowerCase().includes(search.toLowerCase());
       return matchesFilter && matchesSearch;
     });
-  }, [activeFilter, search]);
+  }, [activeFilter, search, activityEvents]);
 
   return (
     <div>
@@ -162,6 +209,7 @@ export default function ActivityPanel() {
                   <span className="event-tag">{e.tag}</span>
                 </div>
                 <p>{e.description}</p>
+                {e.openedAt ? <p>Opened at {new Date(e.openedAt).toLocaleString()}</p> : null}
               </div>
               <div className="event-meta">
                 <div className="event-time">{e.time}</div>

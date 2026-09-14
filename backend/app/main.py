@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Literal
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -19,6 +19,8 @@ from app.strategy import (
     build_signal_from_ticker,
     configure_builtin_strategy,
     get_active_strategy_id,
+    configure_symbol_strategies,
+    get_strategy_for_symbol,
     list_strategy_catalog,
     parse_natural_language_strategy,
     parse_structured_strategy,
@@ -26,6 +28,8 @@ from app.strategy import (
 )
 from app import agent_loop
 from app.supabase_logging import SupabaseCycleLogger
+from app.auth import AuthenticatedUser, credential_vault, current_user, supabase_auth
+from app.user_runtime import user_runtime_registry
 
 app = FastAPI(
     title="Priva Backend",
@@ -48,6 +52,23 @@ market_service = BitgetMarketDataService()
 risk_engine = RiskEngine()
 paper_execution_client = BitgetPaperExecutionClient()
 cycle_logger = SupabaseCycleLogger()
+
+
+def execution_client_for(user: AuthenticatedUser) -> BitgetPaperExecutionClient:
+    credentials = credential_vault.get(user.id)
+    if credentials is None and credential_vault.configured:
+        encrypted = cycle_logger.fetch_user_credentials(user.id)
+        if encrypted and credential_vault.import_encrypted(user.id, encrypted):
+            credentials = credential_vault.get(user.id)
+    if credentials:
+        client = BitgetPaperExecutionClient(session=paper_execution_client.session)
+        client.configure_credentials(
+            credentials["api_key"], credentials["api_secret"], credentials["passphrase"]
+        )
+        return client
+    if user.id == "local-development" and not supabase_auth.required:
+        return paper_execution_client
+    return BitgetPaperExecutionClient(session=paper_execution_client.session)
 
 
 def process_market_cycle(
@@ -131,6 +152,40 @@ class ClosePositionRequest(BaseModel):
     qty: float | None = None
 
 
+class StrategyActivationRequest(BaseModel):
+    symbols: list[str] | None = None
+    strategy_by_symbol: dict[str, str] | None = None
+
+
+class AgentSettingsRequest(BaseModel):
+    market: Literal["spot", "futures"]
+    take_profit_pct: float | None = None
+    stop_loss_pct: float | None = None
+    close_on_signal_violation: bool | None = None
+
+
+class UserAgentSettingsRequest(BaseModel):
+    market: Literal["spot", "futures"] = "futures"
+    take_profit_pct: float = 5
+    stop_loss_pct: float = 2
+    close_on_signal_violation: bool = True
+    symbols: list[str] | None = None
+    strategy_id: str | None = None
+    strategy_by_symbol: dict[str, str] | None = None
+    max_position_size: float = 25000
+    max_daily_loss: float = 1500
+    max_leverage: float = 5
+    risk_enabled: bool = True
+    allowed_symbols: list[str] | None = None
+
+
+class BitgetConnectionRequest(BaseModel):
+    api_key: str
+    api_secret: str
+    passphrase: str
+    symbol: str = "AAPLUSDT"
+
+
 @app.get("/market-data")
 def market_data(symbol: str = "AAPLUSDT") -> dict[str, Any]:
     snapshot = market_service.get_market_snapshot(symbol)
@@ -155,13 +210,126 @@ def agent_loop_status() -> dict[str, Any]:
         "running": agent_loop.is_running(),
         "interval_seconds": agent_loop.LOOP_INTERVAL_SECONDS,
         "watched_symbols": agent_loop.WATCHED_SYMBOLS,
+        "market": agent_loop.MARKET_TYPE,
+        "strategy_by_symbol": {symbol: get_strategy_for_symbol(symbol) for symbol in agent_loop.WATCHED_SYMBOLS},
         "recent_cycles": agent_loop.recent_cycles(),
     }
 
 
+@app.get("/agent-settings")
+def agent_settings() -> dict[str, Any]:
+    return {"status": "ok", "market": agent_loop.MARKET_TYPE, **agent_loop.get_exit_rules()}
+
+
+@app.post("/agent-settings")
+def update_agent_settings(payload: AgentSettingsRequest) -> dict[str, Any]:
+    try:
+        settings = agent_loop.configure_exit_rules(
+            take_profit_pct=payload.take_profit_pct,
+            stop_loss_pct=payload.stop_loss_pct,
+            close_on_signal_violation=payload.close_on_signal_violation,
+        )
+        return {"status": "updated", "market": agent_loop.configure_market_type(payload.market), **settings}
+    except ValueError as exc:
+        return {"status": "rejected", "message": str(exc)}
+
+
 @app.get("/debug/bitget-account")
-def debug_bitget_account(symbol: str = "AAPLUSDT") -> dict[str, Any]:
-    return paper_execution_client.fetch_account_mode(symbol)
+def debug_bitget_account(symbol: str = "AAPLUSDT", user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    client = execution_client_for(user)
+    return client.fetch_account_mode(symbol)
+
+
+@app.get("/user/agent-loop")
+def user_agent_loop_status(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    return user_runtime_registry.status(user.id)
+
+
+@app.get("/user/agent-settings")
+def user_agent_settings(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    runtime = user_runtime_registry.get(user.id)
+    if runtime:
+        return {"status": "ok", **user_runtime_registry.status(user.id)}
+    return {"status": "ok", **SupabaseCycleLogger(user_id=user.id).fetch_user_settings(user.id)}
+
+
+@app.post("/user/agent-settings")
+def update_user_agent_settings(payload: UserAgentSettingsRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    settings = payload.model_dump()
+    if settings["strategy_id"] and settings["strategy_id"] not in STRATEGIES:
+        return {"status": "rejected", "message": "unknown strategy"}
+    settings["symbols"] = [str(symbol).upper() for symbol in (settings["symbols"] or ["AAPLUSDT", "TSLAUSDT"])]
+    logger = SupabaseCycleLogger(user_id=user.id)
+    persistence = logger.save_user_settings(user.id, settings)
+    if logger.configured and persistence["status"] != "saved":
+        return {"status": "rejected", "message": "user settings could not be persisted"}
+    runtime = user_runtime_registry.get(user.id)
+    if runtime:
+        runtime.market_type = settings["market"]
+        runtime.symbols = settings["symbols"]
+        runtime.strategy_id = settings["strategy_id"] or runtime.strategy_id
+        runtime.strategy_by_symbol = settings["strategy_by_symbol"] or {}
+        runtime.take_profit_pct = settings["take_profit_pct"]
+        runtime.stop_loss_pct = settings["stop_loss_pct"]
+        runtime.close_on_signal_violation = settings["close_on_signal_violation"]
+        runtime.risk_engine.update_settings({
+            "max_position_size": settings["max_position_size"],
+            "max_daily_loss": settings["max_daily_loss"],
+            "max_leverage": settings["max_leverage"],
+            "enabled": settings["risk_enabled"],
+            "allowed_symbols": settings["allowed_symbols"] or [],
+        })
+    return {"status": "updated", **settings, "persistence": persistence["status"]}
+
+
+@app.post("/connection/bitget")
+def connect_bitget(payload: BitgetConnectionRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    values = (payload.api_key.strip(), payload.api_secret.strip(), payload.passphrase.strip())
+    if not all(values):
+        return {"status": "rejected", "message": "All Bitget credential fields are required"}
+
+    candidate = BitgetPaperExecutionClient(session=paper_execution_client.session)
+    candidate.configure_credentials(*values)
+    verification = candidate.fetch_account_mode(payload.symbol)
+    if verification.get("status") != "ok":
+        return {
+            "status": "rejected",
+            "message": verification.get("message", "Bitget credentials could not be verified"),
+        }
+
+    if credential_vault.configured:
+        credential_vault.put(user.id, {"api_key": values[0], "api_secret": values[1], "passphrase": values[2]})
+        persistence = cycle_logger.save_user_credentials(user.id, credential_vault.export(user.id) or "")
+        if cycle_logger.configured and persistence["status"] != "saved":
+            credential_vault.delete(user.id)
+            return {"status": "rejected", "message": "Credentials could not be persisted securely"}
+    elif user.id == "local-development" and not supabase_auth.required:
+        paper_execution_client.configure_credentials(*values)
+    else:
+        return {"status": "rejected", "message": "PRIVA_CREDENTIAL_ENCRYPTION_KEY is not configured"}
+    runtime = user_runtime_registry.start(user.id, execution_client_for(user)) if supabase_auth.required else None
+    return {
+        "status": "connected",
+        "symbol": payload.symbol.upper(),
+        "position_mode": verification.get("position_mode"),
+        "credentials_stored": "memory_only",
+        "worker": user_runtime_registry.status(user.id) if runtime else {"running": False},
+    }
+
+
+@app.post("/connection/bitget/disconnect")
+async def disconnect_bitget(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    await user_runtime_registry.stop(user.id)
+    credential_vault.delete(user.id)
+    cycle_logger.delete_user_credentials(user.id)
+    if user.id == "local-development":
+        paper_execution_client.clear_credentials()
+    return {"status": "disconnected"}
+
+
+@app.get("/auth/session")
+def auth_session(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    return {"status": "authenticated", "user_id": user.id, "email": user.email}
 
 
 async def periodic_market_loop() -> None:
@@ -177,6 +345,14 @@ async def periodic_market_loop() -> None:
 
 @app.on_event("startup")
 async def startup_event() -> None:
+    if supabase_auth.required:
+        for record in cycle_logger.fetch_connected_users():
+            user_id = str(record.get("user_id", ""))
+            encrypted = record.get("encrypted_credentials")
+            if user_id and encrypted and credential_vault.import_encrypted(user_id, encrypted):
+                user = AuthenticatedUser(user_id)
+                user_runtime_registry.start(user_id, execution_client_for(user))
+        return
     persisted_strategy = cycle_logger.fetch_active_strategy()
     if persisted_strategy:
         set_active_strategy(persisted_strategy)
@@ -456,12 +632,14 @@ def update_risk_settings(payload: dict[str, Any] | None = None) -> dict[str, Any
 @app.get("/activity-log")
 def activity_log() -> dict[str, Any]:
     cycles = cycle_logger.fetch_cycles()
+    if not cycles:
+        cycles = agent_loop.recent_cycles()
     if cycles:
         return {
             "entries": [
                 {
-                    "id": (cycle.get("order_result") or {}).get("order_id") or f"cycle_{cycle.get('created_at', '')}",
-                    "type": "trade" if cycle.get("order_result") else "agent_cycle",
+                    "id": ((cycle.get("order_result") or cycle.get("order") or {}).get("order_id") or f"cycle_{cycle.get('created_at', '')}"),
+                    "type": "trade" if (cycle.get("order_result") or cycle.get("order")) else "agent_cycle",
                     "symbol": cycle.get("symbol"),
                     "action": (cycle.get("decision") or {}).get("action"),
                     "status": cycle.get("status"),
@@ -469,6 +647,7 @@ def activity_log() -> dict[str, Any]:
                     "intent_hash": (cycle.get("intent") or {}).get("intent_hash"),
                     "mode": cycle.get("mode", "autonomous"),
                     "timestamp": cycle.get("created_at"),
+                    "opened_at": cycle.get("created_at") if (cycle.get("order_result") or cycle.get("order")) else None,
                 }
                 for cycle in cycles
             ]
@@ -485,6 +664,7 @@ def activity_log() -> dict[str, Any]:
                 "status": "filled",
                 "mode": "autonomous",
                 "timestamp": "2026-09-10T00:00:20Z",
+                "opened_at": "2026-09-10T00:00:20Z",
             },
             {
                 "id": "evt_002",
@@ -521,9 +701,74 @@ def strategies() -> dict[str, Any]:
 
 
 @app.post("/strategies/{strategy_id}/activate")
-def activate_strategy(strategy_id: str) -> dict[str, Any]:
-    if not set_active_strategy(strategy_id):
+def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | None = None, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    symbols = None
+    strategy_map = payload.strategy_by_symbol if payload is not None else None
+    if strategy_id not in STRATEGIES:
         return {"strategy_id": strategy_id, "status": "rejected", "message": "unknown strategy"}
+    if payload is not None and payload.symbols is not None:
+        symbols = list(dict.fromkeys(symbol.upper() for symbol in payload.symbols))
+        unsupported = [symbol for symbol in symbols if symbol not in {"AAPLUSDT", "TSLAUSDT"}]
+        if not symbols or unsupported:
+            return {
+                "strategy_id": strategy_id,
+                "status": "rejected",
+                "message": "symbols must include AAPLUSDT and/or TSLAUSDT only",
+            }
+
+    if supabase_auth.required:
+        normalized_map = {}
+        for symbol, mapped_strategy in (strategy_map or {}).items():
+            normalized_symbol = str(symbol).strip().upper()
+            if normalized_symbol not in {"AAPLUSDT", "TSLAUSDT"} or mapped_strategy not in STRATEGIES:
+                return {"strategy_id": strategy_id, "status": "rejected", "message": "invalid per-symbol strategy assignment"}
+            normalized_map[normalized_symbol] = mapped_strategy
+        settings: dict[str, Any] = {"strategy_id": strategy_id}
+        if symbols is not None:
+            settings["symbols"] = symbols
+        if normalized_map:
+            settings["strategy_by_symbol"] = normalized_map
+        logger = SupabaseCycleLogger(user_id=user.id)
+        persistence = logger.save_user_settings(user.id, settings)
+        if logger.configured and persistence["status"] != "saved":
+            return {"strategy_id": strategy_id, "status": "rejected", "message": "strategy could not be persisted"}
+        runtime = user_runtime_registry.get(user.id)
+        if runtime:
+            runtime.strategy_id = strategy_id
+            if symbols is not None:
+                runtime.symbols = symbols
+            if normalized_map:
+                runtime.strategy_by_symbol = normalized_map
+        return {
+            "strategy_id": strategy_id,
+            "status": "activated",
+            "mode": "strategy",
+            "active": True,
+            "symbols": runtime.symbols if runtime else symbols or [],
+            "strategy_by_symbol": runtime.strategy_by_symbol if runtime else normalized_map,
+            "persistence": persistence["status"],
+        }
+
+    if strategy_map is not None:
+        unsupported_map_symbols = [symbol.upper() for symbol in strategy_map if symbol.upper() not in {"AAPLUSDT", "TSLAUSDT"}]
+        if unsupported_map_symbols:
+            return {
+                "strategy_id": strategy_id,
+                "status": "rejected",
+                "message": "strategy_by_symbol supports AAPLUSDT and TSLAUSDT only",
+            }
+        try:
+            normalized_map = configure_symbol_strategies(strategy_map)
+        except ValueError as exc:
+            return {"strategy_id": strategy_id, "status": "rejected", "message": str(exc)}
+        if symbols is None:
+            symbols = list(normalized_map)
+
+    set_active_strategy(strategy_id)
+
+    if symbols is not None:
+        agent_loop.configure_watched_symbols(symbols)
+
     persistence = cycle_logger.save_active_strategy(strategy_id)
     if cycle_logger.configured and persistence["status"] != "saved":
         return {"strategy_id": strategy_id, "status": "rejected", "message": "strategy could not be persisted"}
@@ -532,6 +777,8 @@ def activate_strategy(strategy_id: str) -> dict[str, Any]:
         "status": "activated",
         "mode": "strategy",
         "active": True,
+        "symbols": agent_loop.WATCHED_SYMBOLS,
+        "strategy_by_symbol": {symbol: get_strategy_for_symbol(symbol) for symbol in agent_loop.WATCHED_SYMBOLS},
         "persistence": persistence["status"],
     }
 
@@ -863,7 +1110,8 @@ def risk_check(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/paper-trade")
-def paper_trade(payload: TradeRequest) -> dict[str, Any]:
+def paper_trade(payload: TradeRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user_execution_client = execution_client_for(user)
     order = payload.model_dump()
     result = risk_engine.evaluate_trade(
         trade=order,
@@ -879,7 +1127,7 @@ def paper_trade(payload: TradeRequest) -> dict[str, Any]:
             "risk": result["risk"],
         }
 
-    execution = paper_execution_client.place_market_order(order)
+    execution = user_execution_client.place_market_order(order)
     return {"order": order, "risk": result["risk"], **execution}
 
 

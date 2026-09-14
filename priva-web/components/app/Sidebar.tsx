@@ -1,7 +1,13 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
 type SidebarProps = {
     activeTab: string;
     onTabChange: (tab: string) => void;
   };
+
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8001";
   
   const navItems = [
     {
@@ -58,6 +64,55 @@ type SidebarProps = {
   ];
   
   export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
+    const [connection, setConnection] = useState<{ status?: string; position_mode?: string } | null>(null);
+    const [isConnectOpen, setIsConnectOpen] = useState(false);
+    const [connecting, setConnecting] = useState(false);
+    const [connectionError, setConnectionError] = useState<string | null>(null);
+    const [credentials, setCredentials] = useState({ apiKey: "", apiSecret: "", passphrase: "" });
+
+    useEffect(() => {
+      fetch(`${API_BASE}/debug/bitget-account`)
+        .then((response) => response.json())
+        .then((payload) => setConnection(payload))
+        .catch(() => setConnection({ status: "unavailable" }));
+    }, []);
+
+    const connected = connection?.status === "ok";
+
+    const handleConnect = async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      setConnecting(true);
+      setConnectionError(null);
+      try {
+        const response = await fetch(`${API_BASE}/connection/bitget`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_key: credentials.apiKey,
+            api_secret: credentials.apiSecret,
+            passphrase: credentials.passphrase,
+          }),
+        });
+        const payload = (await response.json()) as { status?: string; message?: string; position_mode?: string };
+        if (!response.ok || payload.status !== "connected") {
+          throw new Error(payload.message ?? "Bitget credentials could not be verified");
+        }
+        setConnection({ status: "ok", position_mode: payload.position_mode });
+        setCredentials({ apiKey: "", apiSecret: "", passphrase: "" });
+        setIsConnectOpen(false);
+      } catch (error) {
+        setConnectionError(error instanceof Error ? error.message : "Unable to connect Bitget");
+      } finally {
+        setConnecting(false);
+      }
+    };
+
+    const handleDisconnect = async () => {
+      await fetch(`${API_BASE}/connection/bitget/disconnect`, { method: "POST" });
+      setConnection({ status: "not_configured" });
+      setIsConnectOpen(false);
+    };
+
     return (
       <aside className="app-sidebar">
         <div className="sidebar-top">
@@ -82,17 +137,19 @@ type SidebarProps = {
         </nav>
   
         <div className="sidebar-bottom">
-          <div className="connection-card">
+          <button className="connection-card" type="button" onClick={() => { setConnectionError(null); setIsConnectOpen(true); }}>
             <div className="connection-label">Connection</div>
             <div className="connection-row">
               <div className="connection-mark">B</div>
               <div>
-                <div className="connection-name">Bitget</div>
-                <div className="connection-sub">•••• 8F2A</div>
+                <div className="connection-name">Bitget paper</div>
+                <div className="connection-sub">
+                  {connected ? `${connection?.position_mode ?? "configured"} mode` : connection?.status === "not_configured" ? "Not configured" : "Unavailable"}
+                </div>
               </div>
               <div className="connection-dot" />
             </div>
-          </div>
+          </button>
           <div className="profile-row">
             <div className="profile-avatar">J</div>
             <div>
@@ -102,5 +159,24 @@ type SidebarProps = {
           </div>
         </div>
       </aside>
+      {isConnectOpen ? (
+        <div className="modal-overlay" onClick={() => setIsConnectOpen(false)}>
+          <div className="modal-panel" onClick={(event) => event.stopPropagation()}>
+            <button className="modal-close" type="button" onClick={() => setIsConnectOpen(false)} aria-label="Close connection form">
+              Close ✕
+            </button>
+            <h2 className="modal-title">Connect Bitget demo</h2>
+            <p className="modal-sub">Credentials are verified by the backend and held in memory only. Withdrawal access is not used.</p>
+            <form onSubmit={handleConnect}>
+              <label className="config-row">API key<input type="text" autoComplete="off" required value={credentials.apiKey} onChange={(event) => setCredentials({ ...credentials, apiKey: event.target.value })} /></label>
+              <label className="config-row">API secret<input type="password" autoComplete="off" required value={credentials.apiSecret} onChange={(event) => setCredentials({ ...credentials, apiSecret: event.target.value })} /></label>
+              <label className="config-row">Passphrase<input type="password" autoComplete="off" required value={credentials.passphrase} onChange={(event) => setCredentials({ ...credentials, passphrase: event.target.value })} /></label>
+              {connectionError ? <p className="config-desc">{connectionError}</p> : null}
+              <button className="btn btn-primary" type="submit" disabled={connecting}>{connecting ? "Verifying…" : "Connect demo account"}</button>
+            </form>
+            {connected ? <button className="btn" type="button" onClick={handleDisconnect} style={{ marginTop: 10 }}>Disconnect</button> : null}
+          </div>
+        </div>
+      ) : null}
     );
   }

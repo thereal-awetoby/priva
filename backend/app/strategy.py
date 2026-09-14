@@ -21,6 +21,16 @@ class Decision:
     stop_loss_pct: float | None = None
 
 
+def _adaptive_leverage(signal_strength: float) -> float:
+    """Scale default futures leverage with signal confidence, capped at 3x."""
+    strength = min(1.0, max(0.0, float(signal_strength)))
+    if strength >= 0.66:
+        return 3.0
+    if strength >= 0.33:
+        return 2.0
+    return 1.0
+
+
 def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
     if ticker.get("status") != "live":
         return Decision("hold", 0.0, 1.0, "market feed unavailable; fallback mode active")
@@ -37,7 +47,9 @@ def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
         signal = "hold"
         strength = 0.0
 
-    return Decision(signal, 1.0 if signal != "hold" else 0.0, 1.0, "simple price-vs-open momentum signal", round(strength, 4))
+    rounded_strength = round(strength, 4)
+    leverage = _adaptive_leverage(rounded_strength) if signal != "hold" else 1.0
+    return Decision(signal, 1.0 if signal != "hold" else 0.0, leverage, "simple price-vs-open momentum signal", rounded_strength)
 
 
 def _mean_reversion_strategy(ticker: dict[str, Any]) -> Decision:
@@ -55,10 +67,14 @@ def _mean_reversion_strategy(ticker: dict[str, Any]) -> Decision:
 
     deviation = (last_price - open_price) / open_price
     if deviation >= threshold:
-        return Decision("sell", 1.0, 1.0, f"mean reversion: price extended above open by {threshold_pct}%", round(min(1.0, deviation / max(threshold, 0.01)), 4))
+        strength = round(min(1.0, deviation / max(threshold, 0.01)), 4)
+        leverage_signal = min(1.0, deviation / max(threshold * 4, 0.01))
+        return Decision("sell", 1.0, _adaptive_leverage(leverage_signal), f"mean reversion: price extended above open by {threshold_pct}%", strength)
     if deviation <= -threshold:
-        return Decision("buy", 1.0, 1.0, f"mean reversion: price extended below open by {threshold_pct}%", round(min(1.0, abs(deviation) / max(threshold, 0.01)), 4))
-    return Decision("hold", 0.0, 1.0, "mean reversion: price within neutral band")
+        strength = round(min(1.0, abs(deviation) / max(threshold, 0.01)), 4)
+        leverage_signal = min(1.0, abs(deviation) / max(threshold * 4, 0.01))
+        return Decision("buy", 1.0, _adaptive_leverage(leverage_signal), f"mean reversion: price extended below open by {threshold_pct}%", strength)
+    return Decision("hold", 0.0, 1.0, "mean reversion: price within neutral band", 0.0)
 
 
 STRATEGY_CATALOG = {
@@ -84,6 +100,7 @@ STRATEGIES = {
 _registered_strategy_catalog = dict(STRATEGY_CATALOG)
 _active_strategy_id = "momentum_breakout"
 _builtin_strategy_configs: dict[str, dict[str, Any]] = {}
+_symbol_strategy_ids: dict[str, str] = {}
 
 
 def _set_builtin_strategy_config(strategy_id: str, config: dict[str, Any]) -> None:
@@ -583,6 +600,23 @@ def activate_strategy(strategy_id: str) -> bool:
     return True
 
 
+def configure_symbol_strategies(strategy_by_symbol: dict[str, str]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for symbol, strategy_id in strategy_by_symbol.items():
+        normalized_symbol = str(symbol).strip().upper()
+        if strategy_id not in STRATEGIES:
+            raise ValueError(f"unknown strategy: {strategy_id}")
+        if normalized_symbol:
+            normalized[normalized_symbol] = strategy_id
+    _symbol_strategy_ids.clear()
+    _symbol_strategy_ids.update(normalized)
+    return dict(_symbol_strategy_ids)
+
+
+def get_strategy_for_symbol(symbol: str) -> str:
+    return _symbol_strategy_ids.get(str(symbol).strip().upper(), _active_strategy_id)
+
+
 def register_custom_strategy(strategy_id: str, parsed_strategy: dict[str, Any]) -> None:
     strategy_type = str(parsed_strategy.get("kind", "custom")).lower()
     if strategy_type != "custom":
@@ -648,9 +682,10 @@ def register_custom_strategy(strategy_id: str, parsed_strategy: dict[str, Any]) 
     }
 
 
-def build_signal_from_ticker(ticker: dict[str, Any]) -> dict[str, Any]:
-    decision = STRATEGIES[_active_strategy_id](ticker)
-    decision = _apply_builtin_strategy_config(_active_strategy_id, decision)
+def build_signal_from_ticker(ticker: dict[str, Any], strategy_id: str | None = None) -> dict[str, Any]:
+    selected_strategy_id = strategy_id or get_strategy_for_symbol(str(ticker.get("symbol", "")))
+    decision = STRATEGIES[selected_strategy_id](ticker)
+    decision = _apply_builtin_strategy_config(selected_strategy_id, decision)
     return decision_to_dict(decision)
 
 
