@@ -1,137 +1,226 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { apiGet, apiPost } from "@/lib/api";
+import { timeAgo, cleanSymbol } from "@/lib/format";
 
-const autonomousLog = [
-  { time: "14:02", text: "Encrypted intent submitted — NVDA long 2x" },
-  { time: "14:02", text: "Trade filled at $121.84" },
-  { time: "13:47", text: "Risk limit check passed" },
-  { time: "11:30", text: "Strategy mode → Autonomous" },
-];
-
-const strategyLog = [
-  { time: "13:15", text: "Encrypted intent submitted — TSLA short 1.5x" },
-  { time: "12:40", text: "Quiet Momentum signal fired — AAPL long" },
-  { time: "10:05", text: "Strategy activated — Quiet Momentum" },
-  { time: "09:50", text: "Backtest refreshed — Quiet Momentum" },
-];
+type Position = Record<string, any>;
+type ActivityEntry = Record<string, any>;
 
 export default function ControlCenterPanel() {
-  const [mode, setMode] = useState<"autonomous" | "strategy">("autonomous");
-  const log = mode === "autonomous" ? autonomousLog : strategyLog;
+  const [positions, setPositions] = useState<Position[]>([]);
+  const [pnl, setPnl] = useState<Record<string, any> | null>(null);
+  const [riskUsage, setRiskUsage] = useState<Record<string, any> | null>(null);
+  const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const [killSwitchEnabled, setKillSwitchEnabled] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [killSwitchLoading, setKillSwitchLoading] = useState(false);
+  const [activityMode, setActivityMode] = useState<"autonomous" | "strategy">("autonomous");
+
+  useEffect(() => {
+    Promise.all([
+      apiGet<any>("/positions"),
+      apiGet<any>("/pnl"),
+      apiGet<any>("/risk-usage"),
+      apiGet<any>("/activity-log"),
+      apiGet<any>("/kill-switch"),
+    ])
+      .then(([positionsData, pnlData, riskData, activityData, killData]) => {
+        setPositions(positionsData.positions ?? []);
+        setPnl(pnlData);
+        setRiskUsage(riskData);
+        setActivity(activityData.entries ?? []);
+        setKillSwitchEnabled(killData.enabled ?? false);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err.message);
+        setLoading(false);
+      });
+  }, []);
+
+  const handleKillSwitch = async () => {
+    setKillSwitchLoading(true);
+    try {
+      const next = !killSwitchEnabled;
+      await apiPost("/kill-switch", { enabled: next });
+      setKillSwitchEnabled(next);
+    } catch (err: any) {
+      alert(`Couldn't update kill switch: ${err.message}`);
+    } finally {
+      setKillSwitchLoading(false);
+    }
+  };
+
+  if (loading) {
+    return <p className="panel-lead">Loading control center…</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="strategy-empty">
+        Couldn&apos;t load live data ({error}).
+      </div>
+    );
+  }
+
+  const dailyLossUsage = riskUsage?.usage_percent?.daily_loss ?? 0;
+  const filteredActivity = activity
+    .filter((entry) => (entry.mode ?? "autonomous") === activityMode)
+    .slice(0, 8);
 
   return (
     <div>
       <div className="control-topline">
-        <div className="status-pill">
-          <span className="status-dot" />
-          Running
+        <div
+          className="status-pill"
+          style={
+            killSwitchEnabled
+              ? { borderColor: "var(--down)", color: "var(--down)" }
+              : {}
+          }
+        >
+          <span
+            className="status-dot"
+            style={killSwitchEnabled ? { background: "var(--down)" } : {}}
+          />
+          {killSwitchEnabled ? "Stopped" : "Running"}
         </div>
         <div className="app-actions" style={{ marginTop: 0 }}>
           <a className="btn" href="#">Pause</a>
-          <a className="btn btn-danger" href="#">Kill switch</a>
+          <button
+            className="btn btn-danger"
+            onClick={handleKillSwitch}
+            disabled={killSwitchLoading}
+          >
+            {killSwitchLoading
+              ? "Working…"
+              : killSwitchEnabled
+              ? "Resume"
+              : "Kill switch"}
+          </button>
         </div>
       </div>
 
       <div className="perf-row">
         <div className="perf-cell">
           <div className="perf-label">Total P&amp;L</div>
-          <div className="perf-value up">+$18,240.12</div>
+          <div className={`perf-value ${pnl?.total_pnl >= 0 ? "up" : "down"}`}>
+            {pnl?.total_pnl >= 0 ? "+" : ""}${pnl?.total_pnl?.toFixed(2)}
+          </div>
         </div>
         <div className="perf-cell">
-          <div className="perf-label">Today&apos;s P&amp;L</div>
-          <div className="perf-value up">+$412.30</div>
+          <div className="perf-label">Realized P&amp;L</div>
+          <div className="perf-value">${pnl?.realized_pnl?.toFixed(2)}</div>
         </div>
         <div className="perf-cell">
           <div className="perf-label">Win rate</div>
-          <div className="perf-value">61.4%</div>
+          <div className="perf-value">
+            {pnl?.win_rate_pct != null ? `${pnl.win_rate_pct}%` : "—"}
+          </div>
         </div>
         <div className="perf-cell">
           <div className="perf-label">Max drawdown</div>
-          <div className="perf-value down">−6.8%</div>
+          <div className="perf-value down">
+            {pnl?.max_drawdown_pct != null ? `-${pnl.max_drawdown_pct}%` : "—"}
+          </div>
         </div>
       </div>
 
       <div className="risk-row">
         <div className="risk-label-row">
-          <span>Risk usage</span>
-          <span>42% of daily limit</span>
+          <span>Daily loss usage</span>
+          <span>{dailyLossUsage}% of daily limit</span>
         </div>
         <div className="risk-bar">
-          <div className="risk-bar-fill" style={{ width: "42%" }} />
+          <div
+            className="risk-bar-fill"
+            style={{ width: `${Math.min(dailyLossUsage, 100)}%` }}
+          />
         </div>
       </div>
 
       <div className="positions-section">
         <div className="panel-title">Positions</div>
-        <table className="positions">
-          <thead>
-            <tr>
-              <th>Asset</th>
-              <th>Side</th>
-              <th>Size</th>
-              <th>P&amp;L</th>
-              <th>Type</th>
-              <th>Mode</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>NVDA</td>
-              <td><span className="side-tag up">Long 2x</span></td>
-              <td>$4,200.00</td>
-              <td className="up">+$182.40</td>
-              <td>Perp</td>
-              <td><span className="mode-tag autonomous">Autonomous</span></td>
-            </tr>
-            <tr>
-              <td>TSLA</td>
-              <td><span className="side-tag down">Short 1.5x</span></td>
-              <td>$2,800.00</td>
-              <td className="down">−$64.10</td>
-              <td>Perp</td>
-              <td><span className="mode-tag strategy">Strategy</span></td>
-            </tr>
-            <tr>
-              <td>AAPL</td>
-              <td><span className="side-tag up">Long</span></td>
-              <td>$1,500.00</td>
-              <td className="up">+$22.05</td>
-              <td>Spot</td>
-              <td><span className="mode-tag strategy">Strategy</span></td>
-            </tr>
-          </tbody>
-        </table>
+        {positions.length === 0 ? (
+          <div className="empty-state">
+            <p className="empty-state-title">No open positions</p>
+          </div>
+        ) : (
+          <table className="positions">
+            <thead>
+              <tr>
+                <th>Asset</th>
+                <th>Side</th>
+                <th>Qty</th>
+                <th>Notional</th>
+                <th>P&amp;L</th>
+                <th>Leverage</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map((p, i) => (
+                <tr key={i}>
+                  <td>{cleanSymbol(p.symbol)}</td>
+                  <td>
+                    <span
+                      className={`side-tag ${p.side === "buy" ? "up" : "down"}`}
+                    >
+                      {p.side === "buy" ? "Long" : "Short"}
+                    </span>
+                  </td>
+                  <td>{p.qty}</td>
+                  <td>${p.notional_usd?.toFixed(2)}</td>
+                  <td className={p.unrealized_pnl >= 0 ? "up" : "down"}>
+                    {p.unrealized_pnl >= 0 ? "+" : ""}${p.unrealized_pnl?.toFixed(2)}
+                  </td>
+                  <td>{p.leverage}x</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       <div className="mode-activity-block">
         <div className="control-mode-center">
           <div className="mode-switch">
             <button
-              className={mode === "autonomous" ? "active" : ""}
-              onClick={() => setMode("autonomous")}
+              className={activityMode === "autonomous" ? "active" : ""}
+              onClick={() => setActivityMode("autonomous")}
             >
               Autonomous
             </button>
             <button
-              className={mode === "strategy" ? "active" : ""}
-              onClick={() => setMode("strategy")}
+              className={activityMode === "strategy" ? "active" : ""}
+              onClick={() => setActivityMode("strategy")}
             >
               Strategy
             </button>
           </div>
         </div>
-
         <div className="panel-title panel-title-center">
-          Recent activity — <span>{mode === "autonomous" ? "Autonomous" : "Strategy"}</span>
+          Recent activity — <span>{activityMode === "autonomous" ? "Autonomous" : "Strategy"}</span>
         </div>
         <div className="activity-log">
-          {log.map((row, i) => (
-            <div className="log-row" key={i}>
-              <span className="log-time">{row.time}</span>
-              <span>{row.text}</span>
-            </div>
-          ))}
+          {filteredActivity.length === 0 ? (
+            <p className="panel-lead" style={{ textAlign: "center" }}>
+              No activity yet.
+            </p>
+          ) : (
+            filteredActivity.map((entry) => (
+              <div className="log-row" key={entry.id}>
+                <span className="log-time">{timeAgo(entry.timestamp)}</span>
+                <span>
+                  {cleanSymbol(entry.symbol)} — {entry.action}
+                  {entry.status === "skipped_existing_position"
+                    ? " (position already open)"
+                    : ""}
+                </span>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

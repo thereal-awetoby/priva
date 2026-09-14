@@ -1,15 +1,20 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 
 type Strategy = Record<string, any>;
+
+const SUPPORTED_SYMBOLS = ["AAPLUSDT", "TSLAUSDT"];
 
 export default function StrategyList({ typeFilter }: { typeFilter: string | null }) {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [symbols, setSymbols] = useState<string[]>(["AAPLUSDT"]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activating, setActivating] = useState(false);
+  const [activateResult, setActivateResult] = useState<string | null>(null);
 
   useEffect(() => {
     apiGet<any>("/strategies")
@@ -32,6 +37,29 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
       });
   }, [typeFilter]);
 
+  const toggleSymbol = (s: string) => {
+    setSymbols((prev) =>
+      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
+    );
+  };
+
+  const handleActivate = async () => {
+    if (!selectedId) return;
+    setActivating(true);
+    setActivateResult(null);
+    try {
+      const data = await apiPost<any>(`/strategies/${selectedId}/activate`, { symbols });
+      console.log("ACTIVATE RESPONSE:", data);
+      setActivateResult(
+        `Activated on ${symbols.map((s) => s.replace("USDT", "")).join(", ")}.`
+      );
+    } catch (err: any) {
+      setActivateResult(`Couldn't activate: ${err.message}`);
+    } finally {
+      setActivating(false);
+    }
+  };
+
   if (loading) {
     return <p className="panel-lead">Loading strategies…</p>;
   }
@@ -46,9 +74,9 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
 
   if (strategies.length === 0) {
     return (
-        <div className="strategy-empty">
-            No strategies available yet.
-        </div>
+      <div className="strategy-empty">
+        No strategies available yet.
+      </div>
     );
   }
 
@@ -61,7 +89,10 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
           <div
             key={s.id}
             className={`strategy-row ${selectedId === s.id ? "active" : ""}`}
-            onClick={() => setSelectedId(s.id)}
+            onClick={() => {
+              setSelectedId(s.id);
+              setActivateResult(null);
+            }}
           >
             <div className="strategy-info">
               <h3>{s.name ?? "Untitled strategy"}</h3>
@@ -87,7 +118,37 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
               <h3 className="config-title">{selected.name}</h3>
             </div>
             <p className="config-desc">{selected.description ?? ""}</p>
-            <a className="btn btn-primary" href="#" style={{ width: "100%", textAlign: "center", display: "block" }}>Activate strategy</a>
+
+            <div className="form-field">
+              <label className="form-label">Symbols</label>
+              <div className="symbol-select">
+                {SUPPORTED_SYMBOLS.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className={`symbol-chip ${symbols.includes(s) ? "active" : ""}`}
+                    onClick={() => toggleSymbol(s)}
+                  >
+                    {s.replace("USDT", "")}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              className="btn btn-primary"
+              onClick={handleActivate}
+              disabled={activating || symbols.length === 0}
+              style={{ width: "100%", textAlign: "center", display: "block" }}
+            >
+              {activating ? "Activating…" : "Activate strategy"}
+            </button>
+
+            {activateResult && (
+              <div className="form-hint" style={{ marginTop: "12px" }}>
+                {activateResult}
+              </div>
+            )}
           </div>
         ) : (
           <p className="panel-lead">Select a strategy to see details.</p>

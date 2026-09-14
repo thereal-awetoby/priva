@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Sidebar from "@/components/app/Sidebar";
 import ControlCenterPanel from "@/components/app/panels/ControlCenterPanel";
 import StrategyLabPanel from "@/components/app/panels/StrategyLabPanel";
 import RiskAccessPanel from "@/components/app/panels/RiskAccessPanel";
 import ActivityPanel from "@/components/app/panels/ActivityPanel";
+import OnboardingModal, { hasSeenOnboarding } from "@/components/app/OnboardingModal";
 
 const crumbLabels: Record<string, string> = {
   control: "Control center",
@@ -16,6 +17,13 @@ const crumbLabels: Record<string, string> = {
 
 export default function AppShell() {
   const [activeTab, setActiveTab] = useState("control");
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  useEffect(() => {
+    if (!hasSeenOnboarding()) {
+      setShowOnboarding(true);
+    }
+  }, []);
 
   return (
     <div className="app-root">
@@ -28,7 +36,7 @@ export default function AppShell() {
           </div>
           <div className="topbar-right">
             <div className="env-tag">Paper environment</div>
-                        <button className="icon-btn" aria-label="Notifications" title="Notifications">
+            <button className="icon-btn" aria-label="Notifications" title="Notifications">
               <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
                 <path
                   d="M3 6.2C3 4 4.9 2.2 7.5 2.2S12 4 12 6.2V9L13 11H2L3 9V6.2Z"
@@ -64,6 +72,10 @@ export default function AppShell() {
           {activeTab === "activity" && <ActivityPanel />}
         </div>
       </div>
+
+      {showOnboarding && (
+        <OnboardingModal onClose={() => setShowOnboarding(false)} />
+      )}
     </div>
   );
 }

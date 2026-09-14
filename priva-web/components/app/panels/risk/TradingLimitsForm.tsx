@@ -6,8 +6,8 @@ import { apiGet, apiPost } from "@/lib/api";
 const SUPPORTED_SYMBOLS = ["AAPL", "TSLA"];
 
 export default function TradingLimitsForm() {
-  const [maxPositionSize, setMaxPositionSize] = useState("15");
-  const [maxDailyLoss, setMaxDailyLoss] = useState("5");
+  const [maxPositionSize, setMaxPositionSize] = useState("25000");
+  const [maxDailyLoss, setMaxDailyLoss] = useState("1500");
   const [maxLeverage, setMaxLeverage] = useState("2");
   const [allowedSymbols, setAllowedSymbols] = useState<string[]>(SUPPORTED_SYMBOLS);
 
@@ -66,17 +66,17 @@ export default function TradingLimitsForm() {
         Changes apply the next time Priva checks a proposed trade.
       </p>
 
-            <div className="slider-row">
+      <div className="slider-row">
         <div className="slider-label-row">
           <label className="form-label">Max position size</label>
-          <span className="slider-value">{maxPositionSize}%</span>
+          <span className="slider-value">${Number(maxPositionSize).toLocaleString()}</span>
         </div>
         <input
           className="form-slider"
           type="range"
-          min="1"
-          max="100"
-          step="1"
+          min="1000"
+          max="50000"
+          step="500"
           value={maxPositionSize}
           onChange={(e) => setMaxPositionSize(e.target.value)}
         />
@@ -85,14 +85,14 @@ export default function TradingLimitsForm() {
       <div className="slider-row">
         <div className="slider-label-row">
           <label className="form-label">Max daily loss</label>
-          <span className="slider-value">{maxDailyLoss}%</span>
+          <span className="slider-value">${Number(maxDailyLoss).toLocaleString()}</span>
         </div>
         <input
           className="form-slider"
           type="range"
-          min="1"
-          max="50"
-          step="1"
+          min="100"
+          max="5000"
+          step="100"
           value={maxDailyLoss}
           onChange={(e) => setMaxDailyLoss(e.target.value)}
         />

@@ -1,120 +1,89 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { apiGet } from "@/lib/api";
+import { timeAgo, cleanSymbol } from "@/lib/format";
 
-type EventItem = {
-  id: string;
-  title: string;
-  tag: "trade" | "risk" | "system" | "blocked";
-  description: string;
-  time: string;
-  value: string;
-  valueClass?: "up" | "down" | "";
-};
+type EventItem = Record<string, any>;
 
-const events: EventItem[] = [
-  {
-    id: "1",
-    title: "Reduced NVDA-PERP",
-    tag: "risk",
-    description: "Volatility guard · 0.38 → 0.24 size",
-    time: "2 min ago",
-    value: "+$84.20",
-    valueClass: "up",
-  },
-  {
-    id: "2",
-    title: "Opened AAPL spot",
-    tag: "trade",
-    description: "Momentum window · 12.4 shares",
-    time: "18 min ago",
-    value: "$2,178.40",
-    valueClass: "",
-  },
-  {
-    id: "3",
-    title: "Heartbeat check",
-    tag: "system",
-    description: "All permissions within bounds",
-    time: "42 min ago",
-    value: "Clear",
-    valueClass: "",
-  },
-  {
-    id: "4",
-    title: "Rebalanced BTC proxy",
-    tag: "trade",
-    description: "Core allocation · 4.8% drift",
-    time: "1 hr ago",
-    value: "+$31.08",
-    valueClass: "up",
-  },
-  {
-    id: "5",
-    title: "Skipped TSLA entry",
-    tag: "blocked",
-    description: "Spread exceeded 0.42% limit",
-    time: "3 hr ago",
-    value: "Blocked",
-    valueClass: "down",
-  },
-  {
-    id: "6",
-    title: "Strategy parameters updated",
-    tag: "system",
-    description: "Max position size · 18% → 15%",
-    time: "5 hr ago",
-    value: "You",
-    valueClass: "",
-  },
+const filters = [
+  { id: "all", label: "All" },
+  { id: "buy", label: "Buy" },
+  { id: "sell", label: "Sell" },
+  { id: "hold", label: "Hold" },
+  { id: "blocked", label: "Blocked" },
 ];
 
-const tagIcons: Record<EventItem["tag"], React.ReactNode> = {
-  risk: (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M7 1.5L12 3.2V6.8C12 9.8 9.8 11.7 7 12.4C4.2 11.7 2 9.8 2 6.8V3.2L7 1.5Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-    </svg>
-  ),
-  trade: (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M7 1V13M3 4L7 1L11 4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  ),
-  system: (
+function getEventIcon(entry: EventItem) {
+  if (entry.risk_check?.allowed === false) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M3 3L11 11M11 3L3 11" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (entry.action === "buy" || entry.action === "sell") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M7 1V13M3 4L7 1L11 4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
       <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.1" />
       <circle cx="7" cy="7" r="1.7" stroke="currentColor" strokeWidth="1.1" />
     </svg>
-  ),
-  blocked: (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M3 3L11 11M11 3L3 11" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-    </svg>
-  ),
-};
+  );
+}
 
-const filters: { id: "all" | EventItem["tag"]; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "trade", label: "Trade" },
-  { id: "risk", label: "Risk" },
-  { id: "system", label: "System" },
-  { id: "blocked", label: "Blocked" },
-];
+function getEventTag(entry: EventItem): string {
+  if (entry.risk_check?.allowed === false) return "blocked";
+  return entry.action ?? "system";
+}
 
 export default function ActivityPanel() {
-  const [activeFilter, setActiveFilter] = useState<"all" | EventItem["tag"]>("all");
+  const [entries, setEntries] = useState<EventItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState("all");
   const [search, setSearch] = useState("");
 
-  const filteredEvents = useMemo(() => {
-    return events.filter((e) => {
-      const matchesFilter = activeFilter === "all" || e.tag === activeFilter;
+  useEffect(() => {
+    apiGet<any>("/activity-log")
+      .then((data) => {
+        setEntries(data.entries ?? []);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err.message);
+        setLoading(false);
+      });
+  }, []);
+
+  const filteredEntries = useMemo(() => {
+    return entries.filter((e) => {
+      const tag = getEventTag(e);
+      const matchesFilter = activeFilter === "all" || tag === activeFilter;
       const matchesSearch =
         search.trim() === "" ||
-        e.title.toLowerCase().includes(search.toLowerCase()) ||
-        e.description.toLowerCase().includes(search.toLowerCase());
+        (e.symbol ?? "").toLowerCase().includes(search.toLowerCase()) ||
+        (e.action ?? "").toLowerCase().includes(search.toLowerCase());
       return matchesFilter && matchesSearch;
     });
-  }, [activeFilter, search]);
+  }, [entries, activeFilter, search]);
+
+  if (loading) {
+    return <p className="panel-lead">Loading activity…</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="strategy-empty">
+        Couldn&apos;t load activity ({error}).
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -140,35 +109,49 @@ export default function ActivityPanel() {
         <input
           className="activity-search"
           type="text"
-          placeholder="Search decision log"
+          placeholder="Search by symbol or action"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
 
       <div className="event-list">
-        {filteredEvents.length === 0 ? (
+        {filteredEntries.length === 0 ? (
           <div className="empty-state">
             <p className="empty-state-title">No events match your filters</p>
             <p className="empty-state-sub">Try a different search or category</p>
           </div>
         ) : (
-          filteredEvents.map((e) => (
-            <div className="event-row" key={e.id}>
-              <div className="event-icon">{tagIcons[e.tag]}</div>
-              <div className="event-body">
-                <div className="event-title-row">
-                  <h4>{e.title}</h4>
-                  <span className="event-tag">{e.tag}</span>
+          filteredEntries.slice(0, 50).map((entry) => {
+            const tag = getEventTag(entry);
+            const blocked = tag === "blocked";
+            return (
+              <div className="event-row" key={entry.id}>
+                <div className="event-icon">{getEventIcon(entry)}</div>
+                <div className="event-body">
+                  <div className="event-title-row">
+                    <h4>
+                      {cleanSymbol(entry.symbol)} — {entry.action ?? "cycle"}
+                    </h4>
+                    <span className="event-tag">{tag}</span>
+                    {entry.mode && (
+                      <span className="event-tag">{entry.mode}</span>
+                    )}
+                  </div>
+                  <p>
+                    {blocked
+                      ? (entry.risk_check?.reasons ?? []).join(", ") || "Blocked by risk check"
+                      : entry.status === "skipped_existing_position"
+                        ? "Position already open"
+                        : "Logged"}
+                  </p>
                 </div>
-                <p>{e.description}</p>
+                <div className="event-meta">
+                  <div className="event-time">{timeAgo(entry.timestamp)}</div>
+                </div>
               </div>
-              <div className="event-meta">
-                <div className="event-time">{e.time}</div>
-                <div className={e.valueClass}>{e.value}</div>
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>

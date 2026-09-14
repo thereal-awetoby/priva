@@ -3,65 +3,102 @@
 import { useState } from "react";
 import { apiPost } from "@/lib/api";
 
-type BacktestMetrics = {
-  return_pct?: number;
-  sharpe?: number;
-  max_drawdown_pct?: number;
-  win_rate_pct?: number;
-};
+type ActivationResult = Record<string, any>;
 
-function BacktestResult({ metrics }: { metrics: BacktestMetrics }) {
+const SUPPORTED_SYMBOLS = ["AAPLUSDT", "TSLAUSDT"];
+
+function SymbolSelector({
+  symbols,
+  onChange,
+}: {
+  symbols: string[];
+  onChange: (s: string[]) => void;
+}) {
+  const toggle = (s: string) => {
+    onChange(
+      symbols.includes(s) ? symbols.filter((x) => x !== s) : [...symbols, s]
+    );
+  };
+
+  return (
+    <div className="form-field">
+      <label className="form-label">Symbols</label>
+      <div className="symbol-select">
+        {SUPPORTED_SYMBOLS.map((s) => (
+          <button
+            key={s}
+            type="button"
+            className={`symbol-chip ${symbols.includes(s) ? "active" : ""}`}
+            onClick={() => toggle(s)}
+          >
+            {s.replace("USDT", "")}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ActivationBanner({ result }: { result: ActivationResult }) {
   return (
     <div className="backtest-result">
-      <div className="backtest-result-title">Backtest result</div>
-      <div className="backtest-metrics">
-        <div>
-          <div className="backtest-metric-label">Return</div>
-          <div className="backtest-metric-value up">
-            {metrics.return_pct != null ? `${metrics.return_pct}%` : "—"}
-          </div>
+      <div className="backtest-result-title">Strategy activated</div>
+      <p style={{ margin: 0, fontSize: "13.5px", color: "var(--ink-dim)" }}>
+        This strategy is now live on your account and will act on the next
+        agent cycle.
+      </p>
+      <div className="config-rows" style={{ marginTop: "16px", marginBottom: 0 }}>
+        <div className="config-row">
+          <span className="config-key">Strategy ID</span>
+          <span className="config-value">{result.strategy_id ?? "—"}</span>
         </div>
-        <div>
-          <div className="backtest-metric-label">Sharpe</div>
-          <div className="backtest-metric-value">
-            {metrics.sharpe ?? "—"}
-          </div>
+        <div className="config-row">
+          <span className="config-key">Action</span>
+          <span className="config-value">{result.action ?? "—"}</span>
         </div>
-        <div>
-          <div className="backtest-metric-label">Max drawdown</div>
-          <div className="backtest-metric-value down">
-            {metrics.max_drawdown_pct != null
-              ? `${metrics.max_drawdown_pct}%`
-              : "—"}
-          </div>
+        <div className="config-row">
+          <span className="config-key">Status</span>
+          <span className="config-value">{result.status ?? "active"}</span>
         </div>
-        <div>
-          <div className="backtest-metric-label">Win rate</div>
-          <div className="backtest-metric-value">
-            {metrics.win_rate_pct != null ? `${metrics.win_rate_pct}%` : "—"}
-          </div>
+        <div className="config-row">
+          <span className="config-key">Mode</span>
+          <span className="config-value">{result.mode ?? "—"}</span>
         </div>
       </div>
     </div>
   );
 }
 
+async function parseAndActivate(payload: Record<string, any>): Promise<ActivationResult> {
+  const parseData = await apiPost<any>("/strategies/parse", payload);
+  console.log("PARSE RESPONSE:", parseData);
+
+  const strategyId = parseData.strategy_id;
+  if (!strategyId) {
+    return parseData;
+  }
+
+  const activateData = await apiPost<any>(
+    `/strategies/${strategyId}/activate`,
+    { symbols: payload.symbols }
+  );
+  console.log("ACTIVATE RESPONSE:", activateData);
+  return { ...parseData, ...activateData };
+}
+
 function PlainEnglishForm() {
   const [text, setText] = useState("");
+  const [symbols, setSymbols] = useState<string[]>(["AAPLUSDT"]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<BacktestMetrics | null>(null);
+  const [result, setResult] = useState<ActivationResult | null>(null);
 
   const handleGenerate = async () => {
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const data = await apiPost<any>("/strategies/parse", {
-        text,
-        use_gemini: true,
-      });
-      console.log("PARSE RESPONSE:", data);
+      const data = await parseAndActivate({ text, use_gemini: true, symbols });
       setResult(data);
     } catch (err: any) {
       setError(err.message);
@@ -72,6 +109,8 @@ function PlainEnglishForm() {
 
   return (
     <div className="form-block">
+      <SymbolSelector symbols={symbols} onChange={setSymbols} />
+
       <div className="form-field">
         <label className="form-label">Describe your strategy</label>
         <textarea
@@ -82,15 +121,16 @@ function PlainEnglishForm() {
         />
         <div className="form-hint">
           Only AAPL and TSLA are supported in the paper environment right now.
+          This will run live on your account.
         </div>
       </div>
 
       <button
         className="btn btn-primary"
         onClick={handleGenerate}
-        disabled={loading || text.trim() === ""}
+        disabled={loading || text.trim() === "" || symbols.length === 0}
       >
-        {loading ? "Generating…" : "Generate & Backtest"}
+        {loading ? "Activating…" : "Create & Activate"}
       </button>
 
       {error && (
@@ -99,37 +139,59 @@ function PlainEnglishForm() {
         </div>
       )}
 
-      {result && <BacktestResult metrics={result} />}
+      {result && <ActivationBanner result={result} />}
     </div>
   );
 }
 
-function StructuredForm() {
-  const [entryCondition, setEntryCondition] = useState("");
-  const [exitCondition, setExitCondition] = useState("");
-  const [positionSize, setPositionSize] = useState("");
-  const [maxLeverage, setMaxLeverage] = useState("");
-  const [stopLoss, setStopLoss] = useState("");
-  const [takeProfit, setTakeProfit] = useState("");
+function JsonStrategyForm() {
+  const [jsonText, setJsonText] = useState(
+    JSON.stringify(
+      {
+        action: "buy",
+        comparison: "open",
+        threshold_pct: 1.0,
+        position_size: 1.0,
+        leverage: 1.0,
+        take_profit_pct: 5.0,
+        stop_loss_pct: 2.0,
+      },
+      null,
+      2
+    )
+  );
+  const [symbols, setSymbols] = useState<string[]>(["AAPLUSDT"]);
+  const [parseError, setParseError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<BacktestMetrics | null>(null);
+  const [result, setResult] = useState<ActivationResult | null>(null);
 
-  const handleBacktest = async () => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setJsonText(String(reader.result));
+      setParseError(null);
+    };
+    reader.readAsText(file);
+  };
+
+  const handleSubmit = async () => {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(jsonText);
+      setParseError(null);
+    } catch (err: any) {
+      setParseError(`Invalid JSON: ${err.message}`);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const data = await apiPost<any>("/strategies/parse", {
-        entry_condition: entryCondition,
-        exit_condition: exitCondition,
-        position_size: positionSize,
-        max_leverage: maxLeverage,
-        stop_loss: stopLoss,
-        take_profit: takeProfit,
-        use_gemini: true,
-      });
-      console.log("STRUCTURED STRATEGY RESPONSE:", data);
+      const data = await parseAndActivate({ strategy: parsed, symbols });
       setResult(data);
     } catch (err: any) {
       setError(err.message);
@@ -140,71 +202,45 @@ function StructuredForm() {
 
   return (
     <div className="form-block">
+      <SymbolSelector symbols={symbols} onChange={setSymbols} />
+
       <div className="form-field">
-        <label className="form-label">Entry condition</label>
-        <input
-          className="form-input"
-          placeholder="e.g. RSI below 30"
-          value={entryCondition}
-          onChange={(e) => setEntryCondition(e.target.value)}
+        <label className="form-label">Strategy JSON</label>
+        <textarea
+          className="form-textarea"
+          style={{ fontFamily: "var(--font-ibm-plex-mono), monospace", minHeight: "180px" }}
+          value={jsonText}
+          onChange={(e) => setJsonText(e.target.value)}
         />
+        {parseError && (
+          <div className="form-hint" style={{ color: "var(--down)", marginTop: "8px" }}>
+            {parseError}
+          </div>
+        )}
+        <div className="form-hint" style={{ marginTop: "8px" }}>
+          Required: action (&quot;buy&quot;/&quot;sell&quot;), comparison (&quot;open&quot;/&quot;close&quot;), threshold_pct.
+          Optional: position_size, leverage, take_profit_pct, stop_loss_pct.
+          This will run live on your account.
+        </div>
       </div>
+
       <div className="form-field">
-        <label className="form-label">Exit condition</label>
+        <label className="form-label">Or upload a .json file</label>
         <input
+          type="file"
+          accept="application/json,.json"
+          onChange={handleFileUpload}
           className="form-input"
-          placeholder="e.g. RSI above 70"
-          value={exitCondition}
-          onChange={(e) => setExitCondition(e.target.value)}
+          style={{ padding: "8px" }}
         />
-      </div>
-      <div className="form-row-split">
-        <div className="form-field">
-          <label className="form-label">Position size</label>
-          <input
-            className="form-input"
-            placeholder="e.g. 10% of portfolio"
-            value={positionSize}
-            onChange={(e) => setPositionSize(e.target.value)}
-          />
-        </div>
-        <div className="form-field">
-          <label className="form-label">Max leverage</label>
-          <input
-            className="form-input"
-            placeholder="e.g. 2x"
-            value={maxLeverage}
-            onChange={(e) => setMaxLeverage(e.target.value)}
-          />
-        </div>
-      </div>
-      <div className="form-row-split">
-        <div className="form-field">
-          <label className="form-label">Stop loss</label>
-          <input
-            className="form-input"
-            placeholder="e.g. 5%"
-            value={stopLoss}
-            onChange={(e) => setStopLoss(e.target.value)}
-          />
-        </div>
-        <div className="form-field">
-          <label className="form-label">Take profit</label>
-          <input
-            className="form-input"
-            placeholder="e.g. 12%"
-            value={takeProfit}
-            onChange={(e) => setTakeProfit(e.target.value)}
-          />
-        </div>
       </div>
 
       <button
         className="btn btn-primary"
-        onClick={handleBacktest}
-        disabled={loading}
+        onClick={handleSubmit}
+        disabled={loading || symbols.length === 0}
       >
-        {loading ? "Running backtest…" : "Run backtest"}
+        {loading ? "Activating…" : "Create & Activate"}
       </button>
 
       {error && (
@@ -213,7 +249,7 @@ function StructuredForm() {
         </div>
       )}
 
-      {result && <BacktestResult metrics={result} />}
+      {result && <ActivationBanner result={result} />}
     </div>
   );
 }
@@ -236,11 +272,11 @@ export default function CustomStrategyTab() {
           className={subTab === "form" ? "active" : ""}
           onClick={() => setSubTab("form")}
         >
-          Form
+          JSON
         </button>
       </div>
 
-      {subTab === "plain-english" ? <PlainEnglishForm /> : <StructuredForm />}
+      {subTab === "plain-english" ? <PlainEnglishForm /> : <JsonStrategyForm />}
     </div>
   );
 }
