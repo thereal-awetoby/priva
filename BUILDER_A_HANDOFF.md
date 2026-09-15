@@ -2,6 +2,8 @@
 
 This is the current handoff for Builder A. The backend is already verified and live on Render, so Builder A should treat the backend as the source of truth for strategy, risk, and execution flows.
 
+> Status update (2026-09-15): the backend work is effectively complete and live, while the remaining active stream is Builder A frontend integration. Builder A should consume the verified API contract, especially the authenticated user-scoped endpoints under `/user/` and the live strategy/risk/paper-trade flows. Builder A should not re-implement backend logic or rebuild the stack without explicit backend direction.
+
 ## 1. Live backend base URL
 
 ```text
