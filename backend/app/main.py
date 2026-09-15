@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI
@@ -52,6 +53,7 @@ market_service = BitgetMarketDataService()
 risk_engine = RiskEngine()
 paper_execution_client = BitgetPaperExecutionClient()
 cycle_logger = SupabaseCycleLogger()
+_daily_balance_baselines: dict[str, tuple[str, float]] = {}
 
 
 def execution_client_for(user: AuthenticatedUser) -> BitgetPaperExecutionClient:
@@ -158,14 +160,14 @@ class StrategyActivationRequest(BaseModel):
 
 
 class AgentSettingsRequest(BaseModel):
-    market: Literal["spot", "futures"]
+    market: Literal["spot", "futures", "autonomous"]
     take_profit_pct: float | None = None
     stop_loss_pct: float | None = None
     close_on_signal_violation: bool | None = None
 
 
 class UserAgentSettingsRequest(BaseModel):
-    market: Literal["spot", "futures"] = "futures"
+    market: Literal["spot", "futures", "autonomous"] = "futures"
     take_profit_pct: float = 5
     stop_loss_pct: float = 2
     close_on_signal_violation: bool = True
@@ -238,6 +240,43 @@ def update_agent_settings(payload: AgentSettingsRequest) -> dict[str, Any]:
 def debug_bitget_account(symbol: str = "AAPLUSDT", user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     client = execution_client_for(user)
     return client.fetch_account_mode(symbol)
+
+
+@app.get("/account/balance")
+def account_balance() -> dict[str, Any]:
+    futures = paper_execution_client.fetch_futures_account_balance()
+    spot = paper_execution_client.fetch_spot_assets()
+    if futures.get("status") == "not_configured" and spot.get("status") == "not_configured":
+        return {"status": "not_configured", "message": "Connect the Bitget demo account first."}
+    spot_assets = spot.get("assets", []) if spot.get("status") == "ok" else []
+    usdt_asset = next(
+        (asset for asset in spot_assets if str(asset.get("coin", "")).upper() == "USDT"),
+        {},
+    )
+    current_equity = float((futures.get("equity") or 0) if futures.get("status") == "ok" else (usdt_asset.get("usdtBalance", usdt_asset.get("balance", 0)) or 0))
+    today = datetime.now(timezone.utc).date().isoformat()
+    baseline_day, starting_balance = _daily_balance_baselines.get("demo-account", (today, current_equity))
+    if baseline_day != today:
+        starting_balance = current_equity
+    _daily_balance_baselines["demo-account"] = (today, starting_balance)
+    daily_change = round(current_equity - starting_balance, 4)
+    daily_change_pct = round((daily_change / starting_balance) * 100, 4) if starting_balance else 0.0
+
+    return {
+        "status": "ok" if futures.get("status") == "ok" or spot.get("status") == "ok" else "error",
+        "source": "bitget_paper",
+        "starting_balance": starting_balance,
+        "current_balance": current_equity,
+        "daily_change": daily_change,
+        "daily_change_pct": daily_change_pct,
+        "futures": futures,
+        "spot": {
+            "status": spot.get("status"),
+            "currency": "USDT",
+            "available": float(usdt_asset.get("available", usdt_asset.get("availableBalance", 0)) or 0),
+            "equity": float(usdt_asset.get("usdtBalance", usdt_asset.get("balance", 0)) or 0),
+        },
+    }
 
 
 @app.get("/user/agent-loop")
@@ -840,6 +879,7 @@ def parse_strategy(payload: dict[str, Any]) -> dict[str, Any]:
                     ("take_profit", "take_profit_pct"),
                     ("stop_loss_pct", "stop_loss_pct"),
                     ("stop_loss", "stop_loss_pct"),
+                    ("market", "market"),
                 ):
                     if key in payload:
                         config[parsed_key] = payload[key]

@@ -252,9 +252,10 @@ async def run_cycle(
             }
             return persist(result)
 
-        selected_market = market_type or MARKET_TYPE
+        configured_market = market_type or MARKET_TYPE
+        selected_market = decision.get("market") if configured_market == "autonomous" else configured_market
         if selected_market not in {"spot", "futures"}:
-            raise ValueError("market must be spot or futures")
+            raise ValueError("agent decision must select spot or futures")
         trade = {
             "symbol": symbol.upper(),
             "side": decision["action"],

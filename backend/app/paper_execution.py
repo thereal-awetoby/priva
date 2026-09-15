@@ -18,6 +18,7 @@ class BitgetPaperExecutionClient:
     FUTURES_ORDER_PATH = "/api/v2/mix/order/place-order"
     FUTURES_LEVERAGE_PATH = "/api/v2/mix/account/set-leverage"
     FUTURES_FLASH_CLOSE_PATH = "/api/v2/mix/order/close-positions"
+    FUTURES_ACCOUNT_PATH = "/api/v2/mix/account/account"
     SPOT_ORDER_PATH = "/api/v2/spot/trade/place-order"
     SPOT_ASSETS_PATH = "/api/v2/spot/account/assets"
 
@@ -368,6 +369,48 @@ class BitgetPaperExecutionClient:
             return {"status": "rejected", "message": str(exc), "assets": []}
         except (requests.RequestException, ValueError) as exc:
             return {"status": "execution_error", "message": str(exc), "assets": []}
+
+    def fetch_futures_account_balance(self, symbol: str = "AAPLUSDT") -> dict[str, Any]:
+        if not self.configured:
+            return {"status": "not_configured"}
+
+        query = f"?symbol={symbol.upper()}&marginCoin=USDT&productType=USDT-FUTURES"
+        timestamp = str(int(time.time() * 1000))
+        prehash = timestamp + "GET" + self.FUTURES_ACCOUNT_PATH + query
+        signature = base64.b64encode(
+            hmac.new(self.api_secret.encode(), prehash.encode(), hashlib.sha256).digest()
+        ).decode()
+        headers = {
+            "ACCESS-KEY": self.api_key,
+            "ACCESS-SIGN": signature,
+            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-PASSPHRASE": self.passphrase,
+            "paptrading": "1",
+        }
+        try:
+            response = self.session.get(
+                f"{self.BASE_URL}{self.FUTURES_ACCOUNT_PATH}{query}",
+                headers=headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in (None, "00000", 0, "0"):
+                return {"status": "rejected", "message": payload.get("msg", "Account balance query rejected")}
+            data = payload.get("data") or {}
+            return {
+                "status": "ok",
+                "symbol": symbol.upper(),
+                "currency": "USDT",
+                "equity": float(data.get("accountEquity", data.get("usdtEquity", 0)) or 0),
+                "available": float(data.get("available", data.get("availableBalance", 0)) or 0),
+                "unrealized_pnl": float(data.get("unrealizedPL", 0) or 0),
+                "position_mode": self.normalize_position_mode(data.get("posMode")),
+            }
+        except requests.HTTPError as exc:
+            return {"status": "rejected", "message": str(exc)}
+        except (requests.RequestException, ValueError) as exc:
+            return {"status": "execution_error", "message": str(exc)}
 
     def fetch_account_mode(self, symbol: str = "AAPLUSDT") -> dict[str, Any]:
         """Return the Bitget futures position mode without exposing account data."""

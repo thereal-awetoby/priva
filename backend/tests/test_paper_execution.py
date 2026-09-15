@@ -376,6 +376,34 @@ def test_paper_client_reads_sanitized_account_mode(monkeypatch):
     assert "available" not in result
 
 
+def test_paper_client_reads_futures_account_balance(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    class AccountSession(FakeSession):
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return FakeResponse({
+                "code": "00000",
+                "data": {
+                    "accountEquity": "1000.5",
+                    "available": "925.25",
+                    "unrealizedPL": "4.25",
+                    "posMode": "one_way",
+                },
+            })
+
+    session = AccountSession()
+    result = BitgetPaperExecutionClient(session=session).fetch_futures_account_balance()
+
+    assert result["status"] == "ok"
+    assert result["equity"] == 1000.5
+    assert result["available"] == 925.25
+    assert result["unrealized_pnl"] == 4.25
+    assert session.calls[0][0].endswith("/api/v2/mix/account/account?symbol=AAPLUSDT&marginCoin=USDT&productType=USDT-FUTURES")
+
+
 def test_paper_client_normalizes_hedge_mode_aliases(monkeypatch):
     monkeypatch.setenv("BITGET_API_KEY", "key")
     monkeypatch.setenv("BITGET_API_SECRET", "secret")

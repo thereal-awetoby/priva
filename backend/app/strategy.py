@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from math import sqrt
 from typing import Any, Literal
 
@@ -19,6 +19,7 @@ class Decision:
     signal_strength: float = 0.0
     take_profit_pct: float | None = None
     stop_loss_pct: float | None = None
+    market: Literal["spot", "futures"] | None = None
 
 
 def _adaptive_leverage(signal_strength: float) -> float:
@@ -126,6 +127,7 @@ def _apply_builtin_strategy_config(strategy_id: str, decision: Decision) -> Deci
     leverage = float(config.get("leverage", decision.leverage) or decision.leverage)
     take_profit_pct = config.get("take_profit_pct", decision.take_profit_pct)
     stop_loss_pct = config.get("stop_loss_pct", decision.stop_loss_pct)
+    market = config.get("market", decision.market)
 
     return Decision(
         action=decision.action,
@@ -135,6 +137,7 @@ def _apply_builtin_strategy_config(strategy_id: str, decision: Decision) -> Deci
         signal_strength=decision.signal_strength,
         take_profit_pct=take_profit_pct,
         stop_loss_pct=stop_loss_pct,
+        market=market,
     )
 
 
@@ -177,6 +180,12 @@ def configure_builtin_strategy(strategy_id: str, config: dict[str, Any]) -> None
                 normalized[field.replace("take_profit", "take_profit_pct").replace("stop_loss", "stop_loss_pct")] = float(config[field])
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"strategy {field} must be numeric") from exc
+
+    if "market" in config:
+        market = str(config["market"]).strip().lower()
+        if market not in {"spot", "futures"}:
+            raise ValueError("strategy market must be spot or futures")
+        normalized["market"] = market
 
     _set_builtin_strategy_config(strategy_id, normalized)
 
@@ -515,6 +524,11 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
 
         take_profit_pct = payload.get("take_profit_pct", payload.get("take_profit"))
         stop_loss_pct = payload.get("stop_loss_pct", payload.get("stop_loss"))
+        market = payload.get("market")
+        if market is not None:
+            market = str(market).strip().lower()
+            if market not in {"spot", "futures"}:
+                raise ValueError("structured strategy market must be spot or futures")
 
         result = {
             "kind": "builtin",
@@ -528,6 +542,8 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
             result["take_profit_pct"] = float(take_profit_pct)
         if stop_loss_pct is not None:
             result["stop_loss_pct"] = float(stop_loss_pct)
+        if market is not None:
+            result["market"] = market
         return result
 
     action = str(payload.get("action", "buy")).lower()
@@ -568,6 +584,11 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
 
     take_profit_pct = payload.get("take_profit_pct", payload.get("take_profit"))
     stop_loss_pct = payload.get("stop_loss_pct", payload.get("stop_loss"))
+    market = payload.get("market")
+    if market is not None:
+        market = str(market).strip().lower()
+        if market not in {"spot", "futures"}:
+            raise ValueError("structured strategy market must be spot or futures")
 
     result = {
         "kind": "custom",
@@ -581,6 +602,8 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
         result["take_profit_pct"] = float(take_profit_pct)
     if stop_loss_pct is not None:
         result["stop_loss_pct"] = float(stop_loss_pct)
+    if market is not None:
+        result["market"] = market
     return result
 
 
@@ -629,6 +652,7 @@ def register_custom_strategy(strategy_id: str, parsed_strategy: dict[str, Any]) 
     leverage = float(parsed_strategy.get("leverage", 1.0) or 1.0)
     take_profit_pct = parsed_strategy.get("take_profit_pct")
     stop_loss_pct = parsed_strategy.get("stop_loss_pct")
+    market = parsed_strategy.get("market")
 
     def custom_strategy(ticker: dict[str, Any]) -> Decision:
         if ticker.get("status") != "live":
@@ -656,6 +680,7 @@ def register_custom_strategy(strategy_id: str, parsed_strategy: dict[str, Any]) 
                     round(strength, 4),
                     take_profit_pct,
                     stop_loss_pct,
+                    market,
                 )
             return Decision("hold", 0.0, 1.0, f"custom strategy: price not yet above {comparison} by {threshold_pct}%")
 
@@ -669,6 +694,7 @@ def register_custom_strategy(strategy_id: str, parsed_strategy: dict[str, Any]) 
                 round(strength, 4),
                 take_profit_pct,
                 stop_loss_pct,
+                market,
             )
 
         return Decision("hold", 0.0, 1.0, f"custom strategy: price not yet below {comparison} by {threshold_pct}%")
@@ -686,6 +712,8 @@ def build_signal_from_ticker(ticker: dict[str, Any], strategy_id: str | None = N
     selected_strategy_id = strategy_id or get_strategy_for_symbol(str(ticker.get("symbol", "")))
     decision = STRATEGIES[selected_strategy_id](ticker)
     decision = _apply_builtin_strategy_config(selected_strategy_id, decision)
+    if decision.market is None:
+        decision = replace(decision, market="futures" if decision.action != "hold" and decision.leverage > 1 else "spot")
     return decision_to_dict(decision)
 
 

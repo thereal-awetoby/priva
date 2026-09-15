@@ -176,6 +176,44 @@ def test_agent_cycle_uses_selected_spot_market():
     assert execution.trades[0]["market"] == "spot"
 
 
+def test_agent_cycle_autonomously_selects_spot_for_one_x_signal():
+    execution = FakeExecutionClient()
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+            market_type="autonomous",
+        )
+    )
+
+    assert result["status"] == "submitted"
+    assert result["decision"]["market"] == "spot"
+    assert execution.trades[0]["market"] == "spot"
+
+
+def test_agent_cycle_autonomously_selects_futures_for_strong_signal():
+    class StrongMarketService:
+        def fetch_spot_ticker(self, symbol):
+            return {"symbol": symbol, "last_price": 180.0, "open_price": 100.0, "status": "live"}
+
+    execution = FakeExecutionClient()
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=StrongMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+            market_type="autonomous",
+        )
+    )
+
+    assert result["status"] == "submitted"
+    assert result["decision"]["market"] == "futures"
+    assert execution.trades[0]["market"] == "futures"
+
+
 def test_agent_cycle_does_not_execute_hold_signal():
     class FlatMarketService:
         def fetch_spot_ticker(self, symbol):

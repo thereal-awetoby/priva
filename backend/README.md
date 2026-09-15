@@ -35,6 +35,7 @@ Then open:
 - http://127.0.0.1:8001/positions
 - http://127.0.0.1:8001/pnl
 - http://127.0.0.1:8001/risk-usage
+- http://127.0.0.1:8001/account/balance
 - http://127.0.0.1:8001/agent-loop
 - http://127.0.0.1:8001/strategies
 
@@ -63,6 +64,14 @@ Bitget's paper environment. Configure these secrets in Render's environment sett
 
 The client always sends Bitget's `paptrading: 1` header. Without all three
 secrets, the route returns `not_configured` and does not call the exchange.
+
+`GET /account/balance` reads the connected demo account's futures equity and
+available USDT margin, plus spot USDT availability. It is read-only. Demo
+funds must be added through Bitget's demo-trading interface or supported demo
+funding workflow; normal trading API credentials cannot mint account balance.
+The response also includes `starting_balance`, `daily_change`, and
+`daily_change_pct`; the baseline is the first observed balance for the current
+UTC day.
 
 For the single-workspace demo, users can connect credentials through
 `POST /connection/bitget`. The backend verifies them against Bitget before

@@ -26,6 +26,17 @@ class ActiveExecutionClient:
         }
 
 
+class BalanceExecutionClient:
+    def __init__(self, equity):
+        self.equity = equity
+
+    def fetch_futures_account_balance(self):
+        return {"status": "ok", "equity": self.equity, "available": self.equity}
+
+    def fetch_spot_assets(self):
+        return {"status": "ok", "assets": []}
+
+
 def test_pnl_uses_live_positions_and_zero_realized_without_cycles(monkeypatch):
     monkeypatch.setattr(main, "paper_execution_client", EmptyExecutionClient())
     monkeypatch.setattr(main.cycle_logger, "fetch_cycles", lambda **kwargs: [])
@@ -36,6 +47,21 @@ def test_pnl_uses_live_positions_and_zero_realized_without_cycles(monkeypatch):
     assert result["realized_pnl"] == 0.0
     assert result["total_pnl"] == 0.0
     assert result["source"] == "bitget_and_supabase"
+
+
+def test_account_balance_reports_daily_change_percent(monkeypatch):
+    main._daily_balance_baselines.clear()
+    client = BalanceExecutionClient(1000.0)
+    monkeypatch.setattr(main, "paper_execution_client", client)
+
+    first = main.account_balance()
+    assert first["starting_balance"] == 1000.0
+    assert first["daily_change_pct"] == 0.0
+
+    client.equity = 1100.0
+    second = main.account_balance()
+    assert second["daily_change"] == 100.0
+    assert second["daily_change_pct"] == 10.0
 
 
 def test_risk_usage_reflects_live_position(monkeypatch):

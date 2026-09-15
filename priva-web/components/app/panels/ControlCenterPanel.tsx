@@ -18,20 +18,28 @@ const strategyLog = [
   { time: "09:50", text: "Backtest refreshed — Quiet Momentum" },
 ];
 
+type AccountBalance = {
+  status?: string;
+  daily_change_pct?: number;
+  futures?: { equity?: number; available?: number };
+  spot?: { available?: number };
+};
+
 export default function ControlCenterPanel() {
   const [mode, setMode] = useState<"autonomous" | "strategy">("autonomous");
-  const [market, setMarket] = useState<"futures" | "spot">("futures");
+  const [market, setMarket] = useState<"futures" | "spot" | "autonomous">("autonomous");
   const [takeProfit, setTakeProfit] = useState("5");
   const [stopLoss, setStopLoss] = useState("2");
   const [closeOnViolation, setCloseOnViolation] = useState(true);
   const [savingMarket, setSavingMarket] = useState(false);
+  const [accountBalance, setAccountBalance] = useState<AccountBalance | null>(null);
   const log = mode === "autonomous" ? autonomousLog : strategyLog;
 
   useEffect(() => {
     fetch(`${API_BASE}/agent-settings`)
-      .then((response) => response.json() as Promise<{ market?: "futures" | "spot" }>)
+      .then((response) => response.json() as Promise<{ market?: "futures" | "spot" | "autonomous" }>)
       .then((payload) => {
-        if (payload.market === "spot" || payload.market === "futures") {
+        if (payload.market === "spot" || payload.market === "futures" || payload.market === "autonomous") {
           setMarket(payload.market);
         }
         if (payload.take_profit_pct != null) setTakeProfit(String(payload.take_profit_pct));
@@ -41,7 +49,14 @@ export default function ControlCenterPanel() {
       .catch(() => undefined);
   }, []);
 
-  const updateMarket = async (nextMarket: "futures" | "spot") => {
+  useEffect(() => {
+    fetch(`${API_BASE}/account/balance`)
+      .then((response) => response.json() as Promise<AccountBalance>)
+      .then((payload) => setAccountBalance(payload))
+      .catch(() => setAccountBalance(null));
+  }, []);
+
+  const updateMarket = async (nextMarket: "futures" | "spot" | "autonomous") => {
     setMarket(nextMarket);
     setSavingMarket(true);
     try {
@@ -59,7 +74,7 @@ export default function ControlCenterPanel() {
         throw new Error("Unable to update market");
       }
     } catch {
-      setMarket(nextMarket === "futures" ? "spot" : "futures");
+      setMarket(nextMarket);
     } finally {
       setSavingMarket(false);
     }
@@ -82,13 +97,16 @@ export default function ControlCenterPanel() {
         <div className="config-head">
           <h3 className="config-title">Autonomous execution market</h3>
         </div>
-        <p className="config-desc">Choose whether autonomous orders use Bitget spot or USDT futures.</p>
+        <p className="config-desc">Choose a fixed venue or let the agent select spot or USDT futures per signal.</p>
         <div className="mode-switch" aria-label="Autonomous execution market">
           <button className={market === "futures" ? "active" : ""} onClick={() => updateMarket("futures")} disabled={savingMarket}>
             Futures
           </button>
           <button className={market === "spot" ? "active" : ""} onClick={() => updateMarket("spot")} disabled={savingMarket}>
             Spot
+          </button>
+          <button className={market === "autonomous" ? "active" : ""} onClick={() => updateMarket("autonomous")} disabled={savingMarket}>
+            Agent choice
           </button>
         </div>
         <div className="config-rows" style={{ marginTop: 16 }}>
@@ -112,12 +130,24 @@ export default function ControlCenterPanel() {
 
       <div className="perf-row">
         <div className="perf-cell">
-          <div className="perf-label">Total P&amp;L</div>
-          <div className="perf-value up">+$18,240.12</div>
+          <div className="perf-label">Demo futures equity</div>
+          <div className="perf-value">
+            {accountBalance?.futures?.equity != null ? `$${accountBalance.futures.equity.toFixed(2)}` : "—"}
+          </div>
         </div>
         <div className="perf-cell">
-          <div className="perf-label">Today&apos;s P&amp;L</div>
-          <div className="perf-value up">+$412.30</div>
+          <div className="perf-label">Available to trade</div>
+          <div className="perf-value">
+            {accountBalance?.futures?.available != null ? `$${accountBalance.futures.available.toFixed(2)}` : "—"}
+          </div>
+        </div>
+        <div className="perf-cell">
+          <div className="perf-label">Today</div>
+          <div className={`perf-value ${(accountBalance?.daily_change_pct ?? 0) >= 0 ? "up" : "down"}`}>
+            {accountBalance?.daily_change_pct != null
+              ? `${accountBalance.daily_change_pct >= 0 ? "+" : ""}${accountBalance.daily_change_pct.toFixed(2)}%`
+              : "—"}
+          </div>
         </div>
         <div className="perf-cell">
           <div className="perf-label">Win rate</div>

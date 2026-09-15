@@ -45,6 +45,27 @@ def test_parse_structured_strategy_supports_position_size():
     assert signal["size"] == 0.5
 
 
+def test_parse_structured_strategy_supports_market_selection():
+    parsed = parse_structured_strategy({
+        "action": "buy",
+        "comparison": "open",
+        "threshold_pct": 1.5,
+        "market": "spot",
+    })
+
+    assert parsed["market"] == "spot"
+
+
+def test_parse_structured_strategy_rejects_invalid_market():
+    with pytest.raises(ValueError, match="market"):
+        parse_structured_strategy({
+            "action": "buy",
+            "comparison": "open",
+            "threshold_pct": 1.5,
+            "market": "options",
+        })
+
+
 def test_parse_natural_language_strategy_requires_explicit_threshold():
     with pytest.raises(ValueError, match="threshold"):
         parse_natural_language_strategy("mean reversion")
