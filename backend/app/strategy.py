@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from math import sqrt
 from typing import Any, Literal
 
@@ -17,6 +17,19 @@ class Decision:
     leverage: float
     reason: str
     signal_strength: float = 0.0
+    take_profit_pct: float | None = None
+    stop_loss_pct: float | None = None
+    market: Literal["spot", "futures"] | None = None
+
+
+def _adaptive_leverage(signal_strength: float) -> float:
+    """Scale default futures leverage with signal confidence, capped at 3x."""
+    strength = min(1.0, max(0.0, float(signal_strength)))
+    if strength >= 0.66:
+        return 3.0
+    if strength >= 0.33:
+        return 2.0
+    return 1.0
 
 
 def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
@@ -35,7 +48,9 @@ def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
         signal = "hold"
         strength = 0.0
 
-    return Decision(signal, 1.0 if signal != "hold" else 0.0, 1.0, "simple price-vs-open momentum signal", round(strength, 4))
+    rounded_strength = round(strength, 4)
+    leverage = _adaptive_leverage(rounded_strength) if signal != "hold" else 1.0
+    return Decision(signal, 1.0 if signal != "hold" else 0.0, leverage, "simple price-vs-open momentum signal", rounded_strength)
 
 
 def _mean_reversion_strategy(ticker: dict[str, Any]) -> Decision:
@@ -47,19 +62,132 @@ def _mean_reversion_strategy(ticker: dict[str, Any]) -> Decision:
     if last_price <= 0 or open_price <= 0:
         return Decision("hold", 0.0, 1.0, "invalid market prices")
 
-    deviation = (last_price - open_price) / open_price
-    if deviation >= 0.01:
-        return Decision("sell", 1.0, 1.0, "mean reversion: price extended above open", round(min(1.0, deviation), 4))
-    if deviation <= -0.01:
-        return Decision("buy", 1.0, 1.0, "mean reversion: price extended below open", round(min(1.0, abs(deviation)), 4))
-    return Decision("hold", 0.0, 1.0, "mean reversion: price within neutral band")
+    config = _get_builtin_strategy_config("mean_reversion")
+    threshold_pct = float(config.get("threshold_pct", 1.0) or 1.0)
+    threshold = threshold_pct / 100.0
 
+    deviation = (last_price - open_price) / open_price
+    if deviation >= threshold:
+        strength = round(min(1.0, deviation / max(threshold, 0.01)), 4)
+        leverage_signal = min(1.0, deviation / max(threshold * 4, 0.01))
+        return Decision("sell", 1.0, _adaptive_leverage(leverage_signal), f"mean reversion: price extended above open by {threshold_pct}%", strength)
+    if deviation <= -threshold:
+        strength = round(min(1.0, abs(deviation) / max(threshold, 0.01)), 4)
+        leverage_signal = min(1.0, abs(deviation) / max(threshold * 4, 0.01))
+        return Decision("buy", 1.0, _adaptive_leverage(leverage_signal), f"mean reversion: price extended below open by {threshold_pct}%", strength)
+    return Decision("hold", 0.0, 1.0, "mean reversion: price within neutral band", 0.0)
+
+
+STRATEGY_CATALOG = {
+    "momentum_breakout": {
+        "id": "momentum_breakout",
+        "name": "Momentum Breakout",
+        "type": "prebuilt",
+        "description": "Long when trend and volume accelerate above baseline.",
+    },
+    "mean_reversion": {
+        "id": "mean_reversion",
+        "name": "Mean Reversion",
+        "type": "prebuilt",
+        "description": "Fade moves that extend at least 1% away from the opening price.",
+    },
+}
 
 STRATEGIES = {
     "momentum_breakout": _momentum_strategy,
     "mean_reversion": _mean_reversion_strategy,
 }
+
+_registered_strategy_catalog = dict(STRATEGY_CATALOG)
 _active_strategy_id = "momentum_breakout"
+_builtin_strategy_configs: dict[str, dict[str, Any]] = {}
+_symbol_strategy_ids: dict[str, str] = {}
+
+
+def _set_builtin_strategy_config(strategy_id: str, config: dict[str, Any]) -> None:
+    if strategy_id not in STRATEGIES:
+        raise ValueError(f"unknown strategy: {strategy_id}")
+
+    normalized = dict(config or {})
+    existing = dict(_builtin_strategy_configs.get(strategy_id, {}) or {})
+    existing.update(normalized)
+    _builtin_strategy_configs[strategy_id] = existing
+
+
+def _get_builtin_strategy_config(strategy_id: str) -> dict[str, Any]:
+    return dict(_builtin_strategy_configs.get(strategy_id, {}) or {})
+
+
+def _apply_builtin_strategy_config(strategy_id: str, decision: Decision) -> Decision:
+    config = _get_builtin_strategy_config(strategy_id)
+    if not config:
+        return decision
+
+    size = float(config.get("position_size", decision.size) or decision.size)
+    leverage = float(config.get("leverage", decision.leverage) or decision.leverage)
+    take_profit_pct = config.get("take_profit_pct", decision.take_profit_pct)
+    stop_loss_pct = config.get("stop_loss_pct", decision.stop_loss_pct)
+    market = config.get("market", decision.market)
+
+    return Decision(
+        action=decision.action,
+        size=size,
+        leverage=leverage,
+        reason=decision.reason,
+        signal_strength=decision.signal_strength,
+        take_profit_pct=take_profit_pct,
+        stop_loss_pct=stop_loss_pct,
+        market=market,
+    )
+
+
+def configure_builtin_strategy(strategy_id: str, config: dict[str, Any]) -> None:
+    if strategy_id not in STRATEGIES:
+        raise ValueError(f"unknown strategy: {strategy_id}")
+
+    if not isinstance(config, dict):
+        raise ValueError("strategy configuration must be an object")
+
+    normalized = {}
+
+    if "threshold_pct" in config:
+        try:
+            normalized["threshold_pct"] = float(config["threshold_pct"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("strategy threshold_pct must be numeric") from exc
+
+    for field in ("position_size", "size"):
+        if field in config:
+            try:
+                normalized["position_size"] = float(config[field])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("strategy position_size must be numeric") from exc
+            if normalized["position_size"] <= 0:
+                raise ValueError("strategy position_size must be greater than zero")
+
+    for field in ("leverage",):
+        if field in config:
+            try:
+                normalized[field] = float(config[field])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"strategy {field} must be numeric") from exc
+            if normalized[field] <= 0:
+                raise ValueError(f"strategy {field} must be greater than zero")
+
+    for field in ("take_profit_pct", "take_profit", "stop_loss_pct", "stop_loss"):
+        if field in config and config[field] is not None:
+            try:
+                normalized[field.replace("take_profit", "take_profit_pct").replace("stop_loss", "stop_loss_pct")] = float(config[field])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"strategy {field} must be numeric") from exc
+
+    if "market" in config:
+        market = str(config["market"]).strip().lower()
+        if market not in {"spot", "futures"}:
+            raise ValueError("strategy market must be spot or futures")
+        normalized["market"] = market
+
+    _set_builtin_strategy_config(strategy_id, normalized)
 
 
 def _coerce_price(value: Any) -> float:
@@ -362,6 +490,62 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("strategy payload must be an object")
 
+    if payload.get("target_strategy"):
+        target_strategy = str(payload.get("target_strategy")).lower()
+        if target_strategy not in STRATEGIES:
+            raise ValueError("structured strategy target_strategy must be a supported builtin strategy")
+
+        threshold_pct = payload.get("threshold_pct", payload.get("threshold"))
+        if threshold_pct is not None:
+            try:
+                threshold_pct = float(threshold_pct)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("structured strategy threshold_pct must be numeric") from exc
+        else:
+            threshold_pct = 1.0 if target_strategy == "mean_reversion" else None
+
+        position_size_raw = payload.get("position_size", payload.get("size", 1.0))
+        if position_size_raw is None:
+            position_size_raw = 1.0
+        try:
+            position_size = float(position_size_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("structured strategy position_size must be numeric") from exc
+        if position_size <= 0:
+            raise ValueError("structured strategy position_size must be greater than zero")
+
+        leverage_raw = payload.get("leverage", 1.0)
+        try:
+            leverage = float(leverage_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("structured strategy leverage must be numeric") from exc
+        if leverage <= 0:
+            raise ValueError("structured strategy leverage must be greater than zero")
+
+        take_profit_pct = payload.get("take_profit_pct", payload.get("take_profit"))
+        stop_loss_pct = payload.get("stop_loss_pct", payload.get("stop_loss"))
+        market = payload.get("market")
+        if market is not None:
+            market = str(market).strip().lower()
+            if market not in {"spot", "futures"}:
+                raise ValueError("structured strategy market must be spot or futures")
+
+        result = {
+            "kind": "builtin",
+            "target_strategy": target_strategy,
+            "position_size": position_size,
+            "leverage": leverage,
+        }
+        if threshold_pct is not None:
+            result["threshold_pct"] = threshold_pct
+        if take_profit_pct is not None:
+            result["take_profit_pct"] = float(take_profit_pct)
+        if stop_loss_pct is not None:
+            result["stop_loss_pct"] = float(stop_loss_pct)
+        if market is not None:
+            result["market"] = market
+        return result
+
     action = str(payload.get("action", "buy")).lower()
     if action not in {"buy", "sell"}:
         raise ValueError("structured strategy action must be buy or sell")
@@ -378,12 +562,49 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError) as exc:
         raise ValueError("structured strategy threshold_pct must be numeric") from exc
 
-    return {
+    position_size_raw = payload.get("position_size", payload.get("size", 1.0))
+    if position_size_raw is None:
+        position_size_raw = 1.0
+
+    try:
+        position_size = float(position_size_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("structured strategy position_size must be numeric") from exc
+
+    if position_size <= 0:
+        raise ValueError("structured strategy position_size must be greater than zero")
+
+    leverage_raw = payload.get("leverage", 1.0)
+    try:
+        leverage = float(leverage_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("structured strategy leverage must be numeric") from exc
+    if leverage <= 0:
+        raise ValueError("structured strategy leverage must be greater than zero")
+
+    take_profit_pct = payload.get("take_profit_pct", payload.get("take_profit"))
+    stop_loss_pct = payload.get("stop_loss_pct", payload.get("stop_loss"))
+    market = payload.get("market")
+    if market is not None:
+        market = str(market).strip().lower()
+        if market not in {"spot", "futures"}:
+            raise ValueError("structured strategy market must be spot or futures")
+
+    result = {
         "kind": "custom",
         "action": action,
         "comparison": comparison,
         "threshold_pct": threshold_pct,
+        "position_size": position_size,
+        "leverage": leverage,
     }
+    if take_profit_pct is not None:
+        result["take_profit_pct"] = float(take_profit_pct)
+    if stop_loss_pct is not None:
+        result["stop_loss_pct"] = float(stop_loss_pct)
+    if market is not None:
+        result["market"] = market
+    return result
 
 
 def decision_to_dict(decision: Decision) -> dict[str, Any]:
@@ -402,5 +623,99 @@ def activate_strategy(strategy_id: str) -> bool:
     return True
 
 
-def build_signal_from_ticker(ticker: dict[str, Any]) -> dict[str, Any]:
-    return decision_to_dict(STRATEGIES[_active_strategy_id](ticker))
+def configure_symbol_strategies(strategy_by_symbol: dict[str, str]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for symbol, strategy_id in strategy_by_symbol.items():
+        normalized_symbol = str(symbol).strip().upper()
+        if strategy_id not in STRATEGIES:
+            raise ValueError(f"unknown strategy: {strategy_id}")
+        if normalized_symbol:
+            normalized[normalized_symbol] = strategy_id
+    _symbol_strategy_ids.clear()
+    _symbol_strategy_ids.update(normalized)
+    return dict(_symbol_strategy_ids)
+
+
+def get_strategy_for_symbol(symbol: str) -> str:
+    return _symbol_strategy_ids.get(str(symbol).strip().upper(), _active_strategy_id)
+
+
+def register_custom_strategy(strategy_id: str, parsed_strategy: dict[str, Any]) -> None:
+    strategy_type = str(parsed_strategy.get("kind", "custom")).lower()
+    if strategy_type != "custom":
+        return
+
+    action = str(parsed_strategy.get("action", "buy")).lower()
+    comparison = str(parsed_strategy.get("comparison", "open")).lower()
+    threshold_pct = float(parsed_strategy.get("threshold_pct", 0.0) or 0.0)
+    position_size = float(parsed_strategy.get("position_size", parsed_strategy.get("size", 1.0)) or 1.0)
+    leverage = float(parsed_strategy.get("leverage", 1.0) or 1.0)
+    take_profit_pct = parsed_strategy.get("take_profit_pct")
+    stop_loss_pct = parsed_strategy.get("stop_loss_pct")
+    market = parsed_strategy.get("market")
+
+    def custom_strategy(ticker: dict[str, Any]) -> Decision:
+        if ticker.get("status") != "live":
+            return Decision("hold", 0.0, 1.0, "market feed unavailable; fallback mode active")
+
+        last_price = float(ticker.get("last_price", 0.0) or 0.0)
+        open_price = float(ticker.get("open_price", 0.0) or 0.0)
+        comparison_price = float(ticker.get("close_price", open_price) or open_price)
+        if comparison == "close":
+            comparison_price = float(ticker.get("close_price", 0.0) or 0.0)
+        if comparison_price <= 0 or last_price <= 0:
+            return Decision("hold", 0.0, 1.0, "invalid market prices")
+
+        deviation = (last_price - comparison_price) / comparison_price
+        threshold = threshold_pct / 100.0
+
+        if action == "buy":
+            if deviation >= threshold:
+                strength = min(1.0, max(0.0, deviation / max(threshold, 0.01)))
+                return Decision(
+                    "buy",
+                    position_size,
+                    leverage,
+                    f"custom strategy: price above {comparison} by {threshold_pct}%",
+                    round(strength, 4),
+                    take_profit_pct,
+                    stop_loss_pct,
+                    market,
+                )
+            return Decision("hold", 0.0, 1.0, f"custom strategy: price not yet above {comparison} by {threshold_pct}%")
+
+        if deviation <= -threshold:
+            strength = min(1.0, max(0.0, abs(deviation) / max(threshold, 0.01)))
+            return Decision(
+                "sell",
+                position_size,
+                leverage,
+                f"custom strategy: price below {comparison} by {threshold_pct}%",
+                round(strength, 4),
+                take_profit_pct,
+                stop_loss_pct,
+                market,
+            )
+
+        return Decision("hold", 0.0, 1.0, f"custom strategy: price not yet below {comparison} by {threshold_pct}%")
+
+    STRATEGIES[strategy_id] = custom_strategy
+    _registered_strategy_catalog[strategy_id] = {
+        "id": strategy_id,
+        "name": f"Custom {action.upper()} on {comparison.upper()}",
+        "type": "structured",
+        "description": f"Custom {action} signal using {comparison} comparison with a {threshold_pct}% threshold.",
+    }
+
+
+def build_signal_from_ticker(ticker: dict[str, Any], strategy_id: str | None = None) -> dict[str, Any]:
+    selected_strategy_id = strategy_id or get_strategy_for_symbol(str(ticker.get("symbol", "")))
+    decision = STRATEGIES[selected_strategy_id](ticker)
+    decision = _apply_builtin_strategy_config(selected_strategy_id, decision)
+    if decision.market is None:
+        decision = replace(decision, market="futures" if decision.action != "hold" and decision.leverage > 1 else "spot")
+    return decision_to_dict(decision)
+
+
+def list_strategy_catalog() -> dict[str, dict[str, Any]]:
+    return dict(_registered_strategy_catalog)

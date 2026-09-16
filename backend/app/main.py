@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any, Literal
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -13,15 +14,23 @@ from app.performance import calculate_unrealized_pnl
 from app.risk_engine import RiskEngine
 from app.strategy import (
     STRATEGIES,
+    STRATEGY_CATALOG,
     activate_strategy as set_active_strategy,
     backtest_strategy,
     build_signal_from_ticker,
+    configure_builtin_strategy,
     get_active_strategy_id,
+    configure_symbol_strategies,
+    get_strategy_for_symbol,
+    list_strategy_catalog,
     parse_natural_language_strategy,
     parse_structured_strategy,
+    register_custom_strategy,
 )
 from app import agent_loop
 from app.supabase_logging import SupabaseCycleLogger
+from app.auth import AuthenticatedUser, credential_vault, current_user, supabase_auth
+from app.user_runtime import user_runtime_registry
 
 app = FastAPI(
     title="Priva Backend",
@@ -44,6 +53,24 @@ market_service = BitgetMarketDataService()
 risk_engine = RiskEngine()
 paper_execution_client = BitgetPaperExecutionClient()
 cycle_logger = SupabaseCycleLogger()
+_daily_balance_baselines: dict[str, tuple[str, float]] = {}
+
+
+def execution_client_for(user: AuthenticatedUser) -> BitgetPaperExecutionClient:
+    credentials = credential_vault.get(user.id)
+    if credentials is None and credential_vault.configured:
+        encrypted = cycle_logger.fetch_user_credentials(user.id)
+        if encrypted and credential_vault.import_encrypted(user.id, encrypted):
+            credentials = credential_vault.get(user.id)
+    if credentials:
+        client = BitgetPaperExecutionClient(session=paper_execution_client.session)
+        client.configure_credentials(
+            credentials["api_key"], credentials["api_secret"], credentials["passphrase"]
+        )
+        return client
+    if user.id == "local-development" and not supabase_auth.required:
+        return paper_execution_client
+    return BitgetPaperExecutionClient(session=paper_execution_client.session)
 
 
 def process_market_cycle(
@@ -102,6 +129,17 @@ class KillSwitchRequest(BaseModel):
     enabled: bool
 
 
+class IntentEvaluationRequest(BaseModel):
+    strategy_id: str | None = None
+    symbol: str
+    side: Literal["buy", "sell"]
+    qty: float
+    entry_price: float
+    leverage: float = 1.0
+    current_positions: list[dict[str, Any]] | None = None
+    current_daily_pnl: float = 0.0
+
+
 class TradeRequest(BaseModel):
     symbol: str
     side: str
@@ -114,6 +152,40 @@ class TradeRequest(BaseModel):
 class ClosePositionRequest(BaseModel):
     position_side: Literal["buy", "sell"]
     qty: float | None = None
+
+
+class StrategyActivationRequest(BaseModel):
+    symbols: list[str] | None = None
+    strategy_by_symbol: dict[str, str] | None = None
+
+
+class AgentSettingsRequest(BaseModel):
+    market: Literal["spot", "futures", "autonomous"]
+    take_profit_pct: float | None = None
+    stop_loss_pct: float | None = None
+    close_on_signal_violation: bool | None = None
+
+
+class UserAgentSettingsRequest(BaseModel):
+    market: Literal["spot", "futures", "autonomous"] = "futures"
+    take_profit_pct: float = 5
+    stop_loss_pct: float = 2
+    close_on_signal_violation: bool = True
+    symbols: list[str] | None = None
+    strategy_id: str | None = None
+    strategy_by_symbol: dict[str, str] | None = None
+    max_position_size: float = 25000
+    max_daily_loss: float = 1500
+    max_leverage: float = 5
+    risk_enabled: bool = True
+    allowed_symbols: list[str] | None = None
+
+
+class BitgetConnectionRequest(BaseModel):
+    api_key: str
+    api_secret: str
+    passphrase: str
+    symbol: str = "AAPLUSDT"
 
 
 @app.get("/market-data")
@@ -140,13 +212,163 @@ def agent_loop_status() -> dict[str, Any]:
         "running": agent_loop.is_running(),
         "interval_seconds": agent_loop.LOOP_INTERVAL_SECONDS,
         "watched_symbols": agent_loop.WATCHED_SYMBOLS,
+        "market": agent_loop.MARKET_TYPE,
+        "strategy_by_symbol": {symbol: get_strategy_for_symbol(symbol) for symbol in agent_loop.WATCHED_SYMBOLS},
         "recent_cycles": agent_loop.recent_cycles(),
     }
 
 
+@app.get("/agent-settings")
+def agent_settings() -> dict[str, Any]:
+    return {"status": "ok", "market": agent_loop.MARKET_TYPE, **agent_loop.get_exit_rules()}
+
+
+@app.post("/agent-settings")
+def update_agent_settings(payload: AgentSettingsRequest) -> dict[str, Any]:
+    try:
+        settings = agent_loop.configure_exit_rules(
+            take_profit_pct=payload.take_profit_pct,
+            stop_loss_pct=payload.stop_loss_pct,
+            close_on_signal_violation=payload.close_on_signal_violation,
+        )
+        return {"status": "updated", "market": agent_loop.configure_market_type(payload.market), **settings}
+    except ValueError as exc:
+        return {"status": "rejected", "message": str(exc)}
+
+
 @app.get("/debug/bitget-account")
-def debug_bitget_account(symbol: str = "AAPLUSDT") -> dict[str, Any]:
-    return paper_execution_client.fetch_account_mode(symbol)
+def debug_bitget_account(symbol: str = "AAPLUSDT", user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    client = execution_client_for(user)
+    return client.fetch_account_mode(symbol)
+
+
+@app.get("/account/balance")
+def account_balance() -> dict[str, Any]:
+    futures = paper_execution_client.fetch_futures_account_balance()
+    spot = paper_execution_client.fetch_spot_assets()
+    if futures.get("status") == "not_configured" and spot.get("status") == "not_configured":
+        return {"status": "not_configured", "message": "Connect the Bitget demo account first."}
+    spot_assets = spot.get("assets", []) if spot.get("status") == "ok" else []
+    usdt_asset = next(
+        (asset for asset in spot_assets if str(asset.get("coin", "")).upper() == "USDT"),
+        {},
+    )
+    current_equity = float((futures.get("equity") or 0) if futures.get("status") == "ok" else (usdt_asset.get("usdtBalance", usdt_asset.get("balance", 0)) or 0))
+    today = datetime.now(timezone.utc).date().isoformat()
+    baseline_day, starting_balance = _daily_balance_baselines.get("demo-account", (today, current_equity))
+    if baseline_day != today:
+        starting_balance = current_equity
+    _daily_balance_baselines["demo-account"] = (today, starting_balance)
+    daily_change = round(current_equity - starting_balance, 4)
+    daily_change_pct = round((daily_change / starting_balance) * 100, 4) if starting_balance else 0.0
+
+    return {
+        "status": "ok" if futures.get("status") == "ok" or spot.get("status") == "ok" else "error",
+        "source": "bitget_paper",
+        "starting_balance": starting_balance,
+        "current_balance": current_equity,
+        "daily_change": daily_change,
+        "daily_change_pct": daily_change_pct,
+        "futures": futures,
+        "spot": {
+            "status": spot.get("status"),
+            "currency": "USDT",
+            "available": float(usdt_asset.get("available", usdt_asset.get("availableBalance", 0)) or 0),
+            "equity": float(usdt_asset.get("usdtBalance", usdt_asset.get("balance", 0)) or 0),
+        },
+    }
+
+
+@app.get("/user/agent-loop")
+def user_agent_loop_status(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    return user_runtime_registry.status(user.id)
+
+
+@app.get("/user/agent-settings")
+def user_agent_settings(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    runtime = user_runtime_registry.get(user.id)
+    if runtime:
+        return {"status": "ok", **user_runtime_registry.status(user.id)}
+    return {"status": "ok", **SupabaseCycleLogger(user_id=user.id).fetch_user_settings(user.id)}
+
+
+@app.post("/user/agent-settings")
+def update_user_agent_settings(payload: UserAgentSettingsRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    settings = payload.model_dump()
+    if settings["strategy_id"] and settings["strategy_id"] not in STRATEGIES:
+        return {"status": "rejected", "message": "unknown strategy"}
+    settings["symbols"] = [str(symbol).upper() for symbol in (settings["symbols"] or ["AAPLUSDT", "TSLAUSDT"])]
+    logger = SupabaseCycleLogger(user_id=user.id)
+    persistence = logger.save_user_settings(user.id, settings)
+    if logger.configured and persistence["status"] != "saved":
+        return {"status": "rejected", "message": "user settings could not be persisted"}
+    runtime = user_runtime_registry.get(user.id)
+    if runtime:
+        runtime.market_type = settings["market"]
+        runtime.symbols = settings["symbols"]
+        runtime.strategy_id = settings["strategy_id"] or runtime.strategy_id
+        runtime.strategy_by_symbol = settings["strategy_by_symbol"] or {}
+        runtime.take_profit_pct = settings["take_profit_pct"]
+        runtime.stop_loss_pct = settings["stop_loss_pct"]
+        runtime.close_on_signal_violation = settings["close_on_signal_violation"]
+        runtime.risk_engine.update_settings({
+            "max_position_size": settings["max_position_size"],
+            "max_daily_loss": settings["max_daily_loss"],
+            "max_leverage": settings["max_leverage"],
+            "enabled": settings["risk_enabled"],
+            "allowed_symbols": settings["allowed_symbols"] or [],
+        })
+    return {"status": "updated", **settings, "persistence": persistence["status"]}
+
+
+@app.post("/connection/bitget")
+def connect_bitget(payload: BitgetConnectionRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    values = (payload.api_key.strip(), payload.api_secret.strip(), payload.passphrase.strip())
+    if not all(values):
+        return {"status": "rejected", "message": "All Bitget credential fields are required"}
+
+    candidate = BitgetPaperExecutionClient(session=paper_execution_client.session)
+    candidate.configure_credentials(*values)
+    verification = candidate.fetch_account_mode(payload.symbol)
+    if verification.get("status") != "ok":
+        return {
+            "status": "rejected",
+            "message": verification.get("message", "Bitget credentials could not be verified"),
+        }
+
+    if credential_vault.configured:
+        credential_vault.put(user.id, {"api_key": values[0], "api_secret": values[1], "passphrase": values[2]})
+        persistence = cycle_logger.save_user_credentials(user.id, credential_vault.export(user.id) or "")
+        if cycle_logger.configured and persistence["status"] != "saved":
+            credential_vault.delete(user.id)
+            return {"status": "rejected", "message": "Credentials could not be persisted securely"}
+    elif user.id == "local-development" and not supabase_auth.required:
+        paper_execution_client.configure_credentials(*values)
+    else:
+        return {"status": "rejected", "message": "PRIVA_CREDENTIAL_ENCRYPTION_KEY is not configured"}
+    runtime = user_runtime_registry.start(user.id, execution_client_for(user)) if supabase_auth.required else None
+    return {
+        "status": "connected",
+        "symbol": payload.symbol.upper(),
+        "position_mode": verification.get("position_mode"),
+        "credentials_stored": "memory_only",
+        "worker": user_runtime_registry.status(user.id) if runtime else {"running": False},
+    }
+
+
+@app.post("/connection/bitget/disconnect")
+async def disconnect_bitget(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    await user_runtime_registry.stop(user.id)
+    credential_vault.delete(user.id)
+    cycle_logger.delete_user_credentials(user.id)
+    if user.id == "local-development":
+        paper_execution_client.clear_credentials()
+    return {"status": "disconnected"}
+
+
+@app.get("/auth/session")
+def auth_session(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    return {"status": "authenticated", "user_id": user.id, "email": user.email}
 
 
 async def periodic_market_loop() -> None:
@@ -162,6 +384,14 @@ async def periodic_market_loop() -> None:
 
 @app.on_event("startup")
 async def startup_event() -> None:
+    if supabase_auth.required:
+        for record in cycle_logger.fetch_connected_users():
+            user_id = str(record.get("user_id", ""))
+            encrypted = record.get("encrypted_credentials")
+            if user_id and encrypted and credential_vault.import_encrypted(user_id, encrypted):
+                user = AuthenticatedUser(user_id)
+                user_runtime_registry.start(user_id, execution_client_for(user))
+        return
     persisted_strategy = cycle_logger.fetch_active_strategy()
     if persisted_strategy:
         set_active_strategy(persisted_strategy)
@@ -373,11 +603,14 @@ def pnl() -> dict[str, Any]:
     )
     realized_pnl = round(float(logged_pnl.get("realized_pnl", 0) or 0), 4)
     total_pnl = round(realized_pnl + unrealized_pnl, 4)
+    trade_metrics = _trade_metrics(cycles)
     return {
         "unrealized_pnl": unrealized_pnl,
         "realized_pnl": realized_pnl,
         "daily_pnl": total_pnl,
         "total_pnl": total_pnl,
+        "win_rate_pct": trade_metrics["win_rate_pct"],
+        "max_drawdown_pct": trade_metrics["max_drawdown_pct"],
         "currency": "USD",
         "source": "bitget_and_supabase",
         "session_id": cycle_logger.session_id,
@@ -438,18 +671,22 @@ def update_risk_settings(payload: dict[str, Any] | None = None) -> dict[str, Any
 @app.get("/activity-log")
 def activity_log() -> dict[str, Any]:
     cycles = cycle_logger.fetch_cycles()
+    if not cycles:
+        cycles = agent_loop.recent_cycles()
     if cycles:
         return {
             "entries": [
                 {
-                    "id": (cycle.get("order_result") or {}).get("order_id") or f"cycle_{cycle.get('created_at', '')}",
-                    "type": "trade" if cycle.get("order_result") else "agent_cycle",
+                    "id": ((cycle.get("order_result") or cycle.get("order") or {}).get("order_id") or f"cycle_{cycle.get('created_at', '')}"),
+                    "type": "trade" if (cycle.get("order_result") or cycle.get("order")) else "agent_cycle",
                     "symbol": cycle.get("symbol"),
                     "action": (cycle.get("decision") or {}).get("action"),
                     "status": cycle.get("status"),
                     "risk_check": cycle.get("risk_check"),
                     "intent_hash": (cycle.get("intent") or {}).get("intent_hash"),
+                    "mode": cycle.get("mode", "autonomous"),
                     "timestamp": cycle.get("created_at"),
+                    "opened_at": cycle.get("created_at") if (cycle.get("order_result") or cycle.get("order")) else None,
                 }
                 for cycle in cycles
             ]
@@ -464,7 +701,9 @@ def activity_log() -> dict[str, Any]:
                 "action": "buy",
                 "amount_usd": 2100,
                 "status": "filled",
+                "mode": "autonomous",
                 "timestamp": "2026-09-10T00:00:20Z",
+                "opened_at": "2026-09-10T00:00:20Z",
             },
             {
                 "id": "evt_002",
@@ -472,6 +711,7 @@ def activity_log() -> dict[str, Any]:
                 "symbol": "NVDA",
                 "result": "approved",
                 "reason": "within max leverage",
+                "mode": "strategy",
                 "timestamp": "2026-09-10T00:02:10Z",
             },
             {
@@ -479,6 +719,7 @@ def activity_log() -> dict[str, Any]:
                 "type": "intent",
                 "symbol": "MSFT",
                 "status": "encrypted",
+                "mode": "autonomous",
                 "timestamp": "2026-09-10T00:03:00Z",
             },
         ]
@@ -487,30 +728,86 @@ def activity_log() -> dict[str, Any]:
 
 @app.get("/strategies")
 def strategies() -> dict[str, Any]:
-    return {
-        "strategies": [
+    catalog = []
+    for strategy_id, definition in list_strategy_catalog().items():
+        catalog.append(
             {
-                "id": "momentum_breakout",
-                "name": "Momentum Breakout",
-                "type": "playbook",
-                "status": "active" if get_active_strategy_id() == "momentum_breakout" else "inactive",
-                "description": "Long when trend and volume accelerate above baseline.",
-            },
-            {
-                "id": "mean_reversion",
-                "name": "Mean Reversion",
-                "type": "prebuilt",
-                "status": "active" if get_active_strategy_id() == "mean_reversion" else "inactive",
-                "description": "Fade moves that extend at least 1% away from the opening price.",
-            },
-        ]
-    }
+                **definition,
+                "status": "active" if get_active_strategy_id() == strategy_id else "inactive",
+            }
+        )
+    return {"strategies": catalog}
 
 
 @app.post("/strategies/{strategy_id}/activate")
-def activate_strategy(strategy_id: str) -> dict[str, Any]:
-    if not set_active_strategy(strategy_id):
+def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | None = None, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    symbols = None
+    strategy_map = payload.strategy_by_symbol if payload is not None else None
+    if strategy_id not in STRATEGIES:
         return {"strategy_id": strategy_id, "status": "rejected", "message": "unknown strategy"}
+    if payload is not None and payload.symbols is not None:
+        symbols = list(dict.fromkeys(symbol.upper() for symbol in payload.symbols))
+        unsupported = [symbol for symbol in symbols if symbol not in {"AAPLUSDT", "TSLAUSDT"}]
+        if not symbols or unsupported:
+            return {
+                "strategy_id": strategy_id,
+                "status": "rejected",
+                "message": "symbols must include AAPLUSDT and/or TSLAUSDT only",
+            }
+
+    if supabase_auth.required:
+        normalized_map = {}
+        for symbol, mapped_strategy in (strategy_map or {}).items():
+            normalized_symbol = str(symbol).strip().upper()
+            if normalized_symbol not in {"AAPLUSDT", "TSLAUSDT"} or mapped_strategy not in STRATEGIES:
+                return {"strategy_id": strategy_id, "status": "rejected", "message": "invalid per-symbol strategy assignment"}
+            normalized_map[normalized_symbol] = mapped_strategy
+        settings: dict[str, Any] = {"strategy_id": strategy_id}
+        if symbols is not None:
+            settings["symbols"] = symbols
+        if normalized_map:
+            settings["strategy_by_symbol"] = normalized_map
+        logger = SupabaseCycleLogger(user_id=user.id)
+        persistence = logger.save_user_settings(user.id, settings)
+        if logger.configured and persistence["status"] != "saved":
+            return {"strategy_id": strategy_id, "status": "rejected", "message": "strategy could not be persisted"}
+        runtime = user_runtime_registry.get(user.id)
+        if runtime:
+            runtime.strategy_id = strategy_id
+            if symbols is not None:
+                runtime.symbols = symbols
+            if normalized_map:
+                runtime.strategy_by_symbol = normalized_map
+        return {
+            "strategy_id": strategy_id,
+            "status": "activated",
+            "mode": "strategy",
+            "active": True,
+            "symbols": runtime.symbols if runtime else symbols or [],
+            "strategy_by_symbol": runtime.strategy_by_symbol if runtime else normalized_map,
+            "persistence": persistence["status"],
+        }
+
+    if strategy_map is not None:
+        unsupported_map_symbols = [symbol.upper() for symbol in strategy_map if symbol.upper() not in {"AAPLUSDT", "TSLAUSDT"}]
+        if unsupported_map_symbols:
+            return {
+                "strategy_id": strategy_id,
+                "status": "rejected",
+                "message": "strategy_by_symbol supports AAPLUSDT and TSLAUSDT only",
+            }
+        try:
+            normalized_map = configure_symbol_strategies(strategy_map)
+        except ValueError as exc:
+            return {"strategy_id": strategy_id, "status": "rejected", "message": str(exc)}
+        if symbols is None:
+            symbols = list(normalized_map)
+
+    set_active_strategy(strategy_id)
+
+    if symbols is not None:
+        agent_loop.configure_watched_symbols(symbols)
+
     persistence = cycle_logger.save_active_strategy(strategy_id)
     if cycle_logger.configured and persistence["status"] != "saved":
         return {"strategy_id": strategy_id, "status": "rejected", "message": "strategy could not be persisted"}
@@ -519,6 +816,8 @@ def activate_strategy(strategy_id: str) -> dict[str, Any]:
         "status": "activated",
         "mode": "strategy",
         "active": True,
+        "symbols": agent_loop.WATCHED_SYMBOLS,
+        "strategy_by_symbol": {symbol: get_strategy_for_symbol(symbol) for symbol in agent_loop.WATCHED_SYMBOLS},
         "persistence": persistence["status"],
     }
 
@@ -551,13 +850,43 @@ def parse_strategy(payload: dict[str, Any]) -> dict[str, Any]:
     if has_text and has_strategy:
         return {"status": "rejected", "message": "payload must include either text or strategy, not both"}
 
+    def _attach_metadata(response: dict[str, Any]) -> dict[str, Any]:
+        name = payload.get("name")
+        description = payload.get("description")
+
+        if isinstance(name, str) and name.strip():
+            response["name"] = name.strip()
+        if isinstance(description, str) and description.strip():
+            response["description"] = description.strip()
+
+        return response
+
     if has_text:
         text = payload.get("text")
         if not isinstance(text, str) or not text.strip():
             return {"status": "rejected", "message": "text must be a non-empty string"}
         use_gemini = bool(payload.get("use_gemini", False) or payload.get("use_grok", False) or payload.get("use_qwen", False))
         try:
-            return {"status": "parsed", **parse_natural_language_strategy(text, use_gemini=use_gemini)}
+            parsed = parse_natural_language_strategy(text, use_gemini=use_gemini)
+            if parsed.get("kind") == "builtin":
+                config = {}
+                for key, parsed_key in (
+                    ("threshold_pct", "threshold_pct"),
+                    ("position_size", "position_size"),
+                    ("size", "position_size"),
+                    ("leverage", "leverage"),
+                    ("take_profit_pct", "take_profit_pct"),
+                    ("take_profit", "take_profit_pct"),
+                    ("stop_loss_pct", "stop_loss_pct"),
+                    ("stop_loss", "stop_loss_pct"),
+                    ("market", "market"),
+                ):
+                    if key in payload:
+                        config[parsed_key] = payload[key]
+                if config:
+                    configure_builtin_strategy(parsed["target_strategy"], config)
+                    parsed.update(config)
+            return _attach_metadata({"status": "parsed", **parsed, "strategy_id": parsed.get("target_strategy", parsed.get("strategy_id"))})
         except ValueError as exc:
             return {"status": "rejected", "message": str(exc)}
 
@@ -566,7 +895,19 @@ def parse_strategy(payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(strategy, dict):
             return {"status": "rejected", "message": "strategy must be an object"}
         try:
-            return {"status": "parsed", **parse_structured_strategy(strategy)}
+            parsed = parse_structured_strategy(strategy)
+            if parsed.get("kind") == "builtin":
+                configure_builtin_strategy(parsed["target_strategy"], parsed)
+                response = {"status": "parsed", **parsed, "strategy_id": parsed["target_strategy"]}
+                return _attach_metadata(response)
+
+            strategy_id = payload.get("strategy_id") or (
+                f"custom_{parsed['action']}_{parsed['comparison']}_{int(parsed['threshold_pct'] * 100)}_"
+                f"{str(parsed['position_size']).replace('.', '_')}"
+            )
+            register_custom_strategy(strategy_id, parsed)
+            response = {"status": "parsed", **parsed, "strategy_id": strategy_id}
+            return _attach_metadata(response)
         except ValueError as exc:
             return {"status": "rejected", "message": str(exc)}
 
@@ -596,6 +937,205 @@ async def set_kill_switch(payload: KillSwitchRequest) -> dict[str, Any]:
     }
 
 
+def _market_provenance(symbol: str) -> dict[str, Any]:
+    snapshot = market_service.get_market_snapshot(symbol)
+    data = snapshot.get("data") if isinstance(snapshot.get("data"), dict) else {}
+    return {
+        "symbol": snapshot.get("symbol", symbol.upper()),
+        "status": snapshot.get("status", data.get("status", "unknown")),
+        "source": data.get("source", "bitget_public"),
+        "fetched_at": snapshot.get("fetched_at"),
+        "timestamp_iso": data.get("timestamp_iso"),
+        "last_price": data.get("last_price"),
+        "open_price": data.get("open_price"),
+        "high_24h": data.get("high_24h"),
+        "low_24h": data.get("low_24h"),
+        "error": data.get("error"),
+    }
+
+
+def _position_notional(position: dict[str, Any]) -> float:
+    if not isinstance(position, dict):
+        return 0.0
+
+    qty = float(position.get("qty", position.get("total", position.get("available", 0)) or 0) or 0)
+    if qty <= 0:
+        return 0.0
+
+    entry_price = float(position.get("entry_price", position.get("averageOpenPrice", position.get("openPrice", 0)) or 0) or 0)
+    if entry_price <= 0:
+        return 0.0
+
+    return abs(qty * entry_price)
+
+
+def _usage_summary(current_positions: list[dict[str, Any]], current_daily_pnl: float) -> dict[str, Any]:
+    current_position_size = round(
+        sum(_position_notional(position) for position in current_positions),
+        4,
+    )
+    current_daily_loss = max(0.0, -float(current_daily_pnl))
+    max_position_size = float(risk_engine.max_position_size)
+    max_daily_loss = float(risk_engine.max_daily_loss)
+    position_usage_pct = round(current_position_size / max_position_size * 100, 2) if max_position_size else 0.0
+    daily_loss_usage_pct = round(current_daily_loss / max_daily_loss * 100, 2) if max_daily_loss else 0.0
+    return {
+        "max_position_size": max_position_size,
+        "current_position_size": current_position_size,
+        "max_daily_loss": max_daily_loss,
+        "current_daily_loss": round(current_daily_loss, 4),
+        "position_usage_pct": position_usage_pct,
+        "daily_loss_usage_pct": daily_loss_usage_pct,
+    }
+
+
+def _action_plan_from_usage(position_usage_pct: float, daily_loss_usage_pct: float) -> str:
+    if position_usage_pct >= 90.0 or daily_loss_usage_pct >= 90.0:
+        return "FLATTEN"
+    if position_usage_pct >= 75.0 or daily_loss_usage_pct >= 75.0:
+        return "TRIM"
+    return "HOLD"
+
+
+def _trade_metrics(cycles: list[dict[str, Any]]) -> dict[str, float]:
+    if not cycles:
+        return {"win_rate_pct": 0.0, "max_drawdown_pct": 0.0}
+
+    closed_pnls: list[float] = []
+    open_lots: dict[tuple[str, str], list[dict[str, float]]] = {}
+    ordered_cycles = sorted(cycles, key=lambda cycle: cycle.get("created_at") or "")
+
+    for cycle in ordered_cycles:
+        status = cycle.get("status")
+        symbol = str(cycle.get("symbol", ""))
+        decision = cycle.get("decision") or {}
+
+        if status == "submitted":
+            side = decision.get("action")
+            if side not in {"buy", "sell"}:
+                continue
+            ticker = cycle.get("ticker") or {}
+            entry_price = float(ticker.get("last_price", 0.0) or 0.0)
+            risk = cycle.get("risk_check", {}).get("risk", {})
+            notional = float(risk.get("notional", 0.0) or 0.0)
+            if entry_price <= 0 or notional <= 0:
+                continue
+            qty = notional / entry_price
+            open_lots.setdefault((symbol, side), []).append({"entry_price": entry_price, "qty": qty})
+            continue
+
+        if status != "closed":
+            continue
+
+        order = cycle.get("order_result") or {}
+        close_side = order.get("closed_position_side") or decision.get("closed_position_side")
+        if close_side not in {"buy", "sell"}:
+            continue
+
+        qty = float(order.get("qty", 0.0) or 0.0)
+        if qty <= 0:
+            continue
+
+        exit_price = float(order.get("entry_price", 0.0) or (cycle.get("ticker") or {}).get("last_price", 0.0) or 0.0)
+        if exit_price <= 0:
+            continue
+
+        lots = open_lots.get((symbol, close_side), [])
+        remaining = qty
+
+        while lots and remaining > 0:
+            lot = lots[0]
+            closed_qty = min(remaining, lot["qty"])
+            pnl = (exit_price - lot["entry_price"]) * closed_qty if close_side == "buy" else (lot["entry_price"] - exit_price) * closed_qty
+            closed_pnls.append(pnl)
+            remaining -= closed_qty
+            lot["qty"] -= closed_qty
+            if lot["qty"] <= 0:
+                lots.pop(0)
+
+    if not closed_pnls:
+        return {"win_rate_pct": 0.0, "max_drawdown_pct": 0.0}
+
+    win_rate_pct = round((sum(1 for pnl in closed_pnls if pnl > 0) / len(closed_pnls)) * 100, 2)
+    max_drawdown_pct = 0.0
+    return {"win_rate_pct": win_rate_pct, "max_drawdown_pct": max_drawdown_pct}
+
+
+@app.post("/intent/evaluate")
+def evaluate_intent(payload: IntentEvaluationRequest) -> dict[str, Any]:
+    strategy_id = payload.strategy_id or get_active_strategy_id()
+
+    if strategy_id not in STRATEGIES:
+        return {
+            "status": "rejected",
+            "verdict": "REJECT",
+            "action_plan": "REJECT",
+            "strategy_id": strategy_id,
+            "market_provenance": _market_provenance(payload.symbol),
+            "message": "unknown strategy",
+        }
+
+    trade = {
+        "symbol": payload.symbol.upper(),
+        "side": payload.side,
+        "qty": float(payload.qty),
+        "entry_price": float(payload.entry_price),
+        "leverage": float(payload.leverage),
+    }
+
+    current_positions = payload.current_positions or []
+    result = risk_engine.evaluate_trade(
+        trade=trade,
+        current_positions=current_positions,
+        current_daily_pnl=float(payload.current_daily_pnl),
+    )
+
+    market_provenance = _market_provenance(payload.symbol)
+    usage = _usage_summary(current_positions, float(payload.current_daily_pnl))
+
+    if result["allowed"]:
+        verdict = "ALLOW_CAPPED" if usage["position_usage_pct"] >= 75.0 or usage["daily_loss_usage_pct"] >= 75.0 else "ALLOW"
+        action_plan = _action_plan_from_usage(usage["position_usage_pct"], usage["daily_loss_usage_pct"])
+        status = "ok"
+        message = "intent allowed by risk firewall"
+        if verdict == "ALLOW_CAPPED":
+            message = "intent allowed by risk firewall but should be trimmed to preserve buffer"
+    else:
+        verdict = "REJECT"
+        action_plan = "REJECT"
+        status = "rejected"
+        message = "intent rejected by risk firewall"
+
+    return {
+        "status": status,
+        "verdict": verdict,
+        "action_plan": action_plan,
+        "strategy_id": strategy_id,
+        "active_strategy": get_active_strategy_id(),
+        "trade": trade,
+        "risk_check": result,
+        "risk_usage": usage,
+        "market_provenance": market_provenance,
+        "message": message,
+    }
+
+
+@app.get("/risk-view")
+def risk_view(symbol: str = "AAPLUSDT") -> dict[str, Any]:
+    live_positions = positions().get("positions", [])
+    pnl_snapshot = pnl()
+    usage = _usage_summary(live_positions, float(pnl_snapshot.get("daily_pnl", 0.0) or 0.0))
+    action_plan = _action_plan_from_usage(usage["position_usage_pct"], usage["daily_loss_usage_pct"])
+    return {
+        "symbol": symbol.upper(),
+        "action_plan": action_plan,
+        "risk_usage": usage,
+        "market_provenance": _market_provenance(symbol),
+        "positions": live_positions,
+        "pnl": pnl_snapshot,
+    }
+
+
 @app.post("/risk-check")
 def risk_check(payload: dict[str, Any]) -> dict[str, Any]:
     trade = payload.get("trade", {})
@@ -610,7 +1150,8 @@ def risk_check(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/paper-trade")
-def paper_trade(payload: TradeRequest) -> dict[str, Any]:
+def paper_trade(payload: TradeRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user_execution_client = execution_client_for(user)
     order = payload.model_dump()
     result = risk_engine.evaluate_trade(
         trade=order,
@@ -626,7 +1167,7 @@ def paper_trade(payload: TradeRequest) -> dict[str, Any]:
             "risk": result["risk"],
         }
 
-    execution = paper_execution_client.place_market_order(order)
+    execution = user_execution_client.place_market_order(order)
     return {"order": order, "risk": result["risk"], **execution}
 
 

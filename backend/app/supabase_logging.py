@@ -11,11 +11,12 @@ logger = logging.getLogger("priva.supabase")
 
 
 class SupabaseCycleLogger:
-    def __init__(self, *, session: Any = requests, session_id: str | None = None) -> None:
+    def __init__(self, *, session: Any = requests, session_id: str | None = None, user_id: str | None = None) -> None:
         self.url = os.getenv("SUPABASE_URL", "").rstrip("/")
         self.service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
         self.session = session
         self.session_id = session_id or os.getenv("PRIVA_SESSION_ID") or uuid4().hex
+        self.user_id = user_id
 
     @property
     def configured(self) -> bool:
@@ -28,6 +29,7 @@ class SupabaseCycleLogger:
         record = {
             "session_id": self.session_id,
             "symbol": cycle.get("symbol", "UNKNOWN"),
+            "market": cycle.get("market", "futures"),
             "status": cycle.get("status", "unknown"),
             "decision": cycle.get("decision", {}),
             "ticker": cycle.get("ticker"),
@@ -36,6 +38,8 @@ class SupabaseCycleLogger:
             "order_result": cycle.get("order"),
             "error": cycle.get("error"),
         }
+        if self.user_id:
+            record["user_id"] = self.user_id
         try:
             response = self.session.post(
                 f"{self.url}/rest/v1/agent_cycles",
@@ -62,6 +66,8 @@ class SupabaseCycleLogger:
             params = {"select": "*", "order": "created_at.desc", "limit": limit}
             if session_id:
                 params["session_id"] = f"eq.{session_id}"
+            if self.user_id:
+                params["user_id"] = f"eq.{self.user_id}"
             response = self.session.get(
                 f"{self.url}/rest/v1/agent_cycles",
                 headers={
@@ -83,18 +89,21 @@ class SupabaseCycleLogger:
             return False
 
         try:
+            params = {
+                "select": "id",
+                "symbol": f"eq.{symbol.upper()}",
+                "status": "eq.submitted",
+                "limit": 1,
+            }
+            if self.user_id:
+                params["user_id"] = f"eq.{self.user_id}"
             response = self.session.get(
                 f"{self.url}/rest/v1/agent_cycles",
                 headers={
                     "apikey": self.service_role_key,
                     "Authorization": f"Bearer {self.service_role_key}",
                 },
-                params={
-                    "select": "id",
-                    "symbol": f"eq.{symbol.upper()}",
-                    "status": "eq.submitted",
-                    "limit": 1,
-                },
+                params=params,
                 timeout=15,
             )
             response.raise_for_status()
@@ -149,3 +158,126 @@ class SupabaseCycleLogger:
         except requests.RequestException as exc:
             logger.warning("Supabase strategy write failed: %s", exc)
             return {"status": "error", "message": str(exc)}
+
+    def save_user_credentials(self, user_id: str, encrypted_credentials: str) -> dict[str, Any]:
+        if not self.configured:
+            return {"status": "not_configured"}
+        try:
+            response = self.session.post(
+                f"{self.url}/rest/v1/user_bitget_credentials",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates,return=minimal",
+                },
+                params={"on_conflict": "user_id"},
+                json={"user_id": user_id, "encrypted_credentials": encrypted_credentials},
+                timeout=15,
+            )
+            response.raise_for_status()
+            return {"status": "saved"}
+        except requests.RequestException as exc:
+            logger.warning("Supabase credential save failed: %s", exc)
+            return {"status": "error", "message": str(exc)}
+
+    def fetch_user_credentials(self, user_id: str) -> str | None:
+        if not self.configured:
+            return None
+        try:
+            response = self.session.get(
+                f"{self.url}/rest/v1/user_bitget_credentials",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                },
+                params={"select": "encrypted_credentials", "user_id": f"eq.{user_id}", "limit": 1},
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload[0].get("encrypted_credentials") if isinstance(payload, list) and payload else None
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Supabase credential read failed: %s", exc)
+            return None
+
+    def delete_user_credentials(self, user_id: str) -> dict[str, Any]:
+        if not self.configured:
+            return {"status": "not_configured"}
+        try:
+            response = self.session.delete(
+                f"{self.url}/rest/v1/user_bitget_credentials",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                },
+                params={"user_id": f"eq.{user_id}"},
+                timeout=15,
+            )
+            response.raise_for_status()
+            return {"status": "deleted"}
+        except requests.RequestException as exc:
+            logger.warning("Supabase credential delete failed: %s", exc)
+            return {"status": "error", "message": str(exc)}
+
+    def fetch_connected_users(self) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+        try:
+            response = self.session.get(
+                f"{self.url}/rest/v1/user_bitget_credentials",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                },
+                params={"select": "user_id,encrypted_credentials"},
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, list) else []
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Supabase connected-user read failed: %s", exc)
+            return []
+
+    def save_user_settings(self, user_id: str, settings: dict[str, Any]) -> dict[str, Any]:
+        if not self.configured:
+            return {"status": "not_configured"}
+        try:
+            response = self.session.post(
+                f"{self.url}/rest/v1/user_agent_settings",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates,return=minimal",
+                },
+                params={"on_conflict": "user_id"},
+                json={"user_id": user_id, **settings},
+                timeout=15,
+            )
+            response.raise_for_status()
+            return {"status": "saved"}
+        except requests.RequestException as exc:
+            logger.warning("Supabase user settings save failed: %s", exc)
+            return {"status": "error", "message": str(exc)}
+
+    def fetch_user_settings(self, user_id: str) -> dict[str, Any]:
+        if not self.configured:
+            return {}
+        try:
+            response = self.session.get(
+                f"{self.url}/rest/v1/user_agent_settings",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                },
+                params={"select": "*", "user_id": f"eq.{user_id}", "limit": 1},
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload[0] if isinstance(payload, list) and payload else {}
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Supabase user settings read failed: %s", exc)
+            return {}

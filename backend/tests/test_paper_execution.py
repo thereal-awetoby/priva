@@ -88,6 +88,21 @@ def test_paper_client_flash_closes_position(monkeypatch):
     assert kwargs["headers"]["paptrading"] == "1"
 
 
+def test_paper_client_fetches_spot_assets(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    result = client.fetch_spot_assets()
+
+    url, kwargs = session.calls[0]
+    assert result["status"] == "ok"
+    assert url.endswith("/api/v2/spot/account/assets")
+    assert kwargs["headers"]["paptrading"] == "1"
+
+
 def test_paper_client_fails_closed_without_credentials(monkeypatch):
     for key in ("BITGET_API_KEY", "BITGET_API_SECRET", "BITGET_API_PASSPHRASE"):
         monkeypatch.delenv(key, raising=False)
@@ -99,6 +114,16 @@ def test_paper_client_fails_closed_without_credentials(monkeypatch):
 
     assert result["status"] == "not_configured"
     assert session.calls == []
+
+
+def test_paper_client_can_configure_and_clear_runtime_credentials():
+    client = BitgetPaperExecutionClient(session=FakeSession())
+    client.configure_credentials(" key ", " secret ", " passphrase ")
+
+    assert client.configured is True
+    assert client.api_key == "key"
+    client.clear_credentials()
+    assert client.configured is False
 
 
 def test_paper_client_submits_paper_order(monkeypatch):
@@ -349,6 +374,34 @@ def test_paper_client_reads_sanitized_account_mode(monkeypatch):
         "position_mode": "one_way",
     }
     assert "available" not in result
+
+
+def test_paper_client_reads_futures_account_balance(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    class AccountSession(FakeSession):
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return FakeResponse({
+                "code": "00000",
+                "data": {
+                    "accountEquity": "1000.5",
+                    "available": "925.25",
+                    "unrealizedPL": "4.25",
+                    "posMode": "one_way",
+                },
+            })
+
+    session = AccountSession()
+    result = BitgetPaperExecutionClient(session=session).fetch_futures_account_balance()
+
+    assert result["status"] == "ok"
+    assert result["equity"] == 1000.5
+    assert result["available"] == 925.25
+    assert result["unrealized_pnl"] == 4.25
+    assert session.calls[0][0].endswith("/api/v2/mix/account/account?symbol=AAPLUSDT&marginCoin=USDT&productType=USDT-FUTURES")
 
 
 def test_paper_client_normalizes_hedge_mode_aliases(monkeypatch):

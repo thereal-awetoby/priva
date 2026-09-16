@@ -1,0 +1,42 @@
+-- Run this once in the Supabase SQL Editor.
+-- The credential ciphertext is produced by the backend Fernet vault.
+
+create table if not exists public.user_bitget_credentials (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  encrypted_credentials text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.user_agent_settings (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  market text not null default 'futures',
+  take_profit_pct numeric not null default 5,
+  stop_loss_pct numeric not null default 2,
+  close_on_signal_violation boolean not null default true,
+  enabled boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.user_agent_settings
+  add column if not exists strategy_id text,
+  add column if not exists symbols jsonb not null default '["AAPLUSDT", "TSLAUSDT"]'::jsonb,
+  add column if not exists strategy_by_symbol jsonb not null default '{}'::jsonb,
+  add column if not exists max_position_size numeric not null default 25000,
+  add column if not exists max_daily_loss numeric not null default 1500,
+  add column if not exists max_leverage numeric not null default 5,
+  add column if not exists risk_enabled boolean not null default true,
+  add column if not exists allowed_symbols jsonb not null default '[]'::jsonb;
+
+alter table public.agent_cycles
+  add column if not exists user_id uuid references auth.users(id) on delete cascade;
+
+alter table public.user_bitget_credentials enable row level security;
+alter table public.user_agent_settings enable row level security;
+alter table public.agent_cycles enable row level security;
+
+create index if not exists agent_cycles_user_id_idx
+  on public.agent_cycles (user_id);
+
+-- The backend uses the service-role key for server-side writes and reads.
+-- Do not create client policies that expose encrypted_credentials.
