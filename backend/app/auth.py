@@ -62,7 +62,15 @@ def current_user(authorization: str | None = Header(default=None)) -> Authentica
 class UserCredentialVault:
     def __init__(self) -> None:
         key = os.getenv("PRIVA_CREDENTIAL_ENCRYPTION_KEY", "")
-        self.fernet = Fernet(key.encode()) if key else None
+        self.fernet = None
+        self._configuration_error: str | None = None
+        if key:
+            try:
+                self.fernet = Fernet(key.encode())
+            except (ValueError, TypeError):
+                self._configuration_error = (
+                    "PRIVA_CREDENTIAL_ENCRYPTION_KEY must be a valid Fernet key"
+                )
         self._credentials: dict[str, bytes] = {}
 
     @property
@@ -71,7 +79,8 @@ class UserCredentialVault:
 
     def put(self, user_id: str, values: dict[str, str]) -> None:
         if self.fernet is None:
-            raise RuntimeError("PRIVA_CREDENTIAL_ENCRYPTION_KEY is required")
+            message = self._configuration_error or "PRIVA_CREDENTIAL_ENCRYPTION_KEY is required"
+            raise RuntimeError(message)
         encoded = "\n".join(f"{key}={values[key]}" for key in ("api_key", "api_secret", "passphrase"))
         self._credentials[user_id] = self.fernet.encrypt(encoded.encode())
 

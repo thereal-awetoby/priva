@@ -18,6 +18,20 @@ def test_credential_vault_isolates_users(monkeypatch):
     assert vault.get("user-b")["api_key"] == "b"
 
 
+def test_credential_vault_ignores_malformed_key_until_used(monkeypatch):
+    monkeypatch.setenv("PRIVA_CREDENTIAL_ENCRYPTION_KEY", "not-a-fernet-key")
+
+    vault = UserCredentialVault()
+
+    assert vault.configured is False
+    try:
+        vault.put("user-a", {"api_key": "a", "api_secret": "secret", "passphrase": "pass"})
+    except RuntimeError as exc:
+        assert str(exc) == "PRIVA_CREDENTIAL_ENCRYPTION_KEY must be a valid Fernet key"
+    else:
+        raise AssertionError("malformed key should disable credential storage")
+
+
 def test_supabase_auth_verifies_bearer_token(monkeypatch):
     auth = SupabaseAuth()
     auth.url = "https://example.supabase.co"

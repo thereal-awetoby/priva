@@ -63,7 +63,11 @@ Bitget's paper environment. Configure these secrets in Render's environment sett
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `PRIVA_AUTH_REQUIRED=true` to require Supabase sessions
-- `PRIVA_CREDENTIAL_ENCRYPTION_KEY` (Fernet key generated locally)
+- `PRIVA_CREDENTIAL_ENCRYPTION_KEY` (the output of `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
+
+The encryption key must be the generated 44-character URL-safe base64 value,
+not the Python command itself. If the variable is missing or malformed, the
+service still starts but credential connection and persistence remain disabled.
 
 The client always sends Bitget's `paptrading: 1` header. Without all three
 secrets, the route returns `not_configured` and does not call the exchange.
