@@ -1,0 +1,189 @@
+PRIVA SESSION HANDOFF
+Date: 2026-09-16
+
+Purpose
+-------
+This file summarizes the backend work and findings from the current session for Builder A and future development.
+
+Repository and de
+-------------------------
+- Repository: https://github.com/thereal-awetoby/priva.git
+- Branch: main
+- Pushed commit: 4f335f3 Fix activity modes and symbol handling
+- Backend base URL: https://priva-499h.onrender.com
+- No frontend code was included in the pushed commit.
+- The attached activity CSV and local .vscode folder were intentionally not committed.
+
+Trading symbols
+---------------
+- Supported paper symbols are AAPLUSDT and TSLAUSDT only.
+- MSFT and MSFTUSDT are unsupported and must be blocked before market data or order execution.
+- Risk checks normalize base symbols and futures symbols:
+  AAPL matches AAPLUSDT.
+  TSLA matches TSLAUSDT.
+- This fixes spot trades being rejected when the allowlist used AAPL/TSLA but the trade used AAPLUSDT/TSLAUSDT.
+- Unsupported-symbol activity is excluded from the activity feed.
+
+Strategy activity separation
+----------------------------
+- Every new agent cycle records a mode:
+  - autonomous: autonomous agent loop activity
+  - strategy: activity driven by a selected built-in or custom strategy
+- GET /activity-log returns the mode field.
+- Builder A should display Autonomous and Strategy activity separately.
+- Missing mode on old records should be treated as autonomous.
+- Mode must be read from the API, not inferred from action, symbol, or strategy name.
+- The Control Center already has an Autonomous/Strategy activity selector.
+- The full Activity page should also provide an All modes, Autonomous, and Strategy filter.
+
+Activity history and export
+---------------------------
+- The previous 100-record limit caused a CSV with 101 lines including the header.
+- Supabase cycle reads now paginate, so activity exports are not limited to 100 records.
+- The in-memory fallback retains up to 1,000 recent cycles.
+- Supabase cycle records now persist mode.
+- Run backend/supabase_multi_user.sql in Supabase so agent_cycles.mode exists.
+
+Balance and account metrics
+---------------------------
+- GET /account/balance returns:
+  - current balance
+  - starting balance for the current UTC day
+  - daily change
+  - daily change percentage
+  - futures equity and available balance
+  - spot USDT availability and equity
+- Balance data comes from the connected Bitget paper account.
+- If Bitget credentials are not configured, the endpoint reports not_configured instead of pretending the account is funded.
+- Demo funds must be added through the Bitget demo-trading interface.
+
+P&L, win rate, and max drawdown
+-------------------------------
+- GET /pnl returns:
+  - unrealized_pnl
+  - realized_pnl
+  - daily_pnl
+  - total_pnl
+  - win_rate_pct
+  - max_drawdown_pct
+  - open_positions
+- Win rate and max drawdown are calculated from logged cycles and closed trade outcomes.
+- Realized PnL is scoped to the current backend session.
+- Unrealized PnL uses live Bitget positions when available.
+
+Risk settings
+-------------
+- GET /risk-settings reads current risk controls.
+- POST /risk-settings updates risk controls.
+- Current defaults:
+  - max_position_size: 25000 USD
+  - max_daily_loss: 1500 USD
+  - max_leverage: 5x
+  - risk engine enabled
+  - allowed_symbols unrestricted unless explicitly configured
+- Risk checks reject:
+  - unsupported symbols
+  - position notional above max_position_size
+  - daily loss beyond max_daily_loss
+  - leverage above max_leverage
+  - additions that exceed the same-symbol aggregate position limit
+
+Prebuilt strategy controls
+--------------------------
+- Implemented built-in strategies:
+  - momentum_breakout
+  - mean_reversion
+- Built-in strategies support these configurable fields:
+  - position_size or size
+  - leverage
+  - take_profit_pct or take_profit
+  - stop_loss_pct or stop_loss
+  - threshold_pct
+- Strategy activation accepts strategy_config, for example:
+
+  {
+    "strategy_config": {
+      "leverage": 2,
+      "take_profit_pct": 4,
+      "stop_loss_pct": 1
+    }
+  }
+
+- Explicit strategy leverage overrides the adaptive leverage chosen by signal strength.
+- Risk max_leverage remains the hard upper safety limit.
+- Authenticated user runtimes persist strategy_config and restore it after restart.
+- Run backend/supabase_multi_user.sql so user_agent_settings.strategy_config exists.
+
+Custom strategy persistence and naming
+--------------------------------------
+- Custom strategies are persisted per authenticated user in the Supabase
+  `custom_strategies` table, including the parsed definition, name, and description.
+- POST /strategies/parse accepts optional `name` and `description` fields for
+  structured and natural-language custom strategies.
+- Saved custom strategies are restored before user runtimes start and before the
+  strategy catalog or activation checks run, so they survive Render restarts.
+- Builder A can load the saved name and description from GET /strategies.
+- Run backend/supabase_multi_user.sql in Supabase to create the
+  `custom_strategies` table.
+
+Autonomous execution controls
+-----------------------------
+- GET /agent-settings reads autonomous execution settings.
+- POST /agent-settings updates:
+  - market: futures, spot, or autonomous
+  - take_profit_pct
+  - stop_loss_pct
+  - close_on_signal_violation
+- Default autonomous exits:
+  - take profit: 5 percent
+  - stop loss: 2 percent
+  - close on an opposite signal: enabled
+- Futures positions use Bitget flash-close.
+- Spot positions close using an opposite market order.
+
+Authentication and user runtimes
+--------------------------------
+- Authenticated requests use:
+  Authorization: Bearer <Supabase access token>
+- Supported user endpoints:
+  - GET /auth/session
+  - POST /connection/bitget
+  - POST /connection/bitget/disconnect
+  - GET /user/agent-loop
+  - GET /user/agent-settings
+  - POST /user/agent-settings
+- User runtimes have separate credentials, risk engines, settings, workers, and cycle logs.
+- Bitget credentials are encrypted server-side and must never be stored in browser storage or returned to the frontend.
+
+Important endpoints
+-------------------
+- GET /health
+- GET /status
+- GET /positions
+- GET /account/balance
+- GET /pnl
+- GET /risk-usage
+- GET /activity-log
+- GET /strategies
+- POST /strategies/{strategy_id}/activate
+- POST /strategies/parse
+- POST /strategies/{strategy_id}/backtest
+- GET/POST /risk-settings
+- GET/POST /agent-settings
+- GET/POST /kill-switch
+- POST /risk-check
+- POST /paper-trade
+
+Validation
+----------
+- Full backend test suite passed:
+  91 passed, 2 warnings
+- Warnings are existing FastAPI on_event deprecation warnings.
+- Diagnostics reported no errors in the changed backend files.
+
+Required follow-up
+------------------
+1. Run backend/supabase_multi_user.sql in the Supabase SQL editor.
+2. Ensure Builder A separates activity by the API mode field.
+3. Ensure Builder A exposes balance, PnL, win rate, max drawdown, leverage, TP, SL, and risk settings from the backend responses.
+4. Do not add MSFT to AGENT_WATCHED_SYMBOLS or the supported symbol allowlist.

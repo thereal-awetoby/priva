@@ -256,9 +256,11 @@ create index if not exists agent_cycles_session_id_idx
 
 For multi-user credential persistence and user-scoped cycle logs, also run
 [`supabase_multi_user.sql`](supabase_multi_user.sql) once in the Supabase SQL
-Editor. It creates the encrypted-credential and user-settings tables and adds
-`user_id` to `agent_cycles`. The backend uses the service-role key server-side;
-encrypted credentials must never be exposed through client policies.
+Editor. It creates the encrypted-credential, user-settings, and custom-strategy
+tables and adds `user_id` to `agent_cycles`. Custom strategy definitions,
+names, and descriptions are restored from `custom_strategies` after a Render
+restart. The backend uses the service-role key server-side; encrypted
+credentials must never be exposed through client policies.
 
 The backend uses the singleton row `id = 'global'`. It loads that row at
 startup and upserts it when `/strategies/{strategy_id}/activate` succeeds.

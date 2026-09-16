@@ -10,7 +10,7 @@ from app.market_data import BitgetMarketDataService
 from app.paper_execution import BitgetPaperExecutionClient
 from app.risk_engine import RiskEngine
 from app.supabase_logging import SupabaseCycleLogger
-from app.strategy import configure_builtin_strategy, get_active_strategy_id
+from app.strategy import configure_builtin_strategy, get_active_strategy_id, register_custom_strategy
 
 
 @dataclass
@@ -48,6 +48,16 @@ class UserRuntimeRegistry:
             if symbol.strip()
         ]
         cycle_logger = SupabaseCycleLogger(user_id=user_id)
+        for record in cycle_logger.fetch_custom_strategies(user_id):
+            definition = record.get("definition")
+            strategy_id = record.get("strategy_id")
+            if strategy_id and isinstance(definition, dict):
+                register_custom_strategy(
+                    str(strategy_id),
+                    definition,
+                    name=str(record.get("name") or "").strip() or None,
+                    description=str(record.get("description") or "").strip() or None,
+                )
         settings = cycle_logger.fetch_user_settings(user_id)
         strategy_id = str(settings.get("strategy_id") or get_active_strategy_id())
         strategy_config = settings.get("strategy_config")

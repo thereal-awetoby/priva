@@ -73,6 +73,20 @@ def execution_client_for(user: AuthenticatedUser) -> BitgetPaperExecutionClient:
     return BitgetPaperExecutionClient(session=paper_execution_client.session)
 
 
+def restore_custom_strategies(user_id: str) -> None:
+    for record in SupabaseCycleLogger(user_id=user_id).fetch_custom_strategies(user_id):
+        strategy_id = record.get("strategy_id")
+        definition = record.get("definition")
+        if not strategy_id or not isinstance(definition, dict):
+            continue
+        register_custom_strategy(
+            str(strategy_id),
+            definition,
+            name=str(record.get("name") or "").strip() or None,
+            description=str(record.get("description") or "").strip() or None,
+        )
+
+
 def process_market_cycle(
     symbol: str,
     *,
@@ -385,6 +399,7 @@ async def periodic_market_loop() -> None:
 
 @app.on_event("startup")
 async def startup_event() -> None:
+    restore_custom_strategies("local-development")
     if supabase_auth.required:
         for record in cycle_logger.fetch_connected_users():
             user_id = str(record.get("user_id", ""))
@@ -733,7 +748,8 @@ def activity_log() -> dict[str, Any]:
 
 
 @app.get("/strategies")
-def strategies() -> dict[str, Any]:
+def strategies(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    restore_custom_strategies(user.id)
     catalog = []
     for strategy_id, definition in list_strategy_catalog().items():
         catalog.append(
@@ -747,6 +763,9 @@ def strategies() -> dict[str, Any]:
 
 @app.post("/strategies/{strategy_id}/activate")
 def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | None = None, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    if not isinstance(user, AuthenticatedUser):
+        user = AuthenticatedUser("local-development")
+    restore_custom_strategies(user.id)
     symbols = None
     strategy_map = payload.strategy_by_symbol if payload is not None else None
     strategy_config = payload.strategy_config if payload is not None else None
@@ -857,9 +876,11 @@ def backtest_strategy_endpoint(strategy_id: str, payload: dict[str, Any] | None 
 
 
 @app.post("/strategies/parse")
-def parse_strategy(payload: dict[str, Any]) -> dict[str, Any]:
+def parse_strategy(payload: dict[str, Any], user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {"status": "rejected", "message": "payload must be an object"}
+    if not isinstance(user, AuthenticatedUser):
+        user = AuthenticatedUser("local-development")
 
     has_text = "text" in payload
     has_strategy = "strategy" in payload
@@ -877,6 +898,19 @@ def parse_strategy(payload: dict[str, Any]) -> dict[str, Any]:
             response["description"] = description.strip()
 
         return response
+
+    def _register_and_persist(parsed: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        strategy_id = payload.get("strategy_id") or (
+            f"custom_{parsed['action']}_{parsed['comparison']}_{int(parsed['threshold_pct'] * 100)}_"
+            f"{str(parsed['position_size']).replace('.', '_')}"
+        )
+        name = str(payload.get("name") or "").strip() or f"Custom {parsed['action'].upper()} on {parsed['comparison'].upper()}"
+        description = str(payload.get("description") or "").strip() or None
+        register_custom_strategy(strategy_id, parsed, name=name, description=description)
+        persistence = SupabaseCycleLogger(user_id=user.id).save_custom_strategy(
+            user.id, strategy_id, parsed, name, description
+        )
+        return strategy_id, persistence
 
     if has_text:
         text = payload.get("text")
@@ -904,6 +938,12 @@ def parse_strategy(payload: dict[str, Any]) -> dict[str, Any]:
                     configure_builtin_strategy(parsed["target_strategy"], config)
                     parsed.update(config)
             return _attach_metadata({"status": "parsed", **parsed, "strategy_id": parsed.get("target_strategy", parsed.get("strategy_id"))})
+            strategy_id, persistence = _register_and_persist(parsed)
+            if persistence["status"] == "error":
+                return {"status": "rejected", "message": "strategy could not be persisted"}
+            response = {"status": "parsed", **parsed, "strategy_id": strategy_id}
+            response["persistence"] = persistence["status"]
+            return _attach_metadata(response)
         except ValueError as exc:
             return {"status": "rejected", "message": str(exc)}
 
@@ -918,12 +958,11 @@ def parse_strategy(payload: dict[str, Any]) -> dict[str, Any]:
                 response = {"status": "parsed", **parsed, "strategy_id": parsed["target_strategy"]}
                 return _attach_metadata(response)
 
-            strategy_id = payload.get("strategy_id") or (
-                f"custom_{parsed['action']}_{parsed['comparison']}_{int(parsed['threshold_pct'] * 100)}_"
-                f"{str(parsed['position_size']).replace('.', '_')}"
-            )
-            register_custom_strategy(strategy_id, parsed)
+            strategy_id, persistence = _register_and_persist(parsed)
+            if persistence["status"] == "error":
+                return {"status": "rejected", "message": "strategy could not be persisted"}
             response = {"status": "parsed", **parsed, "strategy_id": strategy_id}
+            response["persistence"] = persistence["status"]
             return _attach_metadata(response)
         except ValueError as exc:
             return {"status": "rejected", "message": str(exc)}

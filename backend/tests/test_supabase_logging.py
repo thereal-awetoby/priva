@@ -110,3 +110,36 @@ def test_supabase_logger_saves_active_strategy(monkeypatch):
     assert result["status"] == "saved"
     assert url.endswith("/rest/v1/strategy_settings")
     assert kwargs["json"] == {"id": "global", "strategy_id": "mean_reversion"}
+
+
+def test_supabase_logger_saves_custom_strategy(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+    session = FakeSession()
+
+    result = SupabaseCycleLogger(session=session).save_custom_strategy(
+        "user-1",
+        "custom_opening_push",
+        {"kind": "custom", "action": "buy", "comparison": "open"},
+        "Opening Push",
+        "Buy strength above the opening price.",
+    )
+
+    url, kwargs = session.calls[0]
+    assert result["status"] == "saved"
+    assert url.endswith("/rest/v1/custom_strategies")
+    assert kwargs["params"]["on_conflict"] == "user_id,strategy_id"
+    assert kwargs["json"]["user_id"] == "user-1"
+    assert kwargs["json"]["name"] == "Opening Push"
+    assert kwargs["json"]["definition"]["action"] == "buy"
+
+
+def test_supabase_logger_reads_custom_strategies(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+    session = FakeSession([{"strategy_id": "custom_opening_push", "definition": {}}])
+
+    strategies = SupabaseCycleLogger(session=session).fetch_custom_strategies("user-1")
+
+    assert strategies[0]["strategy_id"] == "custom_opening_push"
+    assert session.calls[0][1]["params"]["user_id"] == "eq.user-1"

@@ -256,3 +256,19 @@ def test_parse_strategy_endpoint_registers_structured_strategy_for_activation():
     ticker = {"status": "live", "last_price": 101.5, "open_price": 100.0}
     signal = build_signal_from_ticker(ticker)
     assert signal["action"] == "buy"
+
+
+def test_parse_strategy_endpoint_preserves_custom_name_and_description():
+    parsed = parse_strategy_endpoint({
+        "name": "Opening Push",
+        "description": "Buy strength above the opening price.",
+        "strategy": {
+            "action": "buy",
+            "comparison": "open",
+            "threshold_pct": 2.0,
+        },
+    })
+
+    assert parsed["name"] == "Opening Push"
+    assert parsed["description"] == "Buy strength above the opening price."
+    assert list_strategy_catalog()[parsed["strategy_id"]]["name"] == "Opening Push"

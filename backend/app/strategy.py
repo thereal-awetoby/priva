@@ -640,7 +640,13 @@ def get_strategy_for_symbol(symbol: str) -> str:
     return _symbol_strategy_ids.get(str(symbol).strip().upper(), _active_strategy_id)
 
 
-def register_custom_strategy(strategy_id: str, parsed_strategy: dict[str, Any]) -> None:
+def register_custom_strategy(
+    strategy_id: str,
+    parsed_strategy: dict[str, Any],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> None:
     strategy_type = str(parsed_strategy.get("kind", "custom")).lower()
     if strategy_type != "custom":
         return
@@ -702,9 +708,9 @@ def register_custom_strategy(strategy_id: str, parsed_strategy: dict[str, Any]) 
     STRATEGIES[strategy_id] = custom_strategy
     _registered_strategy_catalog[strategy_id] = {
         "id": strategy_id,
-        "name": f"Custom {action.upper()} on {comparison.upper()}",
+        "name": name or f"Custom {action.upper()} on {comparison.upper()}",
         "type": "structured",
-        "description": f"Custom {action} signal using {comparison} comparison with a {threshold_pct}% threshold.",
+        "description": description or f"Custom {action} signal using {comparison} comparison with a {threshold_pct}% threshold.",
     }
 
 

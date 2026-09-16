@@ -297,3 +297,58 @@ class SupabaseCycleLogger:
         except (requests.RequestException, ValueError) as exc:
             logger.warning("Supabase user settings read failed: %s", exc)
             return {}
+
+    def save_custom_strategy(
+        self,
+        user_id: str,
+        strategy_id: str,
+        definition: dict[str, Any],
+        name: str,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        if not self.configured:
+            return {"status": "not_configured"}
+        try:
+            response = self.session.post(
+                f"{self.url}/rest/v1/custom_strategies",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates,return=minimal",
+                },
+                params={"on_conflict": "user_id,strategy_id"},
+                json={
+                    "user_id": user_id,
+                    "strategy_id": strategy_id,
+                    "name": name,
+                    "description": description,
+                    "definition": definition,
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            return {"status": "saved"}
+        except requests.RequestException as exc:
+            logger.warning("Supabase custom strategy write failed: %s", exc)
+            return {"status": "error", "message": str(exc)}
+
+    def fetch_custom_strategies(self, user_id: str) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+        try:
+            response = self.session.get(
+                f"{self.url}/rest/v1/custom_strategies",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                },
+                params={"select": "*", "user_id": f"eq.{user_id}"},
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, list) else []
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Supabase custom strategy read failed: %s", exc)
+            return []

@@ -18,6 +18,17 @@ create table if not exists public.user_agent_settings (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.custom_strategies (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  strategy_id text not null,
+  name text not null,
+  description text,
+  definition jsonb not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (user_id, strategy_id)
+);
+
 alter table public.user_agent_settings
   add column if not exists strategy_id text,
   add column if not exists strategy_config jsonb not null default '{}'::jsonb,
@@ -35,6 +46,7 @@ alter table public.agent_cycles
 
 alter table public.user_bitget_credentials enable row level security;
 alter table public.user_agent_settings enable row level security;
+alter table public.custom_strategies enable row level security;
 alter table public.agent_cycles enable row level security;
 
 create index if not exists agent_cycles_user_id_idx
