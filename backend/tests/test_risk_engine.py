@@ -82,6 +82,17 @@ def test_trade_rejected_when_symbol_is_not_allowed():
     assert "unsupported_symbol" in result["reasons"][0]
 
 
+def test_trade_allows_spot_base_symbol_when_futures_symbol_is_allowed():
+    engine = RiskEngine(allowed_symbols=["AAPL"])
+    result = engine.evaluate_trade(
+        trade={"symbol": "AAPLUSDT", "side": "buy", "qty": 1, "entry_price": 100, "leverage": 1},
+        current_positions=[],
+        current_daily_pnl=0,
+    )
+
+    assert result["allowed"] is True
+
+
 def test_update_settings_reconfigures_risk_limits_and_allowed_symbols():
     engine = RiskEngine()
 

@@ -29,6 +29,8 @@ class RiskEngine:
         normalized = []
         for symbol in symbols:
             normalized_symbol = str(symbol).strip().upper()
+            if normalized_symbol and not normalized_symbol.endswith("USDT"):
+                normalized_symbol += "USDT"
             if not normalized_symbol:
                 continue
             normalized.append(normalized_symbol)
@@ -88,7 +90,9 @@ class RiskEngine:
 
         reasons: list[str] = []
         symbol = str(trade.get("symbol", "")).upper()
-        if self.allowed_symbols is not None and symbol not in self.allowed_symbols:
+        canonical_symbol = symbol.removesuffix("USDT")
+        allowed_symbols = {allowed.removesuffix("USDT") for allowed in self.allowed_symbols} if self.allowed_symbols is not None else None
+        if allowed_symbols is not None and canonical_symbol not in allowed_symbols:
             reasons.append(f"unsupported_symbol:{symbol}")
 
         notional = float(trade.get("qty", 0)) * float(trade.get("entry_price", 0))

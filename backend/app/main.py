@@ -157,6 +157,7 @@ class ClosePositionRequest(BaseModel):
 class StrategyActivationRequest(BaseModel):
     symbols: list[str] | None = None
     strategy_by_symbol: dict[str, str] | None = None
+    strategy_config: dict[str, Any] | None = None
 
 
 class AgentSettingsRequest(BaseModel):
@@ -673,6 +674,11 @@ def activity_log() -> dict[str, Any]:
     cycles = cycle_logger.fetch_cycles()
     if not cycles:
         cycles = agent_loop.recent_cycles()
+    cycles = [
+        cycle
+        for cycle in cycles
+        if str(cycle.get("symbol", "")).upper() in agent_loop.SUPPORTED_SYMBOLS
+    ]
     if cycles:
         return {
             "entries": [
@@ -708,7 +714,7 @@ def activity_log() -> dict[str, Any]:
             {
                 "id": "evt_002",
                 "type": "risk_check",
-                "symbol": "NVDA",
+                "symbol": "TSLA",
                 "result": "approved",
                 "reason": "within max leverage",
                 "mode": "strategy",
@@ -717,9 +723,9 @@ def activity_log() -> dict[str, Any]:
             {
                 "id": "evt_003",
                 "type": "intent",
-                "symbol": "MSFT",
+                "symbol": "AAPL",
                 "status": "encrypted",
-                "mode": "autonomous",
+                "mode": "strategy",
                 "timestamp": "2026-09-10T00:03:00Z",
             },
         ]
@@ -743,8 +749,14 @@ def strategies() -> dict[str, Any]:
 def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | None = None, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     symbols = None
     strategy_map = payload.strategy_by_symbol if payload is not None else None
+    strategy_config = payload.strategy_config if payload is not None else None
     if strategy_id not in STRATEGIES:
         return {"strategy_id": strategy_id, "status": "rejected", "message": "unknown strategy"}
+    if strategy_config is not None:
+        try:
+            configure_builtin_strategy(strategy_id, strategy_config)
+        except ValueError as exc:
+            return {"strategy_id": strategy_id, "status": "rejected", "message": str(exc)}
     if payload is not None and payload.symbols is not None:
         symbols = list(dict.fromkeys(symbol.upper() for symbol in payload.symbols))
         unsupported = [symbol for symbol in symbols if symbol not in {"AAPLUSDT", "TSLAUSDT"}]
@@ -767,6 +779,8 @@ def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | Non
             settings["symbols"] = symbols
         if normalized_map:
             settings["strategy_by_symbol"] = normalized_map
+        if strategy_config is not None:
+            settings["strategy_config"] = strategy_config
         logger = SupabaseCycleLogger(user_id=user.id)
         persistence = logger.save_user_settings(user.id, settings)
         if logger.configured and persistence["status"] != "saved":
@@ -785,6 +799,7 @@ def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | Non
             "active": True,
             "symbols": runtime.symbols if runtime else symbols or [],
             "strategy_by_symbol": runtime.strategy_by_symbol if runtime else normalized_map,
+            "strategy_config": strategy_config or {},
             "persistence": persistence["status"],
         }
 
@@ -804,6 +819,7 @@ def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | Non
             symbols = list(normalized_map)
 
     set_active_strategy(strategy_id)
+    agent_loop.configure_mode("strategy")
 
     if symbols is not None:
         agent_loop.configure_watched_symbols(symbols)
@@ -818,6 +834,7 @@ def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | Non
         "active": True,
         "symbols": agent_loop.WATCHED_SYMBOLS,
         "strategy_by_symbol": {symbol: get_strategy_for_symbol(symbol) for symbol in agent_loop.WATCHED_SYMBOLS},
+        "strategy_config": strategy_config or {},
         "persistence": persistence["status"],
     }
 

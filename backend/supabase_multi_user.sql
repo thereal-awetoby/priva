@@ -20,6 +20,7 @@ create table if not exists public.user_agent_settings (
 
 alter table public.user_agent_settings
   add column if not exists strategy_id text,
+  add column if not exists strategy_config jsonb not null default '{}'::jsonb,
   add column if not exists symbols jsonb not null default '["AAPLUSDT", "TSLAUSDT"]'::jsonb,
   add column if not exists strategy_by_symbol jsonb not null default '{}'::jsonb,
   add column if not exists max_position_size numeric not null default 25000,
@@ -29,6 +30,7 @@ alter table public.user_agent_settings
   add column if not exists allowed_symbols jsonb not null default '[]'::jsonb;
 
 alter table public.agent_cycles
+  add column if not exists mode text not null default 'autonomous',
   add column if not exists user_id uuid references auth.users(id) on delete cascade;
 
 alter table public.user_bitget_credentials enable row level security;

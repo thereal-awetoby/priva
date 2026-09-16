@@ -10,7 +10,7 @@ from app.market_data import BitgetMarketDataService
 from app.paper_execution import BitgetPaperExecutionClient
 from app.risk_engine import RiskEngine
 from app.supabase_logging import SupabaseCycleLogger
-from app.strategy import get_active_strategy_id
+from app.strategy import configure_builtin_strategy, get_active_strategy_id
 
 
 @dataclass
@@ -49,6 +49,13 @@ class UserRuntimeRegistry:
         ]
         cycle_logger = SupabaseCycleLogger(user_id=user_id)
         settings = cycle_logger.fetch_user_settings(user_id)
+        strategy_id = str(settings.get("strategy_id") or get_active_strategy_id())
+        strategy_config = settings.get("strategy_config")
+        if isinstance(strategy_config, dict):
+            try:
+                configure_builtin_strategy(strategy_id, strategy_config)
+            except ValueError:
+                strategy_config = None
         configured_symbols = settings.get("symbols")
         if isinstance(configured_symbols, list) and configured_symbols:
             symbols = [str(symbol).upper() for symbol in configured_symbols]
@@ -65,7 +72,7 @@ class UserRuntimeRegistry:
             risk_engine=risk_engine,
             cycle_logger=cycle_logger,
             symbols=symbols,
-            strategy_id=str(settings.get("strategy_id") or get_active_strategy_id()),
+            strategy_id=strategy_id,
             strategy_by_symbol=settings.get("strategy_by_symbol") if isinstance(settings.get("strategy_by_symbol"), dict) else {},
             market_type=str(settings.get("market", "futures")),
             take_profit_pct=float(settings.get("take_profit_pct", 5)),

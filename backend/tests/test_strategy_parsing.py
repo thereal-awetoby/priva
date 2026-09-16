@@ -199,6 +199,31 @@ def test_strategy_activation_applies_selected_symbols(monkeypatch):
     activate_strategy("momentum_breakout")
 
 
+def test_strategy_activation_applies_builtin_risk_configuration(monkeypatch):
+    configured = {}
+    monkeypatch.setattr(main.cycle_logger, "save_active_strategy", lambda strategy_id: {"status": "skipped"})
+    monkeypatch.setattr(
+        main,
+        "configure_builtin_strategy",
+        lambda strategy_id, config: configured.update({"strategy_id": strategy_id, "config": config}),
+    )
+
+    result = main.activate_strategy(
+        "mean_reversion",
+        main.StrategyActivationRequest(
+            strategy_config={"leverage": 2, "take_profit_pct": 4, "stop_loss_pct": 1},
+        ),
+    )
+
+    assert result["status"] == "activated"
+    assert configured == {
+        "strategy_id": "mean_reversion",
+        "config": {"leverage": 2, "take_profit_pct": 4, "stop_loss_pct": 1},
+    }
+    assert result["strategy_config"] == {"leverage": 2, "take_profit_pct": 4, "stop_loss_pct": 1}
+    activate_strategy("momentum_breakout")
+
+
 def test_strategy_activation_rejects_unsupported_symbols_without_mutation(monkeypatch):
     main.agent_loop.configure_watched_symbols(["AAPLUSDT"])
     activate_strategy("momentum_breakout")

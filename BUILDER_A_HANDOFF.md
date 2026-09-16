@@ -27,10 +27,27 @@ Use these endpoints from Builder A:
 - `GET /user/agent-loop` — authenticated worker status
 - `GET /user/agent-settings` — load that user's persisted settings
 - `POST /user/agent-settings` — save that user's strategy, risk, market, and exit settings
+- `GET /activity-log` — load activity entries, including `mode`
 
 Strategy activation accepts an optional body such as
 `{"symbols":["AAPLUSDT","TSLAUSDT"]}`. The backend applies this selection to
 the running agent loop; only those two paper symbols are supported.
+
+Activation also accepts built-in strategy controls under `strategy_config`:
+
+```json
+{
+  "strategy_config": {
+    "leverage": 2,
+    "take_profit_pct": 4,
+    "stop_loss_pct": 1
+  }
+}
+```
+
+These values are validated by the backend and persisted for authenticated
+users. Builder A should send them as part of the activation request when the
+frontend exposes controls for prebuilt strategies.
 
 User-account requests must include:
 
@@ -97,6 +114,25 @@ The live enforcement logic in `evaluate_trade()` is:
 - reject if adding the proposed notional to any same-symbol existing position would exceed `max_position_size`
 
 Builder A should treat `GET /risk-settings` and `POST /risk-settings` as the source of truth for current live settings and use them in the UI when exposing risk controls.
+
+## 5.2 Activity separation and symbol behavior
+
+Builder A must keep Autonomous and Strategy activity visibly separate using
+the `mode` field returned by `GET /activity-log`:
+
+- `mode: "autonomous"` belongs in the Autonomous view.
+- `mode: "strategy"` belongs in the Strategy view.
+- Missing `mode` on legacy records should be treated as `autonomous`.
+
+Do not infer the mode from the action, symbol, or strategy name. New strategy
+cycles are labeled `strategy`; autonomous cycles are labeled `autonomous`.
+
+The backend supports only `AAPLUSDT` and `TSLAUSDT`. Risk checks normalize
+`AAPL` and `AAPLUSDT` as the same base symbol, and likewise for TSLA. `MSFT`
+and `MSFTUSDT` must remain blocked before market-data or order processing.
+
+Activity reads are paginated, so the frontend should not assume a 100-entry
+maximum. The backend's in-memory fallback retains up to 1,000 recent cycles.
 
 ## 5.2 Strategy defaults and current logic
 
@@ -184,6 +220,7 @@ Yes — the `win rate` and `max drawdown` work was added earlier and is live in 
 - [ ] Add a pre-trade `POST /risk-check` call before order submission
 - [ ] Connect `POST /paper-trade` to the trading UI
 - [ ] Display backtest results from `POST /strategies/{strategy_id}/backtest`
+- [ ] Keep Autonomous and Strategy activity separate using `/activity-log` entry `mode`
 - [ ] Keep the backend untouched unless a backend change is explicitly requested
 
 ## 8. Known limitations to communicate to Builder A
@@ -191,6 +228,8 @@ Yes — the `win rate` and `max drawdown` work was added earlier and is live in 
 - Realized PnL is scoped to the current backend session.
 - The configured Bitget paper account supports only `AAPLUSDT` and `TSLAUSDT`.
 - `MSFTUSDT` should not be used in the current paper environment.
+- Run `backend/supabase_multi_user.sql` after deployment so `agent_cycles.mode`
+  and `user_agent_settings.strategy_config` are available.
 - The backend handles provider secrets server-side; Builder A should not expose them.
 - The current credential vault is process-memory backed, so a Render restart
   requires the Supabase migration and service-role configuration for restoration.

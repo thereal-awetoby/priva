@@ -16,6 +16,9 @@ Camp trading project for tokenized U.S. stock futures.
 - Built-in strategy config overrides for `position_size`, `leverage`, TP/SL, and threshold values
 - `GET /pnl` metrics for `win_rate_pct` and `max_drawdown_pct`
 - `GET /activity-log` metadata including `mode`
+- Separate Autonomous and Strategy activity classification in cycle logs
+- Spot/futures symbol normalization for risk allowlists
+- Unsupported-symbol blocking before market-data or order processing
 - Supabase persistence for active strategy and per-process PnL sessions
 - Supabase bearer-token verification and encrypted per-user Bitget credential vault
 - Authenticated `/auth/session`, connection, and manual trade routes
@@ -192,6 +195,23 @@ curl.exe -X POST \
 Only `AAPLUSDT` and `TSLAUSDT` are accepted. The selection is process-local
 and resets to `AGENT_WATCHED_SYMBOLS` after a backend restart.
 
+Built-in strategy activation can also receive per-strategy controls:
+
+```json
+{
+   "symbols": ["AAPLUSDT", "TSLAUSDT"],
+   "strategy_config": {
+      "leverage": 2,
+      "take_profit_pct": 4,
+      "stop_loss_pct": 1
+   }
+}
+```
+
+The backend validates and applies these values to the selected built-in
+strategy. Authenticated runtimes persist the configuration in
+`user_agent_settings` and restore it after restart.
+
 Different strategies can be assigned to different symbols in the same request:
 
 ```json
@@ -278,6 +298,29 @@ a `2%` stop-loss, and closing when the next signal opposes the open position:
 
 The agent evaluates these rules before adding to or opening a position. Futures
 positions use Bitget flash-close; spot positions use an opposite market order.
+
+## Activity, symbols, and history
+
+Every agent cycle includes a `mode` value in its activity record:
+
+- `autonomous` for the autonomous loop
+- `strategy` when a selected built-in or custom strategy drives the cycle
+
+The `/activity-log` response exposes this field so clients can keep the two
+activity streams separate. Older records without `mode` are treated as
+autonomous for compatibility.
+
+Only `AAPLUSDT` and `TSLAUSDT` are supported paper symbols. The risk engine
+normalizes base symbols and futures symbols, so an allowlist containing `AAPL`
+matches a trade reported as `AAPLUSDT`. Unsupported symbols such as `MSFTUSDT`
+are blocked before market data or execution and excluded from the activity
+feed.
+
+Supabase activity reads are paginated so exports are not limited to the old
+100-record window. The in-memory fallback retains up to 1,000 recent cycles.
+
+After applying the backend code, run `supabase_multi_user.sql` in Supabase so
+`agent_cycles.mode` and `user_agent_settings.strategy_config` exist.
 
 For a full close, send `position_side: "buy"` for a long or
 `position_side: "sell"` for a short. Stop the agent before manually closing a

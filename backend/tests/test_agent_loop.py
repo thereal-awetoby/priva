@@ -37,6 +37,39 @@ def test_process_market_cycle_generates_live_decision_and_trade():
     assert result["log_entry"]["type"] == "trade"
 
 
+def test_agent_cycle_blocks_unsupported_symbol_before_market_fetch():
+    class UnexpectedMarketService:
+        def fetch_spot_ticker(self, symbol):
+            raise AssertionError("unsupported symbols must not reach market data")
+
+    result = asyncio.run(
+        run_cycle(
+            "MSFTUSDT",
+            market_service=UnexpectedMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=FakeExecutionClient(),
+        )
+    )
+
+    assert result["status"] == "blocked"
+    assert result["mode"] == "autonomous"
+    assert result["risk_check"]["reasons"] == ["unsupported_symbol:MSFTUSDT"]
+
+
+def test_agent_cycle_records_strategy_mode():
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=FakeExecutionClient(),
+            strategy_id="mean_reversion",
+        )
+    )
+
+    assert result["mode"] == "strategy"
+
+
 def test_process_market_cycle_uses_strategy_size_and_leverage(monkeypatch):
     monkeypatch.setattr(
         "app.main.build_signal_from_ticker",

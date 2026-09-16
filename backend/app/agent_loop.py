@@ -21,11 +21,13 @@ TAKE_PROFIT_PCT = float(os.getenv("AGENT_TAKE_PROFIT_PCT", "5"))
 STOP_LOSS_PCT = float(os.getenv("AGENT_STOP_LOSS_PCT", "2"))
 CLOSE_ON_SIGNAL_VIOLATION = os.getenv("AGENT_CLOSE_ON_SIGNAL_VIOLATION", "true").lower() == "true"
 WATCHED_SYMBOLS = [
-    symbol.strip()
+    symbol.strip().upper()
     for symbol in os.getenv("AGENT_WATCHED_SYMBOLS", "AAPLUSDT,TSLAUSDT").split(",")
-    if symbol.strip()
+    if symbol.strip().upper() in {"AAPLUSDT", "TSLAUSDT"}
 ]
 ORDER_QTY = float(os.getenv("AGENT_ORDER_QTY", "1"))
+SUPPORTED_SYMBOLS = {"AAPLUSDT", "TSLAUSDT"}
+MODE = "autonomous"
 
 _loop_task: asyncio.Task | None = None
 _stop_event = asyncio.Event()
@@ -34,7 +36,7 @@ _recent_cycles: list[dict[str, Any]] = []
 
 def _record_cycle(entry: dict[str, Any]) -> None:
     _recent_cycles.append(entry)
-    del _recent_cycles[:-100]
+    del _recent_cycles[:-1000]
 
 
 def recent_cycles() -> list[dict[str, Any]]:
@@ -43,8 +45,17 @@ def recent_cycles() -> list[dict[str, Any]]:
 
 def configure_watched_symbols(symbols: list[str]) -> list[str]:
     global WATCHED_SYMBOLS
-    WATCHED_SYMBOLS = [symbol.upper() for symbol in symbols]
+    WATCHED_SYMBOLS = [symbol.upper() for symbol in symbols if symbol.upper() in SUPPORTED_SYMBOLS]
     return list(WATCHED_SYMBOLS)
+
+
+def configure_mode(mode: str) -> str:
+    global MODE
+    normalized = str(mode).strip().lower()
+    if normalized not in {"autonomous", "strategy"}:
+        raise ValueError("mode must be autonomous or strategy")
+    MODE = normalized
+    return MODE
 
 
 def configure_market_type(market: str) -> str:
@@ -225,6 +236,7 @@ async def run_cycle(
     take_profit_pct: float | None = None,
     stop_loss_pct: float | None = None,
     close_on_signal_violation: bool | None = None,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     def persist(result: dict[str, Any]) -> dict[str, Any]:
         result.setdefault("created_at", cycle_start.isoformat())
@@ -234,10 +246,25 @@ async def run_cycle(
         return result
 
     cycle_start = datetime.now(timezone.utc)
+    normalized_symbol = symbol.upper()
+    if normalized_symbol not in SUPPORTED_SYMBOLS:
+        result = {
+            "status": "blocked",
+            "symbol": normalized_symbol,
+            "mode": mode or MODE,
+            "decision": {"action": "hold", "symbol": normalized_symbol},
+            "risk_check": {"allowed": False, "reasons": [f"unsupported_symbol:{normalized_symbol}"]},
+            "order": None,
+        }
+        _record_cycle(result)
+        if cycle_logger is not None:
+            result["persistence"] = cycle_logger.log_cycle(result)
+        return result
     try:
         ticker = await asyncio.to_thread(market_service.fetch_spot_ticker, symbol)
         ticker = {**ticker, "symbol": symbol.upper()}
         selected_strategy = (strategy_by_symbol or {}).get(symbol.upper(), strategy_id)
+        cycle_mode = mode or ("strategy" if selected_strategy else MODE)
         decision = build_signal_from_ticker(ticker, strategy_id=selected_strategy) if selected_strategy else build_signal_from_ticker(ticker)
         decision.update({"symbol": symbol.upper(), "market_status": ticker.get("status", "unknown")})
 
@@ -245,6 +272,7 @@ async def run_cycle(
             result = {
                 "status": "logged",
                 "symbol": symbol.upper(),
+                "mode": cycle_mode,
                 "decision": decision,
                 "ticker": ticker,
                 "risk_check": {"allowed": False, "reasons": ["no_trade_signal"]},
@@ -304,6 +332,7 @@ async def run_cycle(
                     result = {
                         "status": "closed" if close_result.get("status") == "submitted" else close_result.get("status", "close_failed"),
                         "symbol": symbol.upper(),
+                        "mode": cycle_mode,
                         "decision": decision,
                         "ticker": ticker,
                         "exit_reason": exit_reason,
@@ -321,6 +350,7 @@ async def run_cycle(
                 result = {
                     "status": "skipped_existing_position",
                     "symbol": symbol.upper(),
+                    "mode": cycle_mode,
                     "decision": decision,
                     "ticker": ticker,
                     "order": None,
@@ -340,6 +370,7 @@ async def run_cycle(
             result = {
                 "status": "risk_rejected",
                 "symbol": symbol.upper(),
+                "mode": cycle_mode,
                 "decision": decision,
                 "ticker": ticker,
                 "risk_check": risk_result,
@@ -352,6 +383,7 @@ async def run_cycle(
         result = {
             "status": order_result.get("status", "unknown"),
             "symbol": symbol.upper(),
+            "mode": cycle_mode,
             "decision": decision,
             "ticker": ticker,
             "risk_check": risk_result,
@@ -382,6 +414,7 @@ async def agent_loop(*, market_service: Any, risk_engine: Any, execution_client:
                 risk_engine=risk_engine,
                 execution_client=execution_client,
                 cycle_logger=cycle_logger,
+                mode=MODE,
             )
         try:
             await asyncio.wait_for(_stop_event.wait(), timeout=LOOP_INTERVAL_SECONDS)

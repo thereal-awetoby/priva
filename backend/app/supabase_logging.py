@@ -30,6 +30,7 @@ class SupabaseCycleLogger:
             "session_id": self.session_id,
             "symbol": cycle.get("symbol", "UNKNOWN"),
             "market": cycle.get("market", "futures"),
+            "mode": cycle.get("mode", "autonomous"),
             "status": cycle.get("status", "unknown"),
             "decision": cycle.get("decision", {}),
             "ticker": cycle.get("ticker"),
@@ -58,28 +59,43 @@ class SupabaseCycleLogger:
             logger.warning("Supabase cycle logging failed: %s", exc)
             return {"status": "error", "message": str(exc)}
 
-    def fetch_cycles(self, *, limit: int = 100, session_id: str | None = None) -> list[dict[str, Any]]:
+    def fetch_cycles(self, *, limit: int | None = None, session_id: str | None = None) -> list[dict[str, Any]]:
         if not self.configured:
             return []
 
         try:
-            params = {"select": "*", "order": "created_at.desc", "limit": limit}
-            if session_id:
-                params["session_id"] = f"eq.{session_id}"
-            if self.user_id:
-                params["user_id"] = f"eq.{self.user_id}"
-            response = self.session.get(
-                f"{self.url}/rest/v1/agent_cycles",
-                headers={
-                    "apikey": self.service_role_key,
-                    "Authorization": f"Bearer {self.service_role_key}",
-                },
-                params=params,
-                timeout=15,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            return payload if isinstance(payload, list) else []
+            page_size = min(limit, 1000) if limit is not None else 1000
+            cycles: list[dict[str, Any]] = []
+            offset = 0
+            while True:
+                params = {
+                    "select": "*",
+                    "order": "created_at.desc",
+                    "limit": page_size,
+                    "offset": offset,
+                }
+                if session_id:
+                    params["session_id"] = f"eq.{session_id}"
+                if self.user_id:
+                    params["user_id"] = f"eq.{self.user_id}"
+                response = self.session.get(
+                    f"{self.url}/rest/v1/agent_cycles",
+                    headers={
+                        "apikey": self.service_role_key,
+                        "Authorization": f"Bearer {self.service_role_key}",
+                    },
+                    params=params,
+                    timeout=15,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, list):
+                    break
+                cycles.extend(payload)
+                if len(payload) < page_size or (limit is not None and len(cycles) >= limit):
+                    break
+                offset += len(payload)
+            return cycles[:limit] if limit is not None else cycles
         except (requests.RequestException, ValueError) as exc:
             logger.warning("Supabase cycle read failed: %s", exc)
             return []
