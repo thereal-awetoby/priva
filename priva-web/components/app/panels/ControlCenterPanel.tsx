@@ -88,7 +88,6 @@ export default function ControlCenterPanel() {
           {killSwitchEnabled ? "Stopped" : "Running"}
         </div>
         <div className="app-actions" style={{ marginTop: 0 }}>
-          <a className="btn" href="#">Pause</a>
           <button
             className="btn btn-danger"
             onClick={handleKillSwitch}

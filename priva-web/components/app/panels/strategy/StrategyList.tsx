@@ -141,7 +141,11 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
               disabled={activating || symbols.length === 0}
               style={{ width: "100%", textAlign: "center", display: "block" }}
             >
-              {activating ? "Activating…" : "Activate strategy"}
+              {activating
+                ? "Activating…"
+                : selected.status === "active"
+                  ? "Apply symbols"
+                  : "Activate strategy"}
             </button>
 
             {activateResult && (

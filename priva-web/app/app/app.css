@@ -589,3 +589,31 @@ table.positions tr:last-child td{ border-bottom:none; }
   padding: 8px 0;
 }
 .onboarding-skip:hover{ color: var(--ink-dim); }
+
+/* ---------- Connection card button reset ---------- */
+
+.connection-card{
+  background: none;
+  border: 1px solid var(--rule);
+  padding: 12px 12px 13px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+  display: block;
+}
+.connection-card:hover{
+  border-color: var(--ink-faint);
+}
+
+/* ---------- Connection modal actions ---------- */
+
+.connection-actions{
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+.connection-actions .btn{
+  flex: 1;
+}
