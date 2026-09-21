@@ -32,6 +32,7 @@ MODE = "autonomous"
 _loop_task: asyncio.Task | None = None
 _stop_event = asyncio.Event()
 _recent_cycles: list[dict[str, Any]] = []
+_recent_balance_snapshots: list[dict[str, Any]] = []
 
 
 def _record_cycle(entry: dict[str, Any]) -> None:
@@ -41,6 +42,10 @@ def _record_cycle(entry: dict[str, Any]) -> None:
 
 def recent_cycles() -> list[dict[str, Any]]:
     return list(_recent_cycles)
+
+
+def recent_balance_snapshots() -> list[dict[str, Any]]:
+    return list(_recent_balance_snapshots)
 
 
 def configure_watched_symbols(symbols: list[str]) -> list[str]:
@@ -243,6 +248,23 @@ async def run_cycle(
         _record_cycle(result)
         if cycle_logger is not None:
             result["persistence"] = cycle_logger.log_cycle(result)
+            fetch_balance = getattr(execution_client, "fetch_futures_account_balance", None)
+            log_snapshot = getattr(cycle_logger, "log_balance_snapshot", None)
+            if callable(fetch_balance):
+                try:
+                    balance = fetch_balance()
+                    if balance.get("status") == "ok":
+                        snapshot = {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "balance": float(balance.get("equity", 0) or 0),
+                            "equity": float(balance.get("equity", 0) or 0),
+                        }
+                        _recent_balance_snapshots.append(snapshot)
+                        del _recent_balance_snapshots[:-1000]
+                        if callable(log_snapshot):
+                            log_snapshot(snapshot)
+                except Exception as exc:
+                    logger.warning("Balance snapshot failed: %s", exc)
         return result
 
     cycle_start = datetime.now(timezone.utc)
@@ -268,7 +290,7 @@ async def run_cycle(
         decision = build_signal_from_ticker(ticker, strategy_id=selected_strategy) if selected_strategy else build_signal_from_ticker(ticker)
         decision.update({"symbol": symbol.upper(), "market_status": ticker.get("status", "unknown")})
 
-        if ticker.get("status") != "live" or decision["action"] == "hold":
+        if ticker.get("status") != "live":
             result = {
                 "status": "logged",
                 "symbol": symbol.upper(),
@@ -281,6 +303,61 @@ async def run_cycle(
             return persist(result)
 
         configured_market = market_type or MARKET_TYPE
+        if decision["action"] == "hold":
+            markets_to_check = ["futures", "spot"] if configured_market == "autonomous" else [configured_market]
+            for exit_market in markets_to_check:
+                live_position = _live_position(
+                    symbol,
+                    execution_client,
+                    market=exit_market,
+                    cycle_logger=cycle_logger,
+                )
+                if not live_position:
+                    continue
+                entry_price = live_position["entry_price"]
+                current_price = float(ticker.get("last_price", 0.0) or 0.0)
+                price_change_pct = (
+                    ((current_price - entry_price) / entry_price) * 100
+                    if live_position["side"] == "buy" and entry_price > 0
+                    else ((entry_price - current_price) / entry_price) * 100
+                    if live_position["side"] == "sell" and entry_price > 0
+                    else 0.0
+                )
+                take_profit = float(decision.get("take_profit_pct") or take_profit_pct or TAKE_PROFIT_PCT)
+                stop_loss = float(decision.get("stop_loss_pct") or stop_loss_pct or STOP_LOSS_PCT)
+                exit_reason = "take_profit" if price_change_pct >= take_profit else "stop_loss" if price_change_pct <= -stop_loss else None
+                if exit_reason:
+                    close_result = await asyncio.to_thread(
+                        _close_live_position,
+                        symbol,
+                        live_position,
+                        market=exit_market,
+                        execution_client=execution_client,
+                    )
+                    result = {
+                        "status": "closed" if close_result.get("status") == "submitted" else close_result.get("status", "close_failed"),
+                        "symbol": symbol.upper(),
+                        "mode": cycle_mode,
+                        "decision": decision,
+                        "ticker": ticker,
+                        "exit_reason": exit_reason,
+                        "position": live_position,
+                        "order": close_result,
+                    }
+                    return persist(result)
+                break
+
+            result = {
+                "status": "logged",
+                "symbol": symbol.upper(),
+                "mode": cycle_mode,
+                "decision": decision,
+                "ticker": ticker,
+                "risk_check": {"allowed": False, "reasons": ["no_trade_signal"]},
+                "order": None,
+            }
+            return persist(result)
+
         selected_market = decision.get("market") if configured_market == "autonomous" else configured_market
         if selected_market not in {"spot", "futures"}:
             raise ValueError("agent decision must select spot or futures")

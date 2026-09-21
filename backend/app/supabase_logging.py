@@ -59,6 +59,63 @@ class SupabaseCycleLogger:
             logger.warning("Supabase cycle logging failed: %s", exc)
             return {"status": "error", "message": str(exc)}
 
+    def log_balance_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        if not self.configured:
+            return {"status": "not_configured"}
+
+        record = {
+            "session_id": self.session_id,
+            "balance": float(snapshot.get("balance", 0) or 0),
+            "equity": float(snapshot.get("equity", 0) or 0),
+        }
+        if self.user_id:
+            record["user_id"] = self.user_id
+        try:
+            response = self.session.post(
+                f"{self.url}/rest/v1/balance_snapshots",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal",
+                },
+                json=record,
+                timeout=15,
+            )
+            response.raise_for_status()
+            return {"status": "logged"}
+        except requests.RequestException as exc:
+            logger.warning("Supabase balance snapshot failed: %s", exc)
+            return {"status": "error", "message": str(exc)}
+
+    def fetch_balance_snapshots(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        if not self.configured:
+            return []
+        try:
+            params = {
+                "select": "created_at,balance,equity",
+                "order": "created_at.asc",
+                "limit": min(limit, 1000),
+                "session_id": f"eq.{self.session_id}",
+            }
+            if self.user_id:
+                params["user_id"] = f"eq.{self.user_id}"
+            response = self.session.get(
+                f"{self.url}/rest/v1/balance_snapshots",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                },
+                params=params,
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, list) else []
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Supabase balance snapshot read failed: %s", exc)
+            return []
+
     def fetch_cycles(self, *, limit: int | None = None, session_id: str | None = None) -> list[dict[str, Any]]:
         if not self.configured:
             return []

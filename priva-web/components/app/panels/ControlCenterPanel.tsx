@@ -6,12 +6,46 @@ import { timeAgo, cleanSymbol } from "@/lib/format";
 
 type Position = Record<string, any>;
 type ActivityEntry = Record<string, any>;
+type EquityPoint = { timestamp?: string; created_at?: string; balance?: number; equity?: number };
+
+function EquityCurve({ points }: { points: EquityPoint[] }) {
+  const values = points.map((point) => Number(point.balance ?? point.equity ?? 0));
+  const width = 720;
+  const height = 170;
+  const padding = 12;
+  const min = values.length ? Math.min(...values) : 0;
+  const max = values.length ? Math.max(...values) : 1;
+  const range = max - min || 1;
+  const path = values
+    .map((value, index) => {
+      const x = padding + (index / Math.max(values.length - 1, 1)) * (width - padding * 2);
+      const y = height - padding - ((value - min) / range) * (height - padding * 2);
+      return `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+
+  return (
+    <div className="equity-panel">
+      <div className="panel-title">Equity curve</div>
+      {values.length < 2 ? (
+        <p className="panel-lead equity-empty">Waiting for the next agent cycle.</p>
+      ) : (
+        <svg className="equity-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Balance over time">
+          <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} className="equity-axis" />
+          <path d={path} className="equity-line" />
+        </svg>
+      )}
+    </div>
+  );
+}
 
 export default function ControlCenterPanel() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [pnl, setPnl] = useState<Record<string, any> | null>(null);
   const [riskUsage, setRiskUsage] = useState<Record<string, any> | null>(null);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const [balance, setBalance] = useState<Record<string, any> | null>(null);
+  const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
   const [killSwitchEnabled, setKillSwitchEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,13 +59,17 @@ export default function ControlCenterPanel() {
       apiGet<any>("/risk-usage"),
       apiGet<any>("/activity-log"),
       apiGet<any>("/kill-switch"),
+      apiGet<any>("/account/balance"),
+      apiGet<any>("/account/balance-history"),
     ])
-      .then(([positionsData, pnlData, riskData, activityData, killData]) => {
+      .then(([positionsData, pnlData, riskData, activityData, killData, balanceData, historyData]) => {
         setPositions(positionsData.positions ?? []);
         setPnl(pnlData);
         setRiskUsage(riskData);
         setActivity(activityData.entries ?? []);
         setKillSwitchEnabled(killData.enabled ?? false);
+        setBalance(balanceData);
+        setEquityHistory(historyData.points ?? []);
         setLoading(false);
       })
       .catch((err) => {
@@ -125,6 +163,17 @@ export default function ControlCenterPanel() {
             {pnl?.max_drawdown_pct != null ? `-${pnl.max_drawdown_pct}%` : "—"}
           </div>
         </div>
+      </div>
+
+      <div className="equity-layout">
+        <div className="balance-summary">
+          <div className="perf-label">Current balance</div>
+          <div className="balance-value">${Number(balance?.balance ?? balance?.current_balance ?? 0).toFixed(2)}</div>
+          <div className={`balance-change ${(balance?.daily_change ?? 0) >= 0 ? "up" : "down"}`}>
+            {(balance?.daily_change ?? 0) >= 0 ? "+" : ""}${Number(balance?.daily_change ?? 0).toFixed(2)} today
+          </div>
+        </div>
+        <EquityCurve points={equityHistory} />
       </div>
 
       <div className="risk-row">

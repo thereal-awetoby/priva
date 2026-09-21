@@ -54,6 +54,7 @@ risk_engine = RiskEngine()
 paper_execution_client = BitgetPaperExecutionClient()
 cycle_logger = SupabaseCycleLogger()
 _daily_balance_baselines: dict[str, tuple[str, float]] = {}
+_balance_history: list[dict[str, Any]] = []
 
 
 def execution_client_for(user: AuthenticatedUser) -> BitgetPaperExecutionClient:
@@ -277,13 +278,24 @@ def account_balance() -> dict[str, Any]:
     daily_change = round(current_equity - starting_balance, 4)
     daily_change_pct = round((daily_change / starting_balance) * 100, 4) if starting_balance else 0.0
 
+    snapshot = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "balance": current_equity,
+        "equity": current_equity,
+    }
+    _balance_history.append(snapshot)
+    del _balance_history[:-1000]
+
     return {
         "status": "ok" if futures.get("status") == "ok" or spot.get("status") == "ok" else "error",
         "source": "bitget_paper",
         "starting_balance": starting_balance,
         "current_balance": current_equity,
+        "balance": current_equity,
         "daily_change": daily_change,
         "daily_change_pct": daily_change_pct,
+        "futures_equity": float(futures.get("equity", 0) or 0) if futures.get("status") == "ok" else 0.0,
+        "spot_usdt": float(usdt_asset.get("usdtBalance", usdt_asset.get("balance", 0)) or 0),
         "futures": futures,
         "spot": {
             "status": spot.get("status"),
@@ -292,6 +304,13 @@ def account_balance() -> dict[str, Any]:
             "equity": float(usdt_asset.get("usdtBalance", usdt_asset.get("balance", 0)) or 0),
         },
     }
+
+
+@app.get("/account/balance-history")
+def account_balance_history() -> dict[str, Any]:
+    persisted = cycle_logger.fetch_balance_snapshots()
+    points = persisted or agent_loop.recent_balance_snapshots() or list(_balance_history)
+    return {"status": "ok", "points": points}
 
 
 @app.get("/user/agent-loop")

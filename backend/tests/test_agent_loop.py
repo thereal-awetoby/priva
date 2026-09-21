@@ -266,6 +266,27 @@ def test_agent_cycle_does_not_execute_hold_signal():
     assert execution.trades == []
 
 
+def test_agent_cycle_evaluates_exit_rules_when_signal_is_hold():
+    class FlatMarketService:
+        def fetch_spot_ticker(self, symbol):
+            return {"symbol": symbol, "last_price": 106.0, "open_price": 100.0, "status": "live"}
+
+    execution = LivePositionsExecutionClient(
+        [{"symbol": "AAPLUSDT", "total": "1", "holdSide": "long", "openPriceAvg": "100", "unrealizedPL": "6"}]
+    )
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FlatMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+        )
+    )
+
+    assert result["status"] == "closed"
+    assert result["exit_reason"] == "take_profit"
+
+
 def test_agent_cycle_uses_empty_live_positions_over_stale_logger():
     execution = LivePositionsExecutionClient([])
     result = asyncio.run(

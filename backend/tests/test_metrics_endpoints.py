@@ -62,6 +62,8 @@ def test_account_balance_reports_daily_change_percent(monkeypatch):
     second = main.account_balance()
     assert second["daily_change"] == 100.0
     assert second["daily_change_pct"] == 10.0
+    assert second["balance"] == 1100.0
+    assert second["futures_equity"] == 1100.0
 
 
 def test_risk_usage_reflects_live_position(monkeypatch):

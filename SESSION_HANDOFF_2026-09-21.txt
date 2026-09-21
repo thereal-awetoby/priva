@@ -1,0 +1,63 @@
+PRIVA SESSION HANDOFF
+Date: 2026-09-21
+
+Purpose
+-------
+Document the backend and frontend work completed in this session for the equity curve, account balance display, and autonomous exit behavior.
+
+Root-cause finding
+------------------
+The autonomous agent returned immediately whenever the current strategy signal was hold. Because of that early return, it never fetched the existing position and never evaluated take-profit or stop-loss rules during a hold cycle. This could leave positions open indefinitely when the market signal was neutral.
+
+Backend changes
+---------------
+- Updated backend/app/agent_loop.py.
+  - Hold cycles now check existing futures or spot positions for take-profit and stop-loss exits.
+  - Autonomous market mode checks both futures and spot positions.
+  - Per-cycle balance snapshots are retained in memory, capped at 1,000 records.
+  - Supabase balance snapshot logging is attempted when the execution client provides account equity.
+  - Snapshot failures are logged without failing the trading cycle.
+- Updated backend/app/main.py.
+  - GET /account/balance now also returns:
+    - balance
+    - futures_equity
+    - spot_usdt
+  - Added GET /account/balance-history.
+  - The history endpoint reads Supabase snapshots first, then in-process agent snapshots, then endpoint-poll snapshots.
+- Updated backend/app/supabase_logging.py.
+  - Added log_balance_snapshot().
+  - Added fetch_balance_snapshots().
+- Updated backend/supabase_multi_user.sql.
+  - Added the balance_snapshots table.
+  - Added session/time index.
+  - Enabled row-level security on the new table.
+
+Frontend changes
+----------------
+- Updated priva-web/components/app/panels/ControlCenterPanel.tsx.
+  - Loads account balance and balance history.
+  - Displays current balance and daily change.
+  - Displays an SVG equity curve.
+  - Shows a waiting state until at least two history points exist.
+- Updated priva-web/app/app/app.css with responsive equity panel and chart styles.
+
+Tests and diagnostics
+---------------------
+- Added a regression test proving that a hold signal still closes a profitable position at take-profit.
+- Added balance alias assertions to the account metrics test.
+- VS Code diagnostics reported no errors in touched backend or frontend files.
+- Backend compile and frontend build commands were invoked, but the terminal integration returned no output or exit status in this session. Re-run them locally for visible confirmation.
+
+Required deployment step
+------------------------
+Run backend/supabase_multi_user.sql once in the Supabase SQL Editor. The SQL uses CREATE TABLE IF NOT EXISTS and ADD COLUMN IF NOT EXISTS, so it is intended to be safe to run against the existing schema.
+
+After migration, verify:
+- GET /account/balance returns balance, futures_equity, and spot_usdt.
+- GET /account/balance-history returns a points array.
+- After agent cycles run, balance_snapshots contains rows.
+- The dashboard equity curve gains points after subsequent cycles.
+
+Known limitation
+----------------
+The equity curve is initially empty or has only one point until the first account poll or agent cycle records a snapshot. Persistent history requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to be configured on the backend.
