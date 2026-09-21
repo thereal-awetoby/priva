@@ -87,3 +87,11 @@ Current uncommitted work
 ------------------------
 - The overnight-gap and pairs-trading changes are present locally and have not been committed or pushed in this session.
 - The unrelated `.vscode/` directory and activity CSV remain intentionally unstaged.
+
+Static-position root-cause fix
+------------------------------
+- The agent could detect an open position from Supabase cycle logs but lacked entry price and side when Bitget's live position read returned an execution error. It then treated the position as existing and repeatedly logged `skipped_existing_position` without evaluating exits.
+- Added a futures cycle-log fallback for degraded exchange position reads. Explicit successful empty position responses are still trusted, so stale logs do not recreate positions when Bitget confirms they are gone.
+- Successful futures and spot close records now persist `closed_position_side`, `qty`, and `entry_price` in `order_result`. This lets cycle-derived `/positions` and P&L reconstruction remove the closed lot.
+- Added a regression test covering an exchange position-read failure followed by a real take-profit close attempt.
+- Full backend suite after this fix: 101 passed, 2 existing FastAPI deprecation warnings.

@@ -136,6 +136,39 @@ def _logged_spot_entry(symbol: str, cycle_logger: Any | None) -> dict[str, Any] 
     return {"symbol": symbol.upper(), "qty": quantity, "entry_price": notional / quantity, "side": side, "unrealized_pnl": 0.0}
 
 
+def _logged_futures_entry(symbol: str, cycle_logger: Any | None) -> dict[str, Any] | None:
+    cycles = cycle_logger.fetch_cycles() if cycle_logger is not None and callable(getattr(cycle_logger, "fetch_cycles", None)) else recent_cycles()
+    if not cycles:
+        cycles = recent_cycles()
+    open_lots: list[dict[str, float | str]] = []
+    for cycle in sorted(cycles, key=lambda item: item.get("created_at", "")):
+        if cycle.get("symbol", "").upper() != symbol.upper() or cycle.get("market", "futures") != "futures":
+            continue
+        decision = cycle.get("decision") or {}
+        side = decision.get("action")
+        ticker = cycle.get("ticker") or {}
+        price = float(ticker.get("last_price", 0) or 0)
+        order = cycle.get("order") or cycle.get("order_result") or {}
+        qty = float(order.get("qty", 0) or 0)
+        if cycle.get("status") == "submitted" and side in {"buy", "sell"} and price > 0 and qty > 0:
+            open_lots.append({"side": side, "qty": qty, "entry_price": price})
+        elif cycle.get("status") == "closed":
+            open_lots.clear()
+    if not open_lots:
+        return None
+    side = str(open_lots[-1]["side"])
+    quantity = sum(float(lot["qty"]) for lot in open_lots if lot["side"] == side)
+    notional = sum(float(lot["qty"]) * float(lot["entry_price"]) for lot in open_lots if lot["side"] == side)
+    return {
+        "symbol": symbol.upper(),
+        "qty": quantity,
+        "entry_price": notional / quantity,
+        "side": side,
+        "unrealized_pnl": 0.0,
+        "source": "cycle_log_fallback",
+    }
+
+
 def _live_position(symbol: str, execution_client: Any, *, market: str = "futures", cycle_logger: Any | None = None) -> dict[str, Any] | None:
     if market == "spot":
         fetch_assets = getattr(execution_client, "fetch_spot_assets", None)
@@ -159,10 +192,10 @@ def _live_position(symbol: str, execution_client: Any, *, market: str = "futures
         result = fetch_positions()
     except Exception as exc:
         logger.warning("Live position check failed for %s: %s", symbol, exc)
-        return None
+        return _logged_futures_entry(symbol, cycle_logger)
 
     if result.get("status") != "ok":
-        return None
+        return _logged_futures_entry(symbol, cycle_logger)
 
     target_symbol = symbol.upper()
     for position in result.get("positions", []):
@@ -345,6 +378,12 @@ async def run_cycle(
                         market=exit_market,
                         execution_client=execution_client,
                     )
+                    close_result = {
+                        **close_result,
+                        "closed_position_side": live_position["side"],
+                        "qty": live_position["qty"],
+                        "entry_price": live_position["entry_price"],
+                    }
                     result = {
                         "status": "closed" if close_result.get("status") == "submitted" else close_result.get("status", "close_failed"),
                         "symbol": symbol.upper(),
@@ -417,6 +456,12 @@ async def run_cycle(
                         market=selected_market,
                         execution_client=execution_client,
                     )
+                    close_result = {
+                        **close_result,
+                        "closed_position_side": live_position["side"],
+                        "qty": live_position["qty"],
+                        "entry_price": live_position["entry_price"],
+                    }
                     result = {
                         "status": "closed" if close_result.get("status") == "submitted" else close_result.get("status", "close_failed"),
                         "symbol": symbol.upper(),

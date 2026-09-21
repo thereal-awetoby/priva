@@ -228,6 +228,49 @@ class FakeCycleLogger:
         return {"status": "logged"}
 
 
+class LoggedPositionCycleLogger(FakeCycleLogger):
+    def fetch_cycles(self):
+        return [
+            {
+                "created_at": "2026-09-21T10:00:00Z",
+                "symbol": "AAPLUSDT",
+                "market": "futures",
+                "status": "submitted",
+                "decision": {"action": "buy"},
+                "ticker": {"last_price": 100.0},
+                "order_result": {"qty": 1.0},
+            }
+        ]
+
+
+def test_agent_cycle_uses_logged_position_when_exchange_position_read_fails():
+    class BrokenPositionExecution(FakeExecutionClient):
+        def fetch_futures_positions(self):
+            return {"status": "execution_error", "positions": []}
+
+        def flash_close_position(self, symbol, position_side):
+            return {"status": "submitted", "order_id": "close-logged-position"}
+
+    class ProfitMarketService(FakeMarketService):
+        def fetch_spot_ticker(self, symbol):
+            return {"symbol": symbol, "last_price": 106.0, "open_price": 100.0, "status": "live"}
+
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=ProfitMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=BrokenPositionExecution(),
+            cycle_logger=LoggedPositionCycleLogger(has_open_position=True),
+        )
+    )
+
+    assert result["status"] == "closed"
+    assert result["exit_reason"] == "take_profit"
+    assert result["order"]["closed_position_side"] == "buy"
+    assert result["order"]["qty"] == 1.0
+
+
 class LivePositionsExecutionClient(FakeExecutionClient):
     def __init__(self, positions):
         super().__init__()
