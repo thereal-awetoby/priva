@@ -1,6 +1,6 @@
 from app.main import parse_strategy as parse_strategy_endpoint
 from app import main
-from app.strategy import STRATEGY_CATALOG, build_signal_from_ticker, configure_symbol_strategies, get_active_strategy_id, list_strategy_catalog, parse_natural_language_strategy, parse_structured_strategy, register_custom_strategy, activate_strategy
+from app.strategy import STRATEGY_CATALOG, build_pairs_signal, build_signal_from_ticker, configure_symbol_strategies, get_active_strategy_id, list_strategy_catalog, parse_natural_language_strategy, parse_structured_strategy, register_custom_strategy, activate_strategy
 
 import pytest
 
@@ -11,6 +11,51 @@ def test_parse_natural_language_strategy_supports_mean_reversion_text():
     assert parsed["kind"] == "builtin"
     assert parsed["target_strategy"] == "mean_reversion"
     assert parsed["threshold_pct"] == 1.0
+
+
+def test_parse_natural_language_strategy_supports_overnight_gap_text():
+    parsed = parse_natural_language_strategy("fade overnight gaps larger than 2%")
+
+    assert parsed["kind"] == "builtin"
+    assert parsed["target_strategy"] == "overnight_gap"
+    assert parsed["threshold_pct"] == 2.0
+
+
+def test_overnight_gap_strategy_fades_gap_direction():
+    activate_strategy("overnight_gap")
+    try:
+        gap_up = build_signal_from_ticker({
+            "symbol": "AAPLUSDT",
+            "status": "live",
+            "last_price": 103.0,
+            "previous_close": 100.0,
+            "session_open": 103.0,
+        })
+        gap_down = build_signal_from_ticker({
+            "symbol": "AAPLUSDT",
+            "status": "live",
+            "last_price": 97.0,
+            "previous_close": 100.0,
+            "session_open": 97.0,
+        })
+
+        assert gap_up["action"] == "sell"
+        assert gap_down["action"] == "buy"
+    finally:
+        activate_strategy("momentum_breakout")
+
+
+def test_pairs_signal_enters_opposite_legs_when_spread_is_extreme():
+    first = [98, 99, 100, 101, 100, 120]
+    second = [100, 100, 100, 100, 100, 100]
+
+    signal = build_pairs_signal("AAPLUSDT", "TSLAUSDT", first, second, entry_zscore=2.0)
+
+    assert signal["action"] == "enter_pair"
+    assert signal["legs"] == [
+        {"symbol": "AAPLUSDT", "side": "sell"},
+        {"symbol": "TSLAUSDT", "side": "buy"},
+    ]
 
 
 def test_parse_structured_strategy_builds_custom_strategy_config():
@@ -146,7 +191,7 @@ def test_parse_strategy_endpoint_preserves_strategy_metadata_for_text_inputs():
 
 
 def test_strategy_catalog_exposes_prebuilt_strategy_definitions():
-    assert set(STRATEGY_CATALOG) == {"momentum_breakout", "mean_reversion"}
+    assert set(STRATEGY_CATALOG) == {"momentum_breakout", "mean_reversion", "overnight_gap", "pairs_trading"}
 
     for strategy_id, definition in STRATEGY_CATALOG.items():
         assert definition["id"] == strategy_id

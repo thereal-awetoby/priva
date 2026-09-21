@@ -84,6 +84,95 @@ class BitgetMarketDataService:
             self.last_snapshot = fallback
             return fallback
 
+    def fetch_daily_gap_context(self, symbol: str) -> dict[str, Any]:
+        """Return yesterday's close and today's daily open from public futures candles."""
+        url = f"{self.BASE_URL}/mix/market/candles"
+        params = {
+            "productType": "USDT-FUTURES",
+            "symbol": symbol.upper(),
+            "granularity": "1D",
+            "limit": 3,
+        }
+
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in (None, "00000", 0, "0"):
+                return {"status": "fallback", "symbol": symbol.upper(), "error": payload.get("msg", "bitget_error")}
+
+            rows = payload.get("data") or []
+            candles = []
+            for row in rows:
+                if not isinstance(row, list) or len(row) < 5:
+                    continue
+                candles.append(
+                    {
+                        "timestamp_ms": int(row[0]),
+                        "open": float(row[1]),
+                        "close": float(row[4]),
+                    }
+                )
+            candles.sort(key=lambda candle: candle["timestamp_ms"])
+            if len(candles) < 2:
+                return {"status": "fallback", "symbol": symbol.upper(), "error": "not_enough_daily_candles"}
+
+            previous, current = candles[-2], candles[-1]
+            return {
+                "status": "live",
+                "symbol": symbol.upper(),
+                "previous_close": previous["close"],
+                "session_open": current["open"],
+                "timestamp_ms": current["timestamp_ms"],
+                "source": "bitget_public_futures_candles",
+            }
+        except (requests.RequestException, ValueError, TypeError, IndexError) as exc:
+            logger.warning("Bitget daily candle fetch failed for %s: %s", symbol, exc)
+            return {"status": "fallback", "symbol": symbol.upper(), "error": str(exc)}
+
+    def fetch_daily_closes(self, symbol: str, *, limit: int = 60) -> dict[str, Any]:
+        """Fetch sorted daily close prices for pair-spread calculations."""
+        url = f"{self.BASE_URL}/mix/market/candles"
+        params = {
+            "productType": "USDT-FUTURES",
+            "symbol": symbol.upper(),
+            "granularity": "1D",
+            "limit": min(max(int(limit), 2), 1000),
+        }
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") not in (None, "00000", 0, "0"):
+                return {"status": "fallback", "symbol": symbol.upper(), "closes": [], "error": payload.get("msg", "bitget_error")}
+            candles = []
+            for row in payload.get("data") or []:
+                if isinstance(row, list) and len(row) >= 5:
+                    candles.append((int(row[0]), float(row[4])))
+            candles.sort()
+            return {
+                "status": "live" if len(candles) >= 2 else "fallback",
+                "symbol": symbol.upper(),
+                "timestamps": [item[0] for item in candles],
+                "closes": [item[1] for item in candles],
+                "source": "bitget_public_futures_candles",
+            }
+        except (requests.RequestException, ValueError, TypeError, IndexError) as exc:
+            logger.warning("Bitget daily closes fetch failed for %s: %s", symbol, exc)
+            return {"status": "fallback", "symbol": symbol.upper(), "closes": [], "error": str(exc)}
+
+    def fetch_pair_daily_closes(self, first_symbol: str, second_symbol: str, *, limit: int = 60) -> dict[str, Any]:
+        first = self.fetch_daily_closes(first_symbol, limit=limit)
+        second = self.fetch_daily_closes(second_symbol, limit=limit)
+        if first.get("status") != "live" or second.get("status") != "live":
+            return {"status": "fallback", "symbols": [first_symbol.upper(), second_symbol.upper()], "error": "pair_candle_data_unavailable"}
+        return {
+            "status": "live",
+            "symbols": [first_symbol.upper(), second_symbol.upper()],
+            "first": first,
+            "second": second,
+        }
+
     def get_market_snapshot(self, symbol: str) -> dict[str, Any]:
         ticker = self.fetch_spot_ticker(symbol)
         return {

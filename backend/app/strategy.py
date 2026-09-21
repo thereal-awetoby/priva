@@ -78,6 +78,82 @@ def _mean_reversion_strategy(ticker: dict[str, Any]) -> Decision:
     return Decision("hold", 0.0, 1.0, "mean reversion: price within neutral band", 0.0)
 
 
+def _overnight_gap_strategy(ticker: dict[str, Any]) -> Decision:
+    if ticker.get("status") != "live":
+        return Decision("hold", 0.0, 1.0, "market feed unavailable; fallback mode active")
+
+    last_price = float(ticker.get("last_price", 0.0) or 0.0)
+    previous_close = float(ticker.get("previous_close", 0.0) or 0.0)
+    session_open = float(ticker.get("session_open", 0.0) or 0.0)
+    if last_price <= 0 or previous_close <= 0 or session_open <= 0:
+        return Decision("hold", 0.0, 1.0, "overnight gap data unavailable")
+
+    config = _get_builtin_strategy_config("overnight_gap")
+    threshold_pct = float(config.get("threshold_pct", 1.0) or 1.0)
+    gap_pct = ((session_open - previous_close) / previous_close) * 100
+    strength = min(1.0, abs(gap_pct) / max(threshold_pct, 0.01))
+    if gap_pct >= threshold_pct:
+        return Decision("sell", 1.0, _adaptive_leverage(strength), f"overnight gap: open {gap_pct:.2f}% above previous close", round(strength, 4))
+    if gap_pct <= -threshold_pct:
+        return Decision("buy", 1.0, _adaptive_leverage(strength), f"overnight gap: open {abs(gap_pct):.2f}% below previous close", round(strength, 4))
+    return Decision("hold", 0.0, 1.0, f"overnight gap: {gap_pct:.2f}% within threshold", 0.0)
+
+
+def _pairs_strategy_placeholder(ticker: dict[str, Any]) -> Decision:
+    return Decision("hold", 0.0, 1.0, "pairs trading requires the two-symbol cycle")
+
+
+def build_pairs_signal(
+    first_symbol: str,
+    second_symbol: str,
+    first_closes: list[float],
+    second_closes: list[float],
+    *,
+    entry_zscore: float = 2.0,
+    exit_zscore: float = 0.5,
+) -> dict[str, Any]:
+    """Build a market-neutral signal from the log-price spread of two symbols."""
+    paired = [(float(first), float(second)) for first, second in zip(first_closes, second_closes) if first > 0 and second > 0]
+    if len(paired) < 3:
+        return {"action": "hold", "status": "logged", "reason": "pairs strategy needs at least three aligned closes", "legs": []}
+
+    spreads = [__import__("math").log(first) - __import__("math").log(second) for first, second in paired]
+    current_spread = spreads[-1]
+    history = spreads[:-1]
+    mean = _safe_mean(history)
+    std = _safe_std(history)
+    if std <= 0:
+        return {"action": "hold", "status": "logged", "reason": "pairs spread has no measurable variance", "legs": [], "spread": current_spread, "zscore": 0.0}
+
+    zscore = (current_spread - mean) / std
+    legs: list[dict[str, Any]] = []
+    if zscore >= entry_zscore:
+        legs = [{"symbol": first_symbol.upper(), "side": "sell"}, {"symbol": second_symbol.upper(), "side": "buy"}]
+        action = "enter_pair"
+        reason = "pairs spread is above its rolling mean"
+    elif zscore <= -entry_zscore:
+        legs = [{"symbol": first_symbol.upper(), "side": "buy"}, {"symbol": second_symbol.upper(), "side": "sell"}]
+        action = "enter_pair"
+        reason = "pairs spread is below its rolling mean"
+    elif abs(zscore) <= exit_zscore:
+        action = "exit_pair"
+        reason = "pairs spread reverted toward its rolling mean"
+    else:
+        action = "hold"
+        reason = "pairs spread is between entry and exit thresholds"
+
+    return {
+        "action": action,
+        "status": "logged",
+        "reason": reason,
+        "legs": legs,
+        "spread": round(current_spread, 8),
+        "spread_mean": round(mean, 8),
+        "spread_std": round(std, 8),
+        "zscore": round(zscore, 4),
+    }
+
+
 STRATEGY_CATALOG = {
     "momentum_breakout": {
         "id": "momentum_breakout",
@@ -91,11 +167,25 @@ STRATEGY_CATALOG = {
         "type": "prebuilt",
         "description": "Fade moves that extend at least 1% away from the opening price.",
     },
+    "overnight_gap": {
+        "id": "overnight_gap",
+        "name": "Overnight Gap",
+        "type": "prebuilt",
+        "description": "Fade a sufficiently large gap between yesterday's close and today's open.",
+    },
+    "pairs_trading": {
+        "id": "pairs_trading",
+        "name": "Pairs Trading",
+        "type": "prebuilt",
+        "description": "Trade the mean reversion of the AAPL/TSLA log-price spread.",
+    },
 }
 
 STRATEGIES = {
     "momentum_breakout": _momentum_strategy,
     "mean_reversion": _mean_reversion_strategy,
+    "overnight_gap": _overnight_gap_strategy,
+    "pairs_trading": _pairs_strategy_placeholder,
 }
 
 _registered_strategy_catalog = dict(STRATEGY_CATALOG)
@@ -390,8 +480,9 @@ def _parse_with_gemini(text: str) -> dict[str, Any]:
                         {
                             "text": (
                                 "You convert a natural-language trading strategy into JSON. Return a JSON object only. "
-                                "Supported object shapes: {\"kind\":\"builtin\",\"target_strategy\":\"mean_reversion\",\"threshold_pct\":1.0} "
-                                "or {\"kind\":\"builtin\",\"target_strategy\":\"momentum_breakout\",\"threshold_pct\":1.0}.\n\n"
+                                "Supported object shapes: {\"kind\":\"builtin\",\"target_strategy\":\"mean_reversion\",\"threshold_pct\":1.0}, "
+                                "{\"kind\":\"builtin\",\"target_strategy\":\"momentum_breakout\",\"threshold_pct\":1.0}, or "
+                                "{\"kind\":\"builtin\",\"target_strategy\":\"overnight_gap\",\"threshold_pct\":1.0}.\n\n"
                                 f"{text}"
                             )
                         }
@@ -434,7 +525,7 @@ def _parse_with_gemini(text: str) -> dict[str, Any]:
     parsed = _extract_json_from_content("".join(text_blocks))
 
     if parsed.get("kind") == "builtin":
-        if parsed.get("target_strategy") not in {"mean_reversion", "momentum_breakout"}:
+        if parsed.get("target_strategy") not in STRATEGIES:
             raise ValueError("Gemini returned an unsupported builtin strategy")
         if parsed.get("threshold_pct") is None:
             raise ValueError("Gemini response is missing threshold_pct")
@@ -479,6 +570,22 @@ def parse_natural_language_strategy(
         return {
             "kind": "builtin",
             "target_strategy": "momentum_breakout",
+            "threshold_pct": threshold_pct,
+            "raw_text": normalized,
+        }
+
+    if "overnight gap" in lowered or "gap up" in lowered or "gap down" in lowered:
+        return {
+            "kind": "builtin",
+            "target_strategy": "overnight_gap",
+            "threshold_pct": threshold_pct,
+            "raw_text": normalized,
+        }
+
+    if "pairs" in lowered or "spread" in lowered:
+        return {
+            "kind": "builtin",
+            "target_strategy": "pairs_trading",
             "threshold_pct": threshold_pct,
             "raw_text": normalized,
         }

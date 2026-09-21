@@ -66,3 +66,49 @@ def test_normalize_futures_ticker_payload():
     assert normalized["symbol"] == "AAPLUSDT"
     assert normalized["last_price"] == 223.12
     assert normalized["open_price"] == 220.0
+
+
+def test_fetch_daily_gap_context(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "code": "00000",
+                "data": [
+                    ["1726000000000", "100", "101", "99", "100.5", "0", "0"],
+                    ["1726086400000", "103", "104", "102", "103.5", "0", "0"],
+                ],
+            }
+
+    monkeypatch.setattr("app.market_data.requests.get", lambda *args, **kwargs: Response())
+    context = BitgetMarketDataService().fetch_daily_gap_context("AAPLUSDT")
+
+    assert context["status"] == "live"
+    assert context["previous_close"] == 100.5
+    assert context["session_open"] == 103.0
+
+
+def test_fetch_pair_daily_closes(monkeypatch):
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            symbol = calls[-1]
+            base = 100 if symbol == "AAPLUSDT" else 200
+            return {"code": "00000", "data": [["1", str(base), "0", "0", str(base + 1), "0", "0"], ["2", str(base + 1), "0", "0", str(base + 2), "0", "0"]]}
+
+    def fake_get(url, params, **kwargs):
+        calls.append(params["symbol"])
+        return Response()
+
+    monkeypatch.setattr("app.market_data.requests.get", fake_get)
+    result = BitgetMarketDataService().fetch_pair_daily_closes("AAPLUSDT", "TSLAUSDT")
+
+    assert result["status"] == "live"
+    assert result["first"]["closes"] == [101.0, 102.0]
+    assert result["second"]["closes"] == [201.0, 202.0]

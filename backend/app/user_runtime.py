@@ -98,22 +98,34 @@ class UserRuntimeRegistry:
         interval = int(os.getenv("AGENT_LOOP_INTERVAL_SECONDS", "300"))
         market_service = BitgetMarketDataService()
         while runtime.stop_event and not runtime.stop_event.is_set():
-            for symbol in runtime.symbols:
-                if runtime.stop_event.is_set():
-                    break
-                await agent_loop.run_cycle(
-                    symbol,
+            if runtime.strategy_id == "pairs_trading" and len(runtime.symbols) >= 2:
+                await agent_loop.run_pair_cycle(
+                    runtime.symbols[0],
+                    runtime.symbols[1],
                     market_service=market_service,
                     risk_engine=runtime.risk_engine,
                     execution_client=runtime.execution_client,
                     cycle_logger=runtime.cycle_logger,
-                    strategy_id=runtime.strategy_id,
-                    strategy_by_symbol=runtime.strategy_by_symbol,
                     market_type=runtime.market_type,
-                    take_profit_pct=runtime.take_profit_pct,
                     stop_loss_pct=runtime.stop_loss_pct,
-                    close_on_signal_violation=runtime.close_on_signal_violation,
                 )
+            else:
+                for symbol in runtime.symbols:
+                    if runtime.stop_event.is_set():
+                        break
+                    await agent_loop.run_cycle(
+                        symbol,
+                        market_service=market_service,
+                        risk_engine=runtime.risk_engine,
+                        execution_client=runtime.execution_client,
+                        cycle_logger=runtime.cycle_logger,
+                        strategy_id=runtime.strategy_id,
+                        strategy_by_symbol=runtime.strategy_by_symbol,
+                        market_type=runtime.market_type,
+                        take_profit_pct=runtime.take_profit_pct,
+                        stop_loss_pct=runtime.stop_loss_pct,
+                        close_on_signal_violation=runtime.close_on_signal_violation,
+                    )
             try:
                 await asyncio.wait_for(runtime.stop_event.wait(), timeout=interval)
             except asyncio.TimeoutError:

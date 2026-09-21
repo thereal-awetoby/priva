@@ -132,7 +132,7 @@ Use the reference repos as a backlog source for what to build next; do not treat
 - Ensure the `/strategies` response is always the single source of truth for Builder A, including built-ins, custom strategies, and any future Playbook entries.
 
 ### Current repo state to preserve
-- `momentum_breakout` and `mean_reversion` are the only built-in strategies currently implemented in the backend and should remain the canonical built-ins.
+- `momentum_breakout`, `mean_reversion`, and `overnight_gap` are the built-in strategies currently implemented in the backend and should remain the canonical built-ins.
 - The backend already supports `/strategies`, `/strategies/{strategy_id}/activate`, `/strategies/{strategy_id}/backtest`, and `/strategies/parse`.
 - Builder A's Strategy Lab panel has already been updated to consume `/strategies` and activate the selected strategy by ID, so the frontend should not reintroduce hardcoded strategy lists.
 

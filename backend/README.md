@@ -12,7 +12,7 @@ Camp trading project for tokenized U.S. stock futures.
 - Live Bitget positions, PnL, risk usage, and Supabase cycle logging
 - Risk checks for position size, daily loss, and leverage
 - Kill switch and full-position close via Bitget flash-close
-- Two built-in strategies with a shared decision contract
+- Four built-in strategy definitions, including a dedicated two-leg pairs cycle
 - Built-in strategy config overrides for `position_size`, `leverage`, TP/SL, and threshold values
 - `GET /pnl` metrics for `win_rate_pct` and `max_drawdown_pct`
 - `GET /activity-log` metadata including `mode`
@@ -176,6 +176,17 @@ Implemented strategies:
 
 - `momentum_breakout` — compares current price with the opening price
 - `mean_reversion` — fades moves at least 1% away from the opening price
+- `overnight_gap` — fades a configurable gap between the previous daily close and current daily open
+- `pairs_trading` — trades the AAPL/TSLA log-price spread with coordinated legs
+
+The overnight-gap strategy uses Bitget's public daily futures candles. If the
+candle feed is unavailable or does not contain at least two daily candles, it
+returns `hold` and does not place an order.
+
+Pairs trading uses a dedicated two-symbol cycle rather than the single-symbol
+strategy path. It aligns daily AAPLUSDT and TSLAUSDT closes, enters opposite
+legs when the spread z-score reaches the entry threshold, and preflights both
+legs through the risk engine before submitting either order.
 
 Activate one with:
 

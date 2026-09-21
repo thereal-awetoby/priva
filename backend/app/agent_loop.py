@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from app.strategy import build_signal_from_ticker
+from app.strategy import build_pairs_signal, build_signal_from_ticker, get_active_strategy_id
 
 logger = logging.getLogger("priva.agent_loop")
 logger.setLevel(logging.INFO)
@@ -267,13 +267,14 @@ async def run_cycle(
                     logger.warning("Balance snapshot failed: %s", exc)
         return result
 
+
     cycle_start = datetime.now(timezone.utc)
     normalized_symbol = symbol.upper()
     if normalized_symbol not in SUPPORTED_SYMBOLS:
         result = {
             "status": "blocked",
             "symbol": normalized_symbol,
-            "mode": mode or MODE,
+            "mode": mode or ("strategy" if strategy_id else "autonomous"),
             "decision": {"action": "hold", "symbol": normalized_symbol},
             "risk_check": {"allowed": False, "reasons": [f"unsupported_symbol:{normalized_symbol}"]},
             "order": None,
@@ -287,6 +288,16 @@ async def run_cycle(
         ticker = {**ticker, "symbol": symbol.upper()}
         selected_strategy = (strategy_by_symbol or {}).get(symbol.upper(), strategy_id)
         cycle_mode = mode or ("strategy" if selected_strategy else MODE)
+        if selected_strategy == "overnight_gap":
+            fetch_gap_context = getattr(market_service, "fetch_daily_gap_context", None)
+            if not callable(fetch_gap_context):
+                ticker["status"] = "fallback"
+            else:
+                gap_context = await asyncio.to_thread(fetch_gap_context, symbol)
+                if gap_context.get("status") == "live":
+                    ticker.update(gap_context)
+                else:
+                    ticker["status"] = "fallback"
         decision = build_signal_from_ticker(ticker, strategy_id=selected_strategy) if selected_strategy else build_signal_from_ticker(ticker)
         decision.update({"symbol": symbol.upper(), "market_status": ticker.get("status", "unknown")})
 
@@ -479,20 +490,169 @@ async def run_cycle(
         return result
 
 
+async def run_pair_cycle(
+    first_symbol: str,
+    second_symbol: str,
+    *,
+    market_service: Any,
+    risk_engine: Any,
+    execution_client: Any,
+    cycle_logger: Any | None = None,
+    market_type: str = "futures",
+    qty: float = 1.0,
+    entry_zscore: float = 2.0,
+    exit_zscore: float = 0.5,
+    stop_loss_pct: float = 2.0,
+) -> dict[str, Any]:
+    """Evaluate and execute both legs of a pairs trade as one cycle."""
+    cycle_start = datetime.now(timezone.utc)
+    symbols = [first_symbol.upper(), second_symbol.upper()]
+    if symbols not in (["AAPLUSDT", "TSLAUSDT"], ["TSLAUSDT", "AAPLUSDT"]):
+        return {"status": "blocked", "strategy_id": "pairs_trading", "symbols": symbols, "reason": "unsupported_pair"}
+    if market_type not in {"spot", "futures"} or qty <= 0:
+        return {"status": "rejected", "strategy_id": "pairs_trading", "reason": "invalid_pair_configuration"}
+
+    fetch_pair = getattr(market_service, "fetch_pair_daily_closes", None)
+    if not callable(fetch_pair):
+        return {"status": "logged", "strategy_id": "pairs_trading", "symbols": symbols, "reason": "pair_candle_data_unavailable"}
+    history = await asyncio.to_thread(fetch_pair, first_symbol, second_symbol)
+    if history.get("status") != "live":
+        return {"status": "logged", "strategy_id": "pairs_trading", "symbols": symbols, "reason": history.get("error", "pair_candle_data_unavailable")}
+
+    signal = build_pairs_signal(
+        first_symbol,
+        second_symbol,
+        history["first"].get("closes", []),
+        history["second"].get("closes", []),
+        entry_zscore=entry_zscore,
+        exit_zscore=exit_zscore,
+    )
+    live_positions = {
+        symbol: _live_position(symbol, execution_client, market=market_type, cycle_logger=cycle_logger)
+        for symbol in symbols
+    }
+    open_positions = [position for position in live_positions.values() if position]
+    result: dict[str, Any] = {
+        "strategy_id": "pairs_trading",
+        "symbols": symbols,
+        "market": market_type,
+        "decision": signal,
+        "created_at": cycle_start.isoformat(),
+    }
+
+    if open_positions and len(open_positions) != 2:
+        result["status"] = "pair_incomplete"
+        result["reason"] = "one pair leg is open; refusing to add another leg"
+        result["positions"] = live_positions
+        return result
+
+    if len(open_positions) == 2:
+        current_prices = {
+            first_symbol.upper(): float(history["first"]["closes"][-1]),
+            second_symbol.upper(): float(history["second"]["closes"][-1]),
+        }
+        combined_pnl = sum(
+            position["qty"] * (current_prices[symbol] - position["entry_price"])
+            if position["side"] == "buy"
+            else position["qty"] * (position["entry_price"] - current_prices[symbol])
+            for symbol, position in live_positions.items()
+            if position
+        )
+        entry_notional = sum(position["qty"] * position["entry_price"] for position in open_positions)
+        loss_limit = -(entry_notional * stop_loss_pct / 100) if stop_loss_pct > 0 else float("-inf")
+        if signal["action"] == "exit_pair" or combined_pnl <= loss_limit:
+            close_results = []
+            for symbol, position in live_positions.items():
+                close_results.append(
+                    await asyncio.to_thread(
+                        _close_live_position,
+                        symbol,
+                        position,
+                        market=market_type,
+                        execution_client=execution_client,
+                    )
+                )
+            result["status"] = "closed" if all(item.get("status") == "submitted" for item in close_results) else "pair_close_failed"
+            result["exit_reason"] = "spread_reversion" if signal["action"] == "exit_pair" else "pair_stop_loss"
+            result["combined_pnl"] = combined_pnl
+            result["close_orders"] = close_results
+            if cycle_logger is not None and callable(getattr(cycle_logger, "log_cycle", None)):
+                result["persistence"] = cycle_logger.log_cycle(result)
+            return result
+
+        result["status"] = "skipped_existing_pair"
+        result["combined_pnl"] = combined_pnl
+        result["positions"] = live_positions
+        return result
+
+    if signal["action"] != "enter_pair":
+        result["status"] = "logged"
+        return result
+
+    latest_prices = {
+        first_symbol.upper(): float(history["first"]["closes"][-1]),
+        second_symbol.upper(): float(history["second"]["closes"][-1]),
+    }
+    trades = [
+        {
+            "symbol": leg["symbol"],
+            "side": leg["side"],
+            "qty": qty,
+            "entry_price": latest_prices[leg["symbol"]],
+            "leverage": 1.0,
+            "market": market_type,
+        }
+        for leg in signal["legs"]
+    ]
+    risk_checks = [
+        risk_engine.evaluate_trade(trade=trade, current_positions=[], current_daily_pnl=0.0)
+        for trade in trades
+    ]
+    result["risk_checks"] = risk_checks
+    if not all(check["allowed"] for check in risk_checks):
+        result["status"] = "risk_rejected"
+        return result
+
+    orders = []
+    for trade in trades:
+        order = await asyncio.to_thread(execution_client.place_market_order, trade)
+        orders.append(order)
+        if order.get("status") != "submitted":
+            result["status"] = "pair_execution_failed"
+            result["orders"] = orders
+            return result
+    result["status"] = "submitted"
+    result["orders"] = orders
+    if cycle_logger is not None and callable(getattr(cycle_logger, "log_cycle", None)):
+        result["persistence"] = cycle_logger.log_cycle(result)
+    return result
+
+
 async def agent_loop(*, market_service: Any, risk_engine: Any, execution_client: Any, cycle_logger: Any | None = None) -> None:
     logger.info("Agent loop starting: interval=%ss symbols=%s", LOOP_INTERVAL_SECONDS, WATCHED_SYMBOLS)
     while not _stop_event.is_set():
-        for symbol in WATCHED_SYMBOLS:
-            if _stop_event.is_set():
-                break
-            await run_cycle(
-                symbol,
+        if MODE == "strategy" and get_active_strategy_id() == "pairs_trading" and len(WATCHED_SYMBOLS) >= 2:
+            await run_pair_cycle(
+                WATCHED_SYMBOLS[0],
+                WATCHED_SYMBOLS[1],
                 market_service=market_service,
                 risk_engine=risk_engine,
                 execution_client=execution_client,
                 cycle_logger=cycle_logger,
-                mode=MODE,
+                market_type=MARKET_TYPE,
             )
+        else:
+            for symbol in WATCHED_SYMBOLS:
+                if _stop_event.is_set():
+                    break
+                await run_cycle(
+                    symbol,
+                    market_service=market_service,
+                    risk_engine=risk_engine,
+                    execution_client=execution_client,
+                    cycle_logger=cycle_logger,
+                    mode=MODE,
+                )
         try:
             await asyncio.wait_for(_stop_event.wait(), timeout=LOOP_INTERVAL_SECONDS)
         except asyncio.TimeoutError:

@@ -1,5 +1,5 @@
 from app.main import process_market_cycle
-from app.agent_loop import run_cycle
+from app.agent_loop import run_cycle, run_pair_cycle
 from app.risk_engine import RiskEngine
 from app.performance import calculate_unrealized_pnl
 from app.strategy import activate_strategy, build_signal_from_ticker, get_active_strategy_id
@@ -70,6 +70,29 @@ def test_agent_cycle_records_strategy_mode():
     assert result["mode"] == "strategy"
 
 
+def test_agent_cycle_fetches_daily_context_for_overnight_gap_strategy():
+    class GapMarketService(FakeMarketService):
+        def fetch_daily_gap_context(self, symbol):
+            return {
+                "status": "live",
+                "previous_close": 100.0,
+                "session_open": 103.0,
+            }
+
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=GapMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=FakeExecutionClient(),
+            strategy_id="overnight_gap",
+        )
+    )
+
+    assert result["decision"]["action"] == "sell"
+    assert result["status"] == "submitted"
+
+
 def test_process_market_cycle_uses_strategy_size_and_leverage(monkeypatch):
     monkeypatch.setattr(
         "app.main.build_signal_from_ticker",
@@ -123,6 +146,75 @@ class FakeExecutionClient:
     def place_market_order(self, trade):
         self.trades.append(trade)
         return {"status": "submitted", "order_id": "paper-loop-1"}
+
+
+class FakePairMarketService:
+    def fetch_pair_daily_closes(self, first_symbol, second_symbol):
+        return {
+            "status": "live",
+            "first": {"closes": [98, 99, 100, 101, 100, 120]},
+            "second": {"closes": [100, 100, 100, 100, 100, 100]},
+        }
+
+
+class PairPositionsExecutionClient(FakeExecutionClient):
+    def __init__(self, positions):
+        super().__init__()
+        self.positions = positions
+        self.closed = []
+
+    def fetch_futures_positions(self):
+        return {"status": "ok", "positions": self.positions}
+
+    def flash_close_position(self, symbol, position_side):
+        self.closed.append((symbol, position_side))
+        return {"status": "submitted", "order_id": f"close-{symbol}"}
+
+
+def test_pair_cycle_preflights_both_legs_and_submits_two_orders():
+    execution = FakeExecutionClient()
+    result = asyncio.run(
+        run_pair_cycle(
+            "AAPLUSDT",
+            "TSLAUSDT",
+            market_service=FakePairMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+        )
+    )
+
+    assert result["status"] == "submitted"
+    assert len(result["risk_checks"]) == 2
+    assert [trade["side"] for trade in execution.trades] == ["sell", "buy"]
+
+
+def test_pair_cycle_closes_both_legs_when_spread_reverts():
+    execution = PairPositionsExecutionClient(
+        [
+            {"symbol": "AAPLUSDT", "total": "1", "holdSide": "short", "openPriceAvg": "120"},
+            {"symbol": "TSLAUSDT", "total": "1", "holdSide": "long", "openPriceAvg": "100"},
+        ]
+    )
+    market = FakePairMarketService()
+    market.fetch_pair_daily_closes = lambda first, second: {
+        "status": "live",
+        "first": {"closes": [98, 99, 100, 101, 100, 100]},
+        "second": {"closes": [100, 100, 100, 100, 100, 100]},
+    }
+
+    result = asyncio.run(
+        run_pair_cycle(
+            "AAPLUSDT",
+            "TSLAUSDT",
+            market_service=market,
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+        )
+    )
+
+    assert result["status"] == "closed"
+    assert result["exit_reason"] == "spread_reversion"
+    assert len(execution.closed) == 2
 
 
 class FakeCycleLogger:

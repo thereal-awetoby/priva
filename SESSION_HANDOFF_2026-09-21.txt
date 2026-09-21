@@ -61,3 +61,29 @@ After migration, verify:
 Known limitation
 ----------------
 The equity curve is initially empty or has only one point until the first account poll or agent cycle records a snapshot. Persistent history requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to be configured on the backend.
+
+Pairs trading work
+------------------
+- Added the `pairs_trading` built-in strategy for AAPLUSDT and TSLAUSDT.
+- Added aligned daily-close retrieval from Bitget public futures candles.
+- Added log-price spread, rolling mean, standard deviation, and z-score calculations.
+- Pair entry submits opposite legs only after both legs pass risk preflight.
+- Pairs run through a dedicated two-symbol cycle in the global agent loop and authenticated user runtime.
+- Added paired-position detection:
+  - refuses to add to an already-open complete pair
+  - reports and leaves incomplete pairs untouched
+  - closes both legs when the spread reverts to the exit z-score
+  - closes both legs when combined pair loss reaches the configured stop-loss percentage
+- Added parser, market-data, entry, runtime, and paired-exit regression tests.
+
+Pairs trading status
+--------------------
+- Full backend suite: 100 passed, 2 existing FastAPI deprecation warnings.
+- VS Code diagnostics reported no errors in the touched backend files.
+- The pairs implementation is still paper-trading code and should be observed with small demo settings before any live-equivalent use.
+- If one leg submits and the second leg fails, the cycle reports `pair_execution_failed`; automatic compensation for the first leg is not yet implemented.
+
+Current uncommitted work
+------------------------
+- The overnight-gap and pairs-trading changes are present locally and have not been committed or pushed in this session.
+- The unrelated `.vscode/` directory and activity CSV remain intentionally unstaged.
