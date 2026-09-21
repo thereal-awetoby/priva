@@ -88,6 +88,7 @@ async function parseAndActivate(payload: Record<string, any>): Promise<Activatio
 
 function PlainEnglishForm() {
   const [text, setText] = useState("");
+  const [strategyName, setStrategyName] = useState("");
   const [symbols, setSymbols] = useState<string[]>(["AAPLUSDT"]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,7 +99,12 @@ function PlainEnglishForm() {
     setError(null);
     setResult(null);
     try {
-      const data = await parseAndActivate({ text, use_gemini: true, symbols });
+      const data = await parseAndActivate({
+        text,
+        use_gemini: true,
+        symbols,
+        ...(strategyName.trim() && { name: strategyName.trim() }),
+      });
       setResult(data);
     } catch (err: any) {
       setError(err.message);
@@ -110,6 +116,16 @@ function PlainEnglishForm() {
   return (
     <div className="form-block">
       <SymbolSelector symbols={symbols} onChange={setSymbols} />
+
+      <div className="form-field">
+        <label className="form-label">Strategy name (optional)</label>
+        <input
+          className="form-input"
+          placeholder="e.g. AAPL Dip Buyer"
+          value={strategyName}
+          onChange={(e) => setStrategyName(e.target.value)}
+        />
+      </div>
 
       <div className="form-field">
         <label className="form-label">Describe your strategy</label>
@@ -160,6 +176,7 @@ function JsonStrategyForm() {
       2
     )
   );
+  const [strategyName, setStrategyName] = useState("");
   const [symbols, setSymbols] = useState<string[]>(["AAPLUSDT"]);
   const [parseError, setParseError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -191,7 +208,11 @@ function JsonStrategyForm() {
     setError(null);
     setResult(null);
     try {
-      const data = await parseAndActivate({ strategy: parsed, symbols });
+      const data = await parseAndActivate({
+        strategy: parsed,
+        symbols,
+        ...(strategyName.trim() && { name: strategyName.trim() }),
+      });
       setResult(data);
     } catch (err: any) {
       setError(err.message);
@@ -203,6 +224,16 @@ function JsonStrategyForm() {
   return (
     <div className="form-block">
       <SymbolSelector symbols={symbols} onChange={setSymbols} />
+
+      <div className="form-field">
+        <label className="form-label">Strategy name (optional)</label>
+        <input
+          className="form-input"
+          placeholder="e.g. AAPL Dip Buyer"
+          value={strategyName}
+          onChange={(e) => setStrategyName(e.target.value)}
+        />
+      </div>
 
       <div className="form-field">
         <label className="form-label">Strategy JSON</label>

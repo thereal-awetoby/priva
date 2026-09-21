@@ -47,7 +47,8 @@ export default function ActivityPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState("all");
-  const [search, setSearch] = useState("");
+    const [search, setSearch] = useState("");
+    const [modeFilter, setModeFilter] = useState<"all" | "autonomous" | "strategy">("all");
 
   useEffect(() => {
     apiGet<any>("/activity-log")
@@ -65,13 +66,15 @@ export default function ActivityPanel() {
     return entries.filter((e) => {
       const tag = getEventTag(e);
       const matchesFilter = activeFilter === "all" || tag === activeFilter;
+      const matchesMode =
+        modeFilter === "all" || (e.mode ?? "autonomous") === modeFilter;
       const matchesSearch =
         search.trim() === "" ||
         (e.symbol ?? "").toLowerCase().includes(search.toLowerCase()) ||
         (e.action ?? "").toLowerCase().includes(search.toLowerCase());
-      return matchesFilter && matchesSearch;
+      return matchesFilter && matchesMode && matchesSearch;
     });
-  }, [entries, activeFilter, search]);
+  }, [entries, activeFilter, modeFilter, search]);
 
   if (loading) {
     return <p className="panel-lead">Loading activity…</p>;
@@ -95,25 +98,47 @@ export default function ActivityPanel() {
       </p>
 
       <div className="activity-controls">
-        <div className="mode-switch">
-          {filters.map((f) => (
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          <div className="mode-switch">
             <button
-              key={f.id}
-              className={activeFilter === f.id ? "active" : ""}
-              onClick={() => setActiveFilter(f.id)}
+              className={modeFilter === "all" ? "active" : ""}
+              onClick={() => setModeFilter("all")}
             >
-              {f.label}
+              All modes
             </button>
-          ))}
-        </div>
-        <input
-          className="activity-search"
-          type="text"
-          placeholder="Search by symbol or action"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-      </div>
+            <button
+              className={modeFilter === "autonomous" ? "active" : ""}
+              onClick={() => setModeFilter("autonomous")}
+            >
+              Autonomous
+            </button>
+            <button
+              className={modeFilter === "strategy" ? "active" : ""}
+              onClick={() => setModeFilter("strategy")}
+            >
+              Strategy
+            </button>
+          </div>
+          <div className="mode-switch">
+            {filters.map((f) => (
+              <button
+                key={f.id}
+                className={activeFilter === f.id ? "active" : ""}
+                onClick={() => setActiveFilter(f.id)}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+              </div>
+              <input
+                className="activity-search"
+                type="text"
+                placeholder="Search by symbol or action"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
 
       <div className="event-list">
         {filteredEntries.length === 0 ? (
