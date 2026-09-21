@@ -54,6 +54,16 @@ def test_supabase_auth_verifies_bearer_token(monkeypatch):
     assert user == AuthenticatedUser("user-1", "user@example.com")
 
 
+def test_optional_auth_falls_back_to_local_dev_for_invalid_token(monkeypatch):
+    monkeypatch.setenv("PRIVA_AUTH_REQUIRED", "false")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
+
+    auth = SupabaseAuth()
+    user = auth.current_user("Bearer invalid-token")
+    assert user == AuthenticatedUser("local-development")
+
+
 def test_required_auth_rejects_missing_token():
     auth = SupabaseAuth()
     auth.required = True

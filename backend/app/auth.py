@@ -46,10 +46,19 @@ class SupabaseAuth:
             return AuthenticatedUser("local-development")
 
         scheme, _, token = authorization.partition(" ")
-        user = self.user_from_token(token) if scheme.lower() == "bearer" and token else None
-        if user is None:
+        if scheme.lower() != "bearer" or not token:
+            if self.required:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
+            return AuthenticatedUser("local-development")
+
+        if self.url and self.anon_key:
+            user = self.user_from_token(token)
+            if user is not None:
+                return user
+
+        if self.required:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Supabase session")
-        return user
+        return AuthenticatedUser("local-development")
 
 
 supabase_auth = SupabaseAuth()
