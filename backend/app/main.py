@@ -669,7 +669,7 @@ def close_position(
 def pnl(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user = normalize_user(user)
     user_logger = cycle_logger_for(user)
-    cycles = user_logger.fetch_cycles(session_id=user_logger.session_id)
+    cycles = user_logger.fetch_cycles()
     logged_pnl = calculate_unrealized_pnl(
         cycles,
         mark_fetcher=market_service.fetch_spot_ticker,
@@ -691,7 +691,7 @@ def pnl(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
         "max_drawdown_pct": trade_metrics["max_drawdown_pct"],
         "currency": "USD",
         "source": "bitget_and_supabase",
-        "session_id": cycle_logger.session_id,
+        "session_id": user_logger.session_id,
         "open_positions": live_positions,
     }
 
@@ -708,7 +708,7 @@ def risk_usage(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any
         (float(position.get("leverage", 0) or 0) for position in live_positions),
         default=0.0,
     )
-    current_daily_loss = max(0.0, -float(pnl()["daily_pnl"]))
+    current_daily_loss = max(0.0, -float(pnl(user)["daily_pnl"]))
     max_position_size = float(risk_engine.max_position_size)
     max_daily_loss = float(risk_engine.max_daily_loss)
     max_leverage = float(risk_engine.max_leverage)
@@ -752,7 +752,7 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
     user = normalize_user(user)
     user_logger = cycle_logger_for(user)
     cycles = user_logger.fetch_cycles()
-    if not cycles:
+    if not cycles and not supabase_auth.required:
         cycles = agent_loop.recent_cycles()
     cycles = [
         cycle
@@ -777,6 +777,9 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
                 for cycle in cycles
             ]
         }
+
+    if supabase_auth.required:
+        return {"entries": []}
 
     return {
         "entries": [
