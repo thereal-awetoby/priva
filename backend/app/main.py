@@ -84,6 +84,22 @@ def normalize_user(user: AuthenticatedUser | Any) -> AuthenticatedUser:
     return user if isinstance(user, AuthenticatedUser) else AuthenticatedUser("local-development")
 
 
+def cycles_after_reset(cycles: list[dict[str, Any]], user: AuthenticatedUser) -> list[dict[str, Any]]:
+    reset_at = cycle_logger_for(user).fetch_user_settings(user.id).get("pnl_reset_at")
+    if not reset_at:
+        return cycles
+    reset_time = datetime.fromisoformat(str(reset_at).replace("Z", "+00:00"))
+    filtered = []
+    for cycle in cycles:
+        created_at = cycle.get("created_at")
+        if not created_at:
+            continue
+        created_time = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        if created_time >= reset_time:
+            filtered.append(cycle)
+    return filtered
+
+
 def restore_custom_strategies(user_id: str) -> None:
     for record in SupabaseCycleLogger(user_id=user_id).fetch_custom_strategies(user_id):
         strategy_id = record.get("strategy_id")
@@ -217,6 +233,10 @@ class BitgetConnectionRequest(BaseModel):
 class TradeHistoryBackfillRequest(BaseModel):
     start_time: int
     end_time: int
+
+
+class ResetTradingSessionRequest(BaseModel):
+    confirm: bool = False
 
 
 @app.get("/market-data")
@@ -650,7 +670,7 @@ def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]
             )
         return {"positions": live_positions, "total_positions": len(live_positions)}
 
-    cycles = user_logger.fetch_cycles()
+    cycles = cycles_after_reset(user_logger.fetch_cycles(), user)
     if cycles:
         live_positions = calculate_unrealized_pnl(
             cycles,
@@ -781,11 +801,61 @@ def close_position(
     }
 
 
+@app.post("/user/reset-trading-session")
+async def reset_trading_session(
+    payload: ResetTradingSessionRequest,
+    user: AuthenticatedUser = Depends(current_user),
+) -> dict[str, Any]:
+    if not payload.confirm:
+        return {"status": "rejected", "message": "Set confirm=true to close all positions and reset P&L."}
+
+    user = normalize_user(user)
+    client = execution_client_for(user)
+    if supabase_auth.required:
+        await user_runtime_registry.stop(user.id)
+    else:
+        agent_loop.stop()
+
+    positions_result = client.fetch_futures_positions()
+    if positions_result.get("status") != "ok":
+        return {"status": "error", "message": positions_result.get("message", "Could not read open positions")}
+
+    closed: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for position in positions_result.get("positions", []):
+        symbol = str(position.get("symbol", "")).upper()
+        quantity = float(position.get("total", position.get("available", 0)) or 0)
+        hold_side = str(position.get("holdSide", position.get("side", ""))).lower()
+        position_side = "buy" if hold_side in {"long", "buy"} else "sell"
+        if not symbol or quantity <= 0:
+            continue
+        result = client.flash_close_position(symbol, position_side)
+        record = {"symbol": symbol, "position_side": position_side, "qty": quantity, **result}
+        if result.get("status") == "submitted":
+            closed.append(record)
+        else:
+            failures.append(record)
+
+    if failures:
+        return {"status": "error", "message": "Some positions could not be closed; P&L was not reset.", "closed": closed, "failures": failures}
+
+    reset_at = datetime.now(timezone.utc).isoformat()
+    persistence = cycle_logger_for(user).save_user_settings(user.id, {"pnl_reset_at": reset_at})
+    if supabase_auth.required and persistence.get("status") != "saved":
+        return {"status": "error", "message": "Positions closed, but the P&L reset could not be persisted.", "closed": closed, "persistence": persistence}
+
+    if supabase_auth.required:
+        user_runtime_registry.start(user.id, client)
+    else:
+        agent_loop.start(market_service=market_service, risk_engine=risk_engine, execution_client=client, cycle_logger=cycle_logger)
+    return {"status": "reset", "reset_at": reset_at, "closed": closed, "persistence": persistence.get("status")}
+
+
 @app.get("/pnl")
 def pnl(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user = normalize_user(user)
     user_logger = cycle_logger_for(user)
-    cycles = user_logger.fetch_cycles()
+    cycles = cycles_after_reset(user_logger.fetch_cycles(), user)
     logged_pnl = calculate_unrealized_pnl(
         cycles,
         mark_fetcher=market_service.fetch_spot_ticker,

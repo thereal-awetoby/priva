@@ -23,6 +23,7 @@ export default function AppShell() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [authDebug, setAuthDebug] = useState<{ running?: boolean; workerError?: string; persistenceError?: string; error?: string } | null>(null);
   const [backfillStatus, setBackfillStatus] = useState<string | null>(null);
+  const [resetStatus, setResetStatus] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -58,6 +59,20 @@ export default function AppShell() {
     }
   };
 
+  const resetTradingSession = async () => {
+    if (!window.confirm("Close all open positions and start a new P&L session?")) return;
+    setResetStatus("Resetting...");
+    try {
+      const result = await apiPost<{ status?: string; message?: string; closed?: Array<{ symbol?: string }> }>(
+        "/user/reset-trading-session",
+        { confirm: true },
+      );
+      setResetStatus(result.status === "reset" ? `${result.closed?.length ?? 0} positions closed` : result.message ?? "Reset failed");
+    } catch (error) {
+      setResetStatus(error instanceof Error ? error.message : "Reset failed");
+    }
+  };
+
   return (
     <div className="app-root">
       <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
@@ -86,6 +101,10 @@ export default function AppShell() {
               Import history
             </button>
             {backfillStatus ? <span className="backfill-status">{backfillStatus}</span> : null}
+            <button className="sign-out-btn" type="button" onClick={resetTradingSession}>
+              Reset session
+            </button>
+            {resetStatus ? <span className="backfill-status">{resetStatus}</span> : null}
             <button
               className="sign-out-btn"
               type="button"

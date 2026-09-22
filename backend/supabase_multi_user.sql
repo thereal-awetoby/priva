@@ -50,7 +50,8 @@ alter table public.user_agent_settings
   add column if not exists max_daily_loss numeric not null default 1500,
   add column if not exists max_leverage numeric not null default 5,
   add column if not exists risk_enabled boolean not null default true,
-  add column if not exists allowed_symbols jsonb not null default '[]'::jsonb;
+  add column if not exists allowed_symbols jsonb not null default '[]'::jsonb,
+  add column if not exists pnl_reset_at timestamptz;
 
 alter table public.agent_cycles
   add column if not exists mode text not null default 'autonomous',
