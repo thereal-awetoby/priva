@@ -32,6 +32,14 @@ function bucketByHour(points: EquityPoint[]): EquityPoint[] {
   });
 }
 
+function executionLabel(entry: ActivityEntry): string {
+  if (entry.status === "submitted" || entry.status === "closed") return "Executed";
+  if (entry.status === "skipped_existing_position") return "Skipped: position already open";
+  if (entry.status === "rejected") return "Rejected by exchange";
+  if (entry.status === "risk_rejected") return "Rejected by risk check";
+  return "Signal logged";
+}
+
 function EquityCurve({ points }: { points: EquityPoint[] }) {
   const pointWidth = 40; // pixels per data point — controls how "zoomed in" the chart is
   const width = Math.max(720, points.length * pointWidth);
@@ -357,9 +365,7 @@ export default function ControlCenterPanel() {
                 <span className="log-time">{timeAgo(entry.timestamp)}</span>
                 <span>
                   {cleanSymbol(entry.symbol)} — {entry.action}
-                                    {entry.status === "skipped_existing_position"
-                                      ? " (position already open)"
-                                      : ""}
+                  <span className="log-status"> ({executionLabel(entry)})</span>
                 </span>
               </div>
             ))

@@ -287,7 +287,18 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
         (asset for asset in spot_assets if str(asset.get("coin", "")).upper() == "USDT"),
         {},
     )
-    current_equity = float((futures.get("equity") or 0) if futures.get("status") == "ok" else (usdt_asset.get("usdtBalance", usdt_asset.get("balance", 0)) or 0))
+    spot_balance = float(
+        usdt_asset.get(
+            "usdtBalance",
+            usdt_asset.get("balance", usdt_asset.get("available", usdt_asset.get("availableBalance", 0))),
+        )
+        or 0
+    )
+    current_equity = float(
+        futures.get("equity") or 0
+        if futures.get("status") == "ok"
+        else spot_balance
+    )
     today = datetime.now(timezone.utc).date().isoformat()
     today_points = user_logger.fetch_balance_snapshots(
         session_id=None,
@@ -319,13 +330,13 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
         "daily_change": daily_change,
         "daily_change_pct": daily_change_pct,
         "futures_equity": float(futures.get("equity", 0) or 0) if futures.get("status") == "ok" else 0.0,
-        "spot_usdt": float(usdt_asset.get("usdtBalance", usdt_asset.get("balance", 0)) or 0),
+        "spot_usdt": spot_balance,
         "futures": futures,
         "spot": {
             "status": spot.get("status"),
             "currency": "USDT",
             "available": float(usdt_asset.get("available", usdt_asset.get("availableBalance", 0)) or 0),
-            "equity": float(usdt_asset.get("usdtBalance", usdt_asset.get("balance", 0)) or 0),
+            "equity": spot_balance,
         },
     }
 

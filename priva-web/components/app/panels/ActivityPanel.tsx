@@ -67,6 +67,14 @@ function entryDetails(entry: EventItem): string {
   return "";
 }
 
+function executionLabel(entry: EventItem): string {
+  if (entry.status === "submitted" || entry.status === "closed") return "Executed";
+  if (entry.status === "skipped_existing_position") return "Skipped: position already open";
+  if (entry.status === "rejected") return "Rejected by exchange";
+  if (entry.status === "risk_rejected") return "Rejected by risk check";
+  return "Signal logged";
+}
+
 function csvEscape(value: string): string {
   if (/["\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
   return value;
@@ -347,9 +355,7 @@ export default function ActivityPanel() {
                   <p>
                     {blocked
                       ? (entry.risk_check?.reasons ?? []).join(", ") || "Blocked by risk check"
-                      : entry.status === "skipped_existing_position"
-                                              ? "Already holding this"
-                                              : "Logged"}
+                      : executionLabel(entry)}
                   </p>
                 </div>
                 <div className="event-meta">
