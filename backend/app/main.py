@@ -74,6 +74,16 @@ def execution_client_for(user: AuthenticatedUser) -> BitgetPaperExecutionClient:
     return BitgetPaperExecutionClient(session=paper_execution_client.session)
 
 
+def cycle_logger_for(user: AuthenticatedUser) -> SupabaseCycleLogger:
+    if supabase_auth.required:
+        return SupabaseCycleLogger(user_id=user.id)
+    return cycle_logger
+
+
+def normalize_user(user: AuthenticatedUser | Any) -> AuthenticatedUser:
+    return user if isinstance(user, AuthenticatedUser) else AuthenticatedUser("local-development")
+
+
 def restore_custom_strategies(user_id: str) -> None:
     for record in SupabaseCycleLogger(user_id=user_id).fetch_custom_strategies(user_id):
         strategy_id = record.get("strategy_id")
@@ -483,8 +493,10 @@ def status() -> dict[str, Any]:
 
 
 @app.get("/positions")
-def positions() -> dict[str, Any]:
-    exchange_positions = paper_execution_client.fetch_futures_positions()
+def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user = normalize_user(user)
+    user_logger = cycle_logger_for(user)
+    exchange_positions = execution_client_for(user).fetch_futures_positions()
     if exchange_positions["status"] == "ok":
         live_positions = []
         for position in exchange_positions["positions"]:
@@ -522,7 +534,7 @@ def positions() -> dict[str, Any]:
             )
         return {"positions": live_positions, "total_positions": len(live_positions)}
 
-    cycles = cycle_logger.fetch_cycles()
+    cycles = user_logger.fetch_cycles()
     if cycles:
         live_positions = calculate_unrealized_pnl(
             cycles,
@@ -589,11 +601,18 @@ def positions() -> dict[str, Any]:
 
 
 @app.post("/positions/{symbol}/close")
-def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]:
+def close_position(
+    symbol: str,
+    payload: ClosePositionRequest,
+    user: AuthenticatedUser = Depends(current_user),
+) -> dict[str, Any]:
+    user = normalize_user(user)
+    user_logger = cycle_logger_for(user)
+    execution_client = execution_client_for(user)
     current = next(
         (
             position
-            for position in positions()["positions"]
+            for position in positions(user)["positions"]
             if position.get("symbol") == symbol.upper()
             and position.get("side") == payload.position_side
         ),
@@ -612,7 +631,7 @@ def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]
             "message": "Partial close not currently supported - close the full position instead.",
         }
 
-    execution = paper_execution_client.flash_close_position(symbol, payload.position_side)
+    execution = execution_client.flash_close_position(symbol, payload.position_side)
     if execution.get("status") != "submitted":
         return {
             "order": {"symbol": symbol.upper(), "position_side": payload.position_side, "qty": qty},
@@ -625,9 +644,10 @@ def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]
     execution["trade_side"] = "close"
     execution["qty"] = qty
     execution["entry_price"] = mark_price
-    cycle_logger.log_cycle(
+    user_logger.log_cycle(
         {
             "symbol": symbol.upper(),
+            "user_id": user.id,
             "status": "closed",
             "decision": {"action": "close", "closed_position_side": payload.position_side},
             "ticker": market_service.fetch_spot_ticker(symbol),
@@ -646,13 +666,15 @@ def close_position(symbol: str, payload: ClosePositionRequest) -> dict[str, Any]
 
 
 @app.get("/pnl")
-def pnl() -> dict[str, Any]:
-    cycles = cycle_logger.fetch_cycles(session_id=cycle_logger.session_id)
+def pnl(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user = normalize_user(user)
+    user_logger = cycle_logger_for(user)
+    cycles = user_logger.fetch_cycles(session_id=user_logger.session_id)
     logged_pnl = calculate_unrealized_pnl(
         cycles,
         mark_fetcher=market_service.fetch_spot_ticker,
     ) if cycles else {"realized_pnl": 0.0}
-    live_positions = positions()["positions"]
+    live_positions = positions(user)["positions"]
     unrealized_pnl = round(
         sum(float(position.get("unrealized_pnl", 0) or 0) for position in live_positions),
         4,
@@ -675,8 +697,9 @@ def pnl() -> dict[str, Any]:
 
 
 @app.get("/risk-usage")
-def risk_usage() -> dict[str, Any]:
-    live_positions = positions()["positions"]
+def risk_usage(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user = normalize_user(user)
+    live_positions = positions(user)["positions"]
     position_size = round(
         sum(float(position.get("notional_usd", 0) or 0) for position in live_positions),
         4,
@@ -725,8 +748,10 @@ def update_risk_settings(payload: dict[str, Any] | None = None) -> dict[str, Any
 
 
 @app.get("/activity-log")
-def activity_log() -> dict[str, Any]:
-    cycles = cycle_logger.fetch_cycles()
+def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user = normalize_user(user)
+    user_logger = cycle_logger_for(user)
+    cycles = user_logger.fetch_cycles()
     if not cycles:
         cycles = agent_loop.recent_cycles()
     cycles = [
@@ -1233,9 +1258,10 @@ def evaluate_intent(payload: IntentEvaluationRequest) -> dict[str, Any]:
 
 
 @app.get("/risk-view")
-def risk_view(symbol: str = "AAPLUSDT") -> dict[str, Any]:
-    live_positions = positions().get("positions", [])
-    pnl_snapshot = pnl()
+def risk_view(symbol: str = "AAPLUSDT", user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user = normalize_user(user)
+    live_positions = positions(user).get("positions", [])
+    pnl_snapshot = pnl(user)
     usage = _usage_summary(live_positions, float(pnl_snapshot.get("daily_pnl", 0.0) or 0.0))
     action_plan = _action_plan_from_usage(usage["position_usage_pct"], usage["daily_loss_usage_pct"])
     return {
