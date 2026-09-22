@@ -153,6 +153,12 @@
 }
 .auth-debug-live{ color: var(--up); }
 .auth-debug-stopped,.auth-debug-error{ color: var(--down); }
+.backfill-status{
+  color: var(--ink-faint);
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
 
 .icon-btn{
   width: 32px; height: 32px;

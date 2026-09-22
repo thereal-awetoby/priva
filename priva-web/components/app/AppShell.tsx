@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import Sidebar from "@/components/app/Sidebar";
 import ControlCenterPanel from "@/components/app/panels/ControlCenterPanel";
 import StrategyLabPanel from "@/components/app/panels/StrategyLabPanel";
@@ -22,6 +22,7 @@ export default function AppShell() {
   const [activeTab, setActiveTab] = useState("control");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [authDebug, setAuthDebug] = useState<{ userId?: string; email?: string; running?: boolean; workerError?: string; error?: string } | null>(null);
+  const [backfillStatus, setBackfillStatus] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -40,6 +41,22 @@ export default function AppShell() {
         setAuthDebug({ error: error instanceof Error ? error.message : "Unable to verify session" });
       });
   }, []);
+
+  const importTradeHistory = async () => {
+    setBackfillStatus("Importing...");
+    try {
+      const result = await apiPost<{ imported?: number; skipped?: number; message?: string }>(
+        "/user/backfill-trades",
+        {
+          start_time: Date.parse("2026-09-17T00:00:00Z"),
+          end_time: Date.now(),
+        },
+      );
+      setBackfillStatus(`${result.imported ?? 0} imported, ${result.skipped ?? 0} skipped`);
+    } catch (error) {
+      setBackfillStatus(error instanceof Error ? error.message : "Import failed");
+    }
+  };
 
   return (
     <div className="app-root">
@@ -66,6 +83,10 @@ export default function AppShell() {
                 <span>Checking auth...</span>
               )}
             </div>
+            <button className="sign-out-btn" type="button" onClick={importTradeHistory}>
+              Import history
+            </button>
+            {backfillStatus ? <span className="backfill-status">{backfillStatus}</span> : null}
             <button
               className="sign-out-btn"
               type="button"

@@ -214,6 +214,11 @@ class BitgetConnectionRequest(BaseModel):
     symbol: str = "AAPLUSDT"
 
 
+class TradeHistoryBackfillRequest(BaseModel):
+    start_time: int
+    end_time: int
+
+
 @app.get("/market-data")
 def market_data(symbol: str = "AAPLUSDT") -> dict[str, Any]:
     snapshot = market_service.get_market_snapshot(symbol)
@@ -448,6 +453,86 @@ async def disconnect_bitget(user: AuthenticatedUser = Depends(current_user)) -> 
     if user.id == "local-development":
         paper_execution_client.clear_credentials()
     return {"status": "disconnected"}
+
+
+@app.post("/user/backfill-trades")
+def backfill_trades(
+    payload: TradeHistoryBackfillRequest,
+    user: AuthenticatedUser = Depends(current_user),
+) -> dict[str, Any]:
+    user = normalize_user(user)
+    client = execution_client_for(user)
+    user_logger = cycle_logger_for(user)
+    result = client.fetch_futures_fills(start_time=payload.start_time, end_time=payload.end_time)
+    if result.get("status") != "ok":
+        return {**result, "imported": 0, "skipped": 0}
+
+    existing = user_logger.fetch_cycles()
+    existing_ids = {
+        str((cycle.get("order_result") or {}).get("order_id"))
+        for cycle in existing
+        if (cycle.get("order_result") or {}).get("order_id")
+    }
+    imported = 0
+    skipped = 0
+    for fill in result.get("fills", []):
+        order_id = str(fill.get("fillId") or fill.get("orderId") or "")
+        if not order_id or order_id in existing_ids:
+            skipped += 1
+            continue
+        symbol = str(fill.get("symbol", "")).upper()
+        if symbol not in agent_loop.SUPPORTED_SYMBOLS:
+            skipped += 1
+            continue
+        side = str(fill.get("side", "")).lower()
+        position_side = str(fill.get("posSide", "")).lower()
+        closed_side = (
+            "buy" if position_side == "long"
+            else "sell" if position_side == "short"
+            else "buy" if side == "sell" else "sell"
+        )
+        is_close = str(fill.get("tradeSide", "open")).lower() == "close"
+        price = float(fill.get("priceAvg", fill.get("fillPrice", fill.get("price", 0))) or 0)
+        quantity = float(fill.get("baseVolume", fill.get("size", 0)) or 0)
+        if price <= 0 or quantity <= 0:
+            skipped += 1
+            continue
+        fill_time = fill.get("fillTime") or fill.get("cTime")
+        created_at = None
+        if fill_time:
+            created_at = datetime.fromtimestamp(float(fill_time) / 1000, timezone.utc).isoformat()
+        cycle = {
+            "created_at": created_at,
+            "symbol": symbol,
+            "market": "futures",
+            "mode": "imported",
+            "status": "closed" if is_close else "submitted",
+            "decision": {
+                "action": "close" if is_close else side,
+                **({"closed_position_side": closed_side} if is_close else {}),
+            },
+            "ticker": {"symbol": symbol, "last_price": price, "status": "historical"},
+            "risk_check": {"allowed": True, "risk": {"notional": price * quantity}},
+            "order": {
+                "order_id": order_id,
+                "qty": quantity,
+                "entry_price": price,
+                **({"closed_position_side": closed_side} if is_close else {}),
+            },
+            "intent": {"source": "bitget_trade_history"},
+        }
+        persistence = user_logger.log_cycle(cycle)
+        if persistence.get("status") != "logged":
+            return {
+                "status": "error",
+                "message": persistence.get("message", "trade history import failed"),
+                "imported": imported,
+                "skipped": skipped,
+            }
+        imported += 1
+        existing_ids.add(order_id)
+
+    return {"status": "ok", "imported": imported, "skipped": skipped}
 
 
 @app.get("/auth/session")

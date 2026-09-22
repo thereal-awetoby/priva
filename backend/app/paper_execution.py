@@ -7,6 +7,7 @@ import json
 import os
 import time
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 
@@ -19,6 +20,7 @@ class BitgetPaperExecutionClient:
     FUTURES_LEVERAGE_PATH = "/api/v2/mix/account/set-leverage"
     FUTURES_FLASH_CLOSE_PATH = "/api/v2/mix/order/close-positions"
     FUTURES_ACCOUNT_PATH = "/api/v2/mix/account/account"
+    FUTURES_FILLS_PATH = "/api/v2/mix/order/fills"
     SPOT_ORDER_PATH = "/api/v2/spot/trade/place-order"
     SPOT_ASSETS_PATH = "/api/v2/spot/account/assets"
 
@@ -340,6 +342,49 @@ class BitgetPaperExecutionClient:
             return {"status": "rejected", "message": str(exc), "positions": []}
         except requests.RequestException as exc:
             return {"status": "execution_error", "message": str(exc), "positions": []}
+
+    def fetch_futures_fills(self, *, start_time: int, end_time: int) -> dict[str, Any]:
+        if not self.configured:
+            return {"status": "not_configured", "fills": []}
+
+        query = "?" + urlencode({
+            "productType": "USDT-FUTURES",
+            "startTime": str(start_time),
+            "endTime": str(end_time),
+            "limit": "100",
+        })
+        timestamp = str(int(time.time() * 1000))
+        prehash = timestamp + "GET" + self.FUTURES_FILLS_PATH + query
+        signature = base64.b64encode(
+            hmac.new(self.api_secret.encode(), prehash.encode(), hashlib.sha256).digest()
+        ).decode()
+        headers = {
+            "ACCESS-KEY": self.api_key,
+            "ACCESS-SIGN": signature,
+            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-PASSPHRASE": self.passphrase,
+            "paptrading": "1",
+        }
+        try:
+            response = self.session.get(
+                f"{self.BASE_URL}{self.FUTURES_FILLS_PATH}{query}",
+                headers=headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except requests.HTTPError as exc:
+            try:
+                exchange = response.json()
+            except ValueError:
+                exchange = {"raw": response.text}
+            return {"status": "rejected", "message": exchange.get("msg", str(exc)), "fills": []}
+        except requests.RequestException as exc:
+            return {"status": "execution_error", "message": str(exc), "fills": []}
+
+        if payload.get("code") not in (None, "00000", 0, "0"):
+            return {"status": "rejected", "message": payload.get("msg", "Bitget fills request rejected"), "fills": []}
+        return {"status": "ok", "fills": payload.get("data") or []}
 
     def fetch_spot_assets(self) -> dict[str, Any]:
         if not self.configured:

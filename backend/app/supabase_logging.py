@@ -39,6 +39,8 @@ class SupabaseCycleLogger:
             "order_result": cycle.get("order"),
             "error": cycle.get("error"),
         }
+        if cycle.get("created_at"):
+            record["created_at"] = cycle["created_at"]
         if self.user_id:
             record["user_id"] = self.user_id
         try:
