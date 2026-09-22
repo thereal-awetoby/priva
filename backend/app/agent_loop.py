@@ -383,6 +383,7 @@ async def run_cycle(
                         "closed_position_side": live_position["side"],
                         "qty": live_position["qty"],
                         "entry_price": live_position["entry_price"],
+                        "exit_price": current_price,
                     }
                     result = {
                         "status": "closed" if close_result.get("status") == "submitted" else close_result.get("status", "close_failed"),
@@ -461,6 +462,7 @@ async def run_cycle(
                         "closed_position_side": live_position["side"],
                         "qty": live_position["qty"],
                         "entry_price": live_position["entry_price"],
+                        "exit_price": current_price,
                     }
                     result = {
                         "status": "closed" if close_result.get("status") == "submitted" else close_result.get("status", "close_failed"),

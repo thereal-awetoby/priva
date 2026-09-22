@@ -561,6 +561,7 @@ def test_calculate_pnl_moves_closed_position_to_realized():
                 "closed_position_side": "buy",
                 "qty": 10,
                 "entry_price": 110,
+                "exit_price": 90,
             },
         },
     ]
@@ -570,6 +571,6 @@ def test_calculate_pnl_moves_closed_position_to_realized():
         mark_fetcher=lambda symbol: {"status": "live", "last_price": 110},
     )
 
-    assert result["realized_pnl"] == 100.0
+    assert result["realized_pnl"] == -100.0
     assert result["unrealized_pnl"] == 0.0
     assert result["open_positions"] == []

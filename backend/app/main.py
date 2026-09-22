@@ -1288,7 +1288,7 @@ def _trade_metrics(cycles: list[dict[str, Any]], initial_capital: float) -> dict
         if qty <= 0:
             continue
 
-        exit_price = float(order.get("entry_price", 0.0) or (cycle.get("ticker") or {}).get("last_price", 0.0) or 0.0)
+        exit_price = float(order.get("exit_price", 0.0) or order.get("entry_price", 0.0) or (cycle.get("ticker") or {}).get("last_price", 0.0) or 0.0)
         if exit_price <= 0:
             continue
 

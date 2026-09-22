@@ -24,7 +24,7 @@ def calculate_unrealized_pnl(
             if close_side not in {"buy", "sell"}:
                 continue
             symbol = str(cycle.get("symbol", ""))
-            exit_price = float(order.get("entry_price", 0) or (cycle.get("ticker") or {}).get("last_price", 0) or 0)
+            exit_price = float(order.get("exit_price", 0) or order.get("entry_price", 0) or (cycle.get("ticker") or {}).get("last_price", 0) or 0)
             remaining = float(order.get("qty", 0) or 0)
             lots = open_lots.get((symbol, close_side), [])
             direction = 1 if close_side == "buy" else -1
