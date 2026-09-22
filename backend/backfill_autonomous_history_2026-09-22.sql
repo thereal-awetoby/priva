@@ -16,6 +16,6 @@ set order_result = jsonb_set(
   true
 )
 where status = 'closed'
-  and mode = 'strategy'
+  and ticker->>'status' = 'live'
   and not (coalesce(order_result, '{}'::jsonb) ? 'exit_price')
   and ticker->>'last_price' is not null;

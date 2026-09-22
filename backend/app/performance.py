@@ -18,8 +18,14 @@ def calculate_unrealized_pnl(
         ordered_cycles = cycles
 
     for cycle in ordered_cycles:
+        if cycle.get("mode") == "autonomous" and (cycle.get("ticker") or {}).get("status") == "historical":
+            continue
         if cycle.get("status") == "closed":
             order = cycle.get("order_result") or {}
+            exchange_pnl = order.get("exchange_realized_pnl")
+            if exchange_pnl is not None:
+                realized_pnl += float(exchange_pnl or 0)
+                continue
             close_side = order.get("closed_position_side") or (cycle.get("decision") or {}).get("closed_position_side")
             if close_side not in {"buy", "sell"}:
                 continue

@@ -528,6 +528,7 @@ def backfill_trades(
                 "order_id": order_id,
                 "qty": quantity,
                 "entry_price": price,
+                **({"exchange_realized_pnl": float(next((fill.get(key) for key in ("profit", "realizedPnl", "realizedPL", "pnl") if fill.get(key) is not None), 0) or 0)} if any(fill.get(key) is not None for key in ("profit", "realizedPnl", "realizedPL", "pnl")) else {}),
                 **({"closed_position_side": closed_side} if is_close else {}),
             },
             "intent": {"source": "bitget_trade_history"},
@@ -1258,6 +1259,8 @@ def _trade_metrics(cycles: list[dict[str, Any]], initial_capital: float) -> dict
     ordered_cycles = sorted(cycles, key=lambda cycle: cycle.get("created_at") or "")
 
     for cycle in ordered_cycles:
+        if cycle.get("mode") == "autonomous" and (cycle.get("ticker") or {}).get("status") == "historical":
+            continue
         status = cycle.get("status")
         symbol = str(cycle.get("symbol", ""))
         decision = cycle.get("decision") or {}
@@ -1280,6 +1283,10 @@ def _trade_metrics(cycles: list[dict[str, Any]], initial_capital: float) -> dict
             continue
 
         order = cycle.get("order_result") or {}
+        exchange_pnl = order.get("exchange_realized_pnl")
+        if exchange_pnl is not None:
+            closed_pnls.append(float(exchange_pnl or 0))
+            continue
         close_side = order.get("closed_position_side") or decision.get("closed_position_side")
         if close_side not in {"buy", "sell"}:
             continue
