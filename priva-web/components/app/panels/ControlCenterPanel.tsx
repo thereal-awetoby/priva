@@ -158,7 +158,7 @@ export default function ControlCenterPanel() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 6 * 60 * 60 * 1000);
+    const interval = setInterval(loadData, 30 * 1000);
     return () => clearInterval(interval);
   }, []);
 
