@@ -505,7 +505,7 @@ def backfill_trades(
             "created_at": created_at,
             "symbol": symbol,
             "market": "futures",
-            "mode": "imported",
+            "mode": "autonomous",
             "status": "closed" if is_close else "submitted",
             "decision": {
                 "action": "close" if is_close else side,
