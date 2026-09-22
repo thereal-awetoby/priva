@@ -138,10 +138,10 @@ def test_trade_metrics_detect_real_drawdown_from_closed_pnl(monkeypatch):
         },
     ]
 
-    metrics = main._trade_metrics(cycles)
+    metrics = main._trade_metrics(cycles, 10000.0)
 
     assert metrics["win_rate_pct"] == 66.67
-    assert metrics["max_drawdown_pct"] == 100.0
+    assert metrics["max_drawdown_pct"] == 0.99
 
 
 def test_risk_usage_reflects_live_position(monkeypatch):

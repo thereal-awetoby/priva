@@ -88,7 +88,13 @@ class SupabaseCycleLogger:
             logger.warning("Supabase balance snapshot failed: %s", exc)
             return {"status": "error", "message": str(exc)}
 
-    def fetch_balance_snapshots(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+    def fetch_balance_snapshots(
+        self,
+        *,
+        limit: int = 1000,
+        session_id: str | None = None,
+        created_after: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not self.configured:
             return []
         try:
@@ -96,8 +102,11 @@ class SupabaseCycleLogger:
                 "select": "created_at,balance,equity",
                 "order": "created_at.asc",
                 "limit": min(limit, 1000),
-                "session_id": f"eq.{self.session_id}",
             }
+            if session_id:
+                params["session_id"] = f"eq.{session_id}"
+            if created_after:
+                params["created_at"] = f"gte.{created_after}"
             if self.user_id:
                 params["user_id"] = f"eq.{self.user_id}"
             response = self.session.get(

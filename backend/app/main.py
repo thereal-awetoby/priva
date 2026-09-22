@@ -269,9 +269,12 @@ def debug_bitget_account(symbol: str = "AAPLUSDT", user: AuthenticatedUser = Dep
 
 
 @app.get("/account/balance")
-def account_balance() -> dict[str, Any]:
-    futures = paper_execution_client.fetch_futures_account_balance()
-    spot = paper_execution_client.fetch_spot_assets()
+def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user = normalize_user(user)
+    client = execution_client_for(user)
+    user_logger = cycle_logger_for(user)
+    futures = client.fetch_futures_account_balance()
+    spot = client.fetch_spot_assets()
     if futures.get("status") == "not_configured" and spot.get("status") == "not_configured":
         return {"status": "not_configured", "message": "Connect the Bitget demo account first."}
     spot_assets = spot.get("assets", []) if spot.get("status") == "ok" else []
@@ -281,10 +284,15 @@ def account_balance() -> dict[str, Any]:
     )
     current_equity = float((futures.get("equity") or 0) if futures.get("status") == "ok" else (usdt_asset.get("usdtBalance", usdt_asset.get("balance", 0)) or 0))
     today = datetime.now(timezone.utc).date().isoformat()
-    baseline_day, starting_balance = _daily_balance_baselines.get("demo-account", (today, current_equity))
-    if baseline_day != today:
-        starting_balance = current_equity
-    _daily_balance_baselines["demo-account"] = (today, starting_balance)
+    today_points = user_logger.fetch_balance_snapshots(
+        session_id=None,
+        created_after=today,
+    )
+    starting_balance = (
+        float(today_points[0].get("balance", today_points[0].get("equity", 0)) or 0)
+        if today_points
+        else current_equity
+    )
     daily_change = round(current_equity - starting_balance, 4)
     daily_change_pct = round((daily_change / starting_balance) * 100, 4) if starting_balance else 0.0
 
@@ -295,6 +303,7 @@ def account_balance() -> dict[str, Any]:
     }
     _balance_history.append(snapshot)
     del _balance_history[:-1000]
+    user_logger.log_balance_snapshot(snapshot)
 
     return {
         "status": "ok" if futures.get("status") == "ok" or spot.get("status") == "ok" else "error",
@@ -411,6 +420,16 @@ def connect_bitget(payload: BitgetConnectionRequest, user: AuthenticatedUser = D
         paper_execution_client.configure_credentials(*values)
     else:
         return {"status": "rejected", "message": "PRIVA_CREDENTIAL_ENCRYPTION_KEY is not configured"}
+    connected_client = execution_client_for(user)
+    connected_balance = connected_client.fetch_futures_account_balance()
+    if connected_balance.get("status") == "ok":
+        cycle_logger_for(user).log_balance_snapshot(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "balance": float(connected_balance.get("equity", 0) or 0),
+                "equity": float(connected_balance.get("equity", 0) or 0),
+            }
+        )
     runtime = user_runtime_registry.start(user.id, execution_client_for(user)) if supabase_auth.required else None
     return {
         "status": "connected",
@@ -681,7 +700,20 @@ def pnl(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     )
     realized_pnl = round(float(logged_pnl.get("realized_pnl", 0) or 0), 4)
     total_pnl = round(realized_pnl + unrealized_pnl, 4)
-    trade_metrics = _trade_metrics(cycles)
+    today_start = datetime.now(timezone.utc).date().isoformat()
+    balance_points = user_logger.fetch_balance_snapshots(
+        session_id=None,
+        created_after=today_start,
+    )
+    initial_capital = (
+        float(balance_points[0].get("balance", balance_points[0].get("equity", 0)) or 0)
+        if balance_points
+        else 0.0
+    )
+    trade_metrics = _trade_metrics(cycles, initial_capital) if initial_capital > 0 else {
+        "win_rate_pct": 0.0,
+        "max_drawdown_pct": 0.0,
+    }
     return {
         "unrealized_pnl": unrealized_pnl,
         "realized_pnl": realized_pnl,
@@ -1121,7 +1153,7 @@ def _action_plan_from_usage(position_usage_pct: float, daily_loss_usage_pct: flo
     return "HOLD"
 
 
-def _trade_metrics(cycles: list[dict[str, Any]]) -> dict[str, float]:
+def _trade_metrics(cycles: list[dict[str, Any]], initial_capital: float) -> dict[str, float]:
     if not cycles:
         return {"win_rate_pct": 0.0, "max_drawdown_pct": 0.0}
 
@@ -1186,16 +1218,17 @@ def _trade_metrics(cycles: list[dict[str, Any]]) -> dict[str, float]:
         return {"win_rate_pct": win_rate_pct, "max_drawdown_pct": 0.0}
 
     cumulative_pnl = 0.0
-    peak_pnl = 0.0
+    peak_equity = initial_capital
     max_drawdown_pct = 0.0
 
     for pnl in closed_pnls:
         cumulative_pnl += pnl
-        if cumulative_pnl > peak_pnl:
-            peak_pnl = cumulative_pnl
+        equity = initial_capital + cumulative_pnl
+        if equity > peak_equity:
+            peak_equity = equity
             continue
-        if peak_pnl > 0:
-            drawdown_pct = ((peak_pnl - cumulative_pnl) / peak_pnl) * 100
+        if peak_equity > 0:
+            drawdown_pct = ((peak_equity - equity) / peak_equity) * 100
             max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
 
     return {"win_rate_pct": win_rate_pct, "max_drawdown_pct": round(max_drawdown_pct, 2)}

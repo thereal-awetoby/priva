@@ -79,6 +79,22 @@ def test_supabase_logger_filters_cycles_by_session(monkeypatch):
     assert session.calls[0][1]["params"]["session_id"] == "eq.session-1"
 
 
+def test_supabase_logger_filters_balance_snapshots_by_date_without_session(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+    session = FakeSession([])
+
+    SupabaseCycleLogger(session=session, user_id="user-1").fetch_balance_snapshots(
+        session_id=None,
+        created_after="2026-09-22",
+    )
+
+    params = session.calls[0][1]["params"]
+    assert "session_id" not in params
+    assert params["user_id"] == "eq.user-1"
+    assert params["created_at"] == "gte.2026-09-22"
+
+
 def test_supabase_logger_detects_open_position(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
