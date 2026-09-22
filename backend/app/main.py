@@ -553,7 +553,6 @@ async def periodic_market_loop() -> None:
 
 @app.on_event("startup")
 async def startup_event() -> None:
-    restore_custom_strategies("local-development")
     if supabase_auth.required:
         for record in cycle_logger.fetch_connected_users():
             user_id = str(record.get("user_id", ""))
@@ -562,6 +561,7 @@ async def startup_event() -> None:
                 user = AuthenticatedUser(user_id)
                 user_runtime_registry.start(user_id, execution_client_for(user))
         return
+    restore_custom_strategies("local-development")
     persisted_strategy = cycle_logger.fetch_active_strategy()
     if persisted_strategy:
         set_active_strategy(persisted_strategy)
