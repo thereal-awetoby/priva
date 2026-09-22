@@ -21,7 +21,7 @@ const crumbLabels: Record<string, string> = {
 export default function AppShell() {
   const [activeTab, setActiveTab] = useState("control");
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [authDebug, setAuthDebug] = useState<{ userId?: string; email?: string; running?: boolean; workerError?: string; persistenceError?: string; error?: string } | null>(null);
+  const [authDebug, setAuthDebug] = useState<{ running?: boolean; workerError?: string; persistenceError?: string; error?: string } | null>(null);
   const [backfillStatus, setBackfillStatus] = useState<string | null>(null);
   const router = useRouter();
 
@@ -34,8 +34,8 @@ export default function AppShell() {
       apiGet<{ user_id?: string; email?: string }>("/auth/session"),
       apiGet<{ running?: boolean; last_error?: string | null; last_persistence_status?: string | null; supabase_logging_configured?: boolean }>("/user/agent-loop"),
     ])
-      .then(([session, worker]) => {
-        setAuthDebug({ userId: session.user_id, email: session.email, running: worker.running, workerError: worker.last_error, persistenceError: worker.last_persistence_status ?? (worker.supabase_logging_configured === false ? "Supabase logging not configured" : undefined) });
+      .then(([, worker]) => {
+        setAuthDebug({ running: worker.running, workerError: worker.last_error, persistenceError: worker.last_persistence_status ?? (worker.supabase_logging_configured === false ? "Supabase logging not configured" : undefined) });
       })
       .catch((error) => {
         setAuthDebug({ error: error instanceof Error ? error.message : "Unable to verify session" });
@@ -74,7 +74,6 @@ export default function AppShell() {
                 <span className="auth-debug-error">Auth error</span>
               ) : authDebug ? (
                 <>
-                  <span>{authDebug.email ?? authDebug.userId}</span>
                   <span className={authDebug.workerError || authDebug.persistenceError === "error" ? "auth-debug-error" : authDebug.running ? "auth-debug-live" : "auth-debug-stopped"}>
                     {authDebug.workerError ? "worker error" : authDebug.persistenceError === "error" ? "logging error" : `worker ${authDebug.running ? "running" : "stopped"}`}
                   </span>
