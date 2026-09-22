@@ -41,6 +41,21 @@ class ErrorSession(FakeSession):
         return ErrorResponse({"code": "22002", "msg": "No position to close"})
 
 
+class FillHistorySession(FakeSession):
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return FakeResponse(
+            {
+                "code": "00000",
+                "data": {
+                    "fillList": [
+                        {"fillId": "fill-1", "symbol": "AAPLUSDT", "size": "1"}
+                    ]
+                },
+            }
+        )
+
+
 def test_paper_client_omits_sent_body_on_http_rejection(monkeypatch):
     monkeypatch.setenv("BITGET_API_KEY", "key")
     monkeypatch.setenv("BITGET_API_SECRET", "secret")
@@ -101,6 +116,20 @@ def test_paper_client_fetches_spot_assets(monkeypatch):
     assert result["status"] == "ok"
     assert url.endswith("/api/v2/spot/account/assets")
     assert kwargs["headers"]["paptrading"] == "1"
+
+
+def test_paper_client_normalizes_nested_fill_history(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    result = BitgetPaperExecutionClient(session=FillHistorySession()).fetch_futures_fills(
+        start_time=1758067200000,
+        end_time=1758585600000,
+    )
+
+    assert result["status"] == "ok"
+    assert result["fills"] == [{"fillId": "fill-1", "symbol": "AAPLUSDT", "size": "1"}]
 
 
 def test_paper_client_fails_closed_without_credentials(monkeypatch):

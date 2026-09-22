@@ -384,7 +384,12 @@ class BitgetPaperExecutionClient:
 
         if payload.get("code") not in (None, "00000", 0, "0"):
             return {"status": "rejected", "message": payload.get("msg", "Bitget fills request rejected"), "fills": []}
-        return {"status": "ok", "fills": payload.get("data") or []}
+        fills = payload.get("data") or []
+        if isinstance(fills, dict):
+            fills = fills.get("fillList") or fills.get("fills") or fills.get("data") or []
+        if not isinstance(fills, list):
+            fills = []
+        return {"status": "ok", "fills": fills}
 
     def fetch_spot_assets(self) -> dict[str, Any]:
         if not self.configured:
