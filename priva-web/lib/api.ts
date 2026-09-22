@@ -1,7 +1,20 @@
+import { createClient } from "@/lib/supabase/client";
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 
+async function authHeaders(): Promise<HeadersInit> {
+  const supabase = createClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  return session ? { Authorization: `Bearer ${session.access_token}` } : {};
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`);
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    headers: await authHeaders(),
+  });
   if (!res.ok) {
     throw new Error(`GET ${path} failed: ${res.status}`);
   }
@@ -11,7 +24,10 @@ export async function apiGet<T>(path: string): Promise<T> {
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
     body: JSON.stringify(body),
   });
   if (!res.ok) {

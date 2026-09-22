@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { apiGet, apiPost } from "@/lib/api";
 
 type SidebarProps = {
   activeTab: string;
   onTabChange: (tab: string) => void;
 };
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8001";
 
 const WORKSPACE_NAME_KEY = "priva_workspace_name";
 
@@ -78,8 +77,7 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
   const [nameInput, setNameInput] = useState("");
 
     useEffect(() => {
-    fetch(`${API_BASE}/debug/bitget-account`)
-      .then((response) => response.json())
+      apiGet<{ status?: string; position_mode?: string }>("/debug/bitget-account")
       .then((payload) => setConnection(payload))
       .catch(() => setConnection({ status: "unavailable" }));
   }, []);
@@ -100,19 +98,15 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
     setConnecting(true);
     setConnectionError(null);
     try {
-      // TODO: this endpoint likely requires Authorization: Bearer <Supabase token>
-      // once auth is wired in — currently unauthenticated.
-      const response = await fetch(`${API_BASE}/connection/bitget`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const payload = await apiPost<{ status?: string; message?: string; position_mode?: string }>(
+        "/connection/bitget",
+        {
           api_key: credentials.apiKey,
           api_secret: credentials.apiSecret,
           passphrase: credentials.passphrase,
-        }),
-      });
-      const payload = (await response.json()) as { status?: string; message?: string; position_mode?: string };
-      if (!response.ok || payload.status !== "connected") {
+        },
+      );
+      if (payload.status !== "connected") {
         throw new Error(payload.message ?? "Bitget credentials could not be verified");
       }
       setConnection({ status: "ok", position_mode: payload.position_mode });
@@ -128,9 +122,7 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
   const handleDisconnect = async () => {
     setDisconnecting(true);
     try {
-      // TODO: this endpoint likely requires Authorization: Bearer <Supabase token>
-      // once auth is wired in — currently unauthenticated.
-      await fetch(`${API_BASE}/connection/bitget/disconnect`, { method: "POST" });
+      await apiPost("/connection/bitget/disconnect", {});
       setConnection({ status: "not_configured" });
       setIsConfirmingDisconnect(false);
       setIsConnectOpen(false);

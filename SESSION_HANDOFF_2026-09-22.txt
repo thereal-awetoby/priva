@@ -1,0 +1,57 @@
+PRIVA SESSION HANDOFF
+Date: 2026-09-22
+
+Purpose
+-------
+Document the backend-only work completed after the previous handoff. Frontend code was intentionally not modified.
+
+Completed backend work
+----------------------
+- Fixed local-development authentication fallback in backend/app/auth.py.
+  - Supabase bearer authentication is required only when Supabase is configured.
+  - When SUPABASE_URL and SUPABASE_ANON_KEY are absent, local development uses the local-development user instead of incorrectly returning 401.
+  - Added regression coverage for configured authentication and missing-config fallback.
+
+- Added and normalized the equity-curve backend path in backend/app/main.py.
+  - GET /account/balance-history returns starting_balance, latest_balance, point_count, and sanitized points.
+  - The endpoint supports the existing balance snapshot sources without requiring frontend changes.
+
+- Continued overnight-gap strategy support.
+  - Daily gap context uses previous_close and session_open from market data.
+  - Overnight-gap parsing, signal behavior, market-data extraction, and agent-loop routing are covered by tests.
+  - The strategy remains a research feature and is not presented as a proven trading edge.
+
+- Added overfitting-awareness to strategy backtests in backend/app/strategy.py.
+  - Backtests now report deflated_sharpe_ratio alongside return, win rate, Sharpe ratio, and max drawdown.
+  - This is a lightweight honesty guardrail, not proof that a strategy will perform live.
+
+- Fixed live trade metric calculation in backend/app/main.py.
+  - GET /pnl now calculates win_rate_pct from closed trade outcomes.
+  - max_drawdown_pct is calculated from the cumulative closed-trade PnL path instead of returning a placeholder zero.
+  - Histories with fewer than three closed trades report zero drawdown to avoid overclaiming from an immature sample.
+  - Added regression coverage for a multi-trade drawdown sequence.
+
+Validation
+----------
+- Full backend suite passed: 105 tests passed.
+- Focused metrics, strategy, agent-loop, and market-data tests passed: 63 tests passed.
+- git diff --check passed.
+- Remaining output consists of two existing FastAPI on_event deprecation warnings.
+
+Scope and repository state
+--------------------------
+- No files under priva-web were modified.
+- Backend changes remain uncommitted locally.
+- No GitHub push was performed.
+- Existing unrelated working-tree changes were preserved.
+
+Remaining limitations
+---------------------
+- Win rate and drawdown become meaningful only after enough closed paper trades accumulate.
+- Realized PnL remains scoped to the current backend session.
+- Pairs trading and overnight-gap behavior still require observation in the paper environment before any claim of validation.
+- The FastAPI startup handler still uses deprecated on_event registration; this is a maintenance warning, not a current functional failure.
+
+Recommended next step
+---------------------
+Continue collecting paper-trade history and review /pnl and /account/balance-history over time. Do not treat the current metrics as statistically reliable until the sample size is materially larger.

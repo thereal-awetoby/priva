@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 import Sidebar from "@/components/app/Sidebar";
 import ControlCenterPanel from "@/components/app/panels/ControlCenterPanel";
 import StrategyLabPanel from "@/components/app/panels/StrategyLabPanel";
@@ -18,6 +20,7 @@ const crumbLabels: Record<string, string> = {
 export default function AppShell() {
   const [activeTab, setActiveTab] = useState("control");
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
     if (!hasSeenOnboarding()) {
@@ -36,6 +39,16 @@ export default function AppShell() {
           </div>
           <div className="topbar-right">
             <div className="env-tag">Paper environment</div>
+            <button
+              className="sign-out-btn"
+              type="button"
+              onClick={async () => {
+                await createClient().auth.signOut();
+                router.replace("/");
+              }}
+            >
+              Sign out
+            </button>
             <button className="icon-btn" aria-label="Notifications" title="Notifications">
               <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
                 <path

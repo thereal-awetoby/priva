@@ -1,10 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ConnectModal from "@/components/ConnectModal";
 
 export default function Hero() {
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("auth") === "login") {
+      setIsModalOpen(true);
+      window.history.replaceState({}, "", "/");
+    }
+  }, []);
 
   return (
     <section className="hero">

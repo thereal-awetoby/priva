@@ -148,6 +148,17 @@
 }
 .icon-btn:hover{ color: var(--ink); border-color: var(--ink-faint); }
 
+.sign-out-btn{
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink-dim);
+  padding: 7px 10px;
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 11px;
+  cursor: pointer;
+}
+.sign-out-btn:hover{ color: var(--ink); border-color: var(--ink-faint); }
+
 .app-content{ flex: 1; overflow-y: auto; padding: 30px 34px 60px; }
 .app-content::-webkit-scrollbar{ width: 10px; }
 .app-content::-webkit-scrollbar-thumb{ background: var(--rule); }

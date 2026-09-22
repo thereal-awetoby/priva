@@ -607,6 +607,27 @@ a{ color: inherit; }
   width: 100%;
 }
 
+.auth-switch{
+  display: block;
+  margin: 0 auto 22px;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.auth-switch:hover{ color: var(--ink); }
+.auth-message{ color: var(--down); }
+.auth-loading{
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: var(--ink-dim);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+}
+
 .modal-disclaimer{
   font-family: 'IBM Plex Mono', monospace;
   font-size: 11.5px;
