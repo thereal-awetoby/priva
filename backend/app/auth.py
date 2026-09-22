@@ -22,8 +22,12 @@ class SupabaseAuth:
         self.required = os.getenv("PRIVA_AUTH_REQUIRED", "false").lower() == "true"
         self.session = requests
 
+    @property
+    def configured(self) -> bool:
+        return bool(self.url and self.anon_key)
+
     def user_from_token(self, token: str) -> AuthenticatedUser | None:
-        if not self.url or not self.anon_key:
+        if not self.configured:
             return None
         try:
             response = self.session.get(
@@ -41,22 +45,22 @@ class SupabaseAuth:
 
     def current_user(self, authorization: str | None) -> AuthenticatedUser:
         if not authorization:
-            if self.required:
+            if self.required and self.configured:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
             return AuthenticatedUser("local-development")
 
         scheme, _, token = authorization.partition(" ")
         if scheme.lower() != "bearer" or not token:
-            if self.required:
+            if self.required and self.configured:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
             return AuthenticatedUser("local-development")
 
-        if self.url and self.anon_key:
+        if self.configured:
             user = self.user_from_token(token)
             if user is not None:
                 return user
 
-        if self.required:
+        if self.required and self.configured:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Supabase session")
         return AuthenticatedUser("local-development")
 

@@ -64,7 +64,11 @@ def test_optional_auth_falls_back_to_local_dev_for_invalid_token(monkeypatch):
     assert user == AuthenticatedUser("local-development")
 
 
-def test_required_auth_rejects_missing_token():
+def test_required_auth_rejects_missing_token(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon")
+    monkeypatch.setenv("PRIVA_AUTH_REQUIRED", "true")
+
     auth = SupabaseAuth()
     auth.required = True
     try:
@@ -72,4 +76,15 @@ def test_required_auth_rejects_missing_token():
     except Exception as exc:
         assert getattr(exc, "status_code", None) == 401
     else:
-        raise AssertionError("missing token should be rejected")
+        raise AssertionError("missing token should be rejected when Supabase is configured")
+
+
+def test_required_flag_does_not_force_auth_without_supabase_config(monkeypatch):
+    monkeypatch.setenv("PRIVA_AUTH_REQUIRED", "true")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
+
+    auth = SupabaseAuth()
+
+    assert auth.required is True
+    assert auth.current_user(None) == AuthenticatedUser("local-development")
