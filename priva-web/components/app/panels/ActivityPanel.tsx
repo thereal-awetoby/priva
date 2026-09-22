@@ -42,6 +42,177 @@ function getEventTag(entry: EventItem): string {
   return entry.action ?? "system";
 }
 
+/* ---------- Export modal ---------- */
+
+type TimeRange = "7d" | "30d" | "90d" | "all";
+
+const TIME_RANGES: { id: TimeRange; label: string }[] = [
+  { id: "7d", label: "7 days" },
+  { id: "30d", label: "30 days" },
+  { id: "90d", label: "90 days" },
+  { id: "all", label: "All time" },
+];
+
+function rangeStartMs(range: TimeRange): number | null {
+  if (range === "all") return null;
+  const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
+  return Date.now() - days * 24 * 60 * 60 * 1000;
+}
+
+function entryDetails(entry: EventItem): string {
+  if (entry.risk_check?.allowed === false) {
+    return (entry.risk_check?.reasons ?? []).join(", ") || "Blocked by risk check";
+  }
+  if (entry.status === "skipped_existing_position") return "Position already open";
+  return "";
+}
+
+function csvEscape(value: string): string {
+  if (/["\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+function buildCsv(rows: EventItem[]): string {
+  const header = ["timestamp", "symbol", "action", "mode", "type", "status", "details"];
+  const lines = rows.map((e) =>
+    [
+      e.timestamp ?? "",
+      e.symbol ?? "",
+      e.action ?? "",
+      e.mode ?? "autonomous",
+      getEventTag(e),
+      e.status ?? "",
+      entryDetails(e),
+    ]
+      .map((v) => csvEscape(String(v)))
+      .join(",")
+  );
+  return [header.join(","), ...lines].join("\r\n");
+}
+
+function ExportModal({
+  entries,
+  onClose,
+}: {
+  entries: EventItem[];
+  onClose: () => void;
+}) {
+  const symbols = useMemo(() => {
+    const set = new Set<string>();
+    entries.forEach((e) => e.symbol && set.add(cleanSymbol(e.symbol)));
+    return Array.from(set).sort();
+  }, [entries]);
+
+  const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]); // empty = all
+  const [range, setRange] = useState<TimeRange>("all");
+
+  const toggleSymbol = (s: string) =>
+    setSelectedSymbols((prev) =>
+      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
+    );
+
+  const startMs = rangeStartMs(range);
+
+  const rows = useMemo(() => {
+    return entries
+      .filter((e) => {
+        const matchesSymbol =
+          selectedSymbols.length === 0 ||
+          selectedSymbols.includes(cleanSymbol(e.symbol ?? ""));
+        const ts = e.timestamp ? new Date(e.timestamp).getTime() : NaN;
+        const matchesRange = startMs === null || (!Number.isNaN(ts) && ts >= startMs);
+        return matchesSymbol && matchesRange;
+      })
+      .sort(
+        (a, b) =>
+          new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime()
+      );
+  }, [entries, selectedSymbols, startMs]);
+
+  const handleDownload = () => {
+    const csv = buildCsv(rows);
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `priva-activity-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    onClose();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+        <button className="modal-close" onClick={onClose} aria-label="Close">
+          Close ✕
+        </button>
+        <h2 className="modal-title">Export your activity</h2>
+        <p className="modal-sub">
+          Pick what you want in the file — everything else stays out.
+        </p>
+
+        <div className="form-field">
+          <label className="form-label">Symbols</label>
+          <div className="stock-toggle-list">
+            <button
+              type="button"
+              className={`stock-chip ${selectedSymbols.length === 0 ? "active" : ""}`}
+              onClick={() => setSelectedSymbols([])}
+            >
+              All
+            </button>
+            {symbols.map((s) => (
+              <button
+                key={s}
+                type="button"
+                className={`stock-chip ${selectedSymbols.includes(s) ? "active" : ""}`}
+                onClick={() => toggleSymbol(s)}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="form-field">
+          <label className="form-label">Time range</label>
+          <div className="mode-switch">
+            {TIME_RANGES.map((r) => (
+              <button
+                key={r.id}
+                className={range === r.id ? "active" : ""}
+                onClick={() => setRange(r.id)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="export-count">
+          {rows.length} event{rows.length === 1 ? "" : "s"} will be in the file.
+        </div>
+
+        <div className="export-actions">
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleDownload}
+            disabled={rows.length === 0}
+          >
+            Download CSV
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ActivityPanel() {
   const [entries, setEntries] = useState<EventItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,6 +220,7 @@ export default function ActivityPanel() {
   const [activeFilter, setActiveFilter] = useState("all");
     const [search, setSearch] = useState("");
     const [modeFilter, setModeFilter] = useState<"all" | "autonomous" | "strategy">("all");
+  const [isExportOpen, setIsExportOpen] = useState(false);
 
   useEffect(() => {
     apiGet<any>("/activity-log")
@@ -129,22 +301,31 @@ export default function ActivityPanel() {
                 {f.label}
               </button>
             ))}
-          </div>
-              </div>
-              <input
-                className="activity-search"
-                type="text"
-                placeholder="Search by symbol or action"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                      <input
+                        className="activity-search"
+                        type="text"
+                        placeholder="Search AAPL, TSLA, buy, sell…"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                      <button className="btn export-btn" onClick={() => setIsExportOpen(true)}>
+                        Export CSV
+                      </button>
+                    </div>
+                  </div>
 
-      <div className="event-list">
+                  {isExportOpen && (
+                    <ExportModal entries={entries} onClose={() => setIsExportOpen(false)} />
+                  )}
+
+                  <div className="event-list">
         {filteredEntries.length === 0 ? (
           <div className="empty-state">
-            <p className="empty-state-title">No events match your filters</p>
-            <p className="empty-state-sub">Try a different search or category</p>
+                        <p className="empty-state-title">Nothing here yet</p>
+            <p className="empty-state-sub">Try widening your filters or search</p>
           </div>
         ) : (
           filteredEntries.slice(0, 50).map((entry) => {
@@ -167,8 +348,8 @@ export default function ActivityPanel() {
                     {blocked
                       ? (entry.risk_check?.reasons ?? []).join(", ") || "Blocked by risk check"
                       : entry.status === "skipped_existing_position"
-                        ? "Position already open"
-                        : "Logged"}
+                                              ? "Already holding this"
+                                              : "Logged"}
                   </p>
                 </div>
                 <div className="event-meta">

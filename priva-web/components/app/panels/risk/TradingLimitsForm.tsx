@@ -61,9 +61,10 @@ export default function TradingLimitsForm() {
 
   return (
     <div className="limits-form">
-      <h3>Update your limits</h3>
+            <h3>Set your own boundaries</h3>
       <p className="limits-form-sub">
-        Changes apply the next time Priva checks a proposed trade.
+        These aren&apos;t suggestions — every trade is checked against them before
+        it&apos;s allowed to happen.
       </p>
 
       <div className="slider-row">
@@ -128,8 +129,8 @@ export default function TradingLimitsForm() {
             </button>
           ))}
         </div>
-        <div className="form-hint">
-          Only AAPL and TSLA are supported in the paper environment right now.
+                <div className="form-hint">
+          AAPL and TSLA only, for now — Priva won&apos;t trade anything outside this list.
         </div>
       </div>
 
@@ -137,12 +138,12 @@ export default function TradingLimitsForm() {
         {saving ? "Saving…" : "Save changes"}
       </button>
 
-      {status && (
+            {status && (
         <div
           className="save-status"
           style={{ color: status.type === "success" ? "var(--up)" : "var(--down)" }}
         >
-          {status.message}
+          {status.type === "success" ? "Saved — new trades will respect these limits." : status.message}
         </div>
       )}
     </div>

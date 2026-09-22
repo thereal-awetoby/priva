@@ -88,6 +88,29 @@
 .profile-name{ font-size: 13px; }
 .profile-sub{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 10.5px; color: var(--ink-faint); }
 
+.profile-edit-btn{
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.profile-edit-btn:hover{ color: var(--ink-dim); }
+
+.profile-name-input{
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 2px 6px;
+  width: 110px;
+}
+
 /* ---------- Main column ---------- */
 
 .app-main{ flex: 1; min-width: 0; height: 100vh; display: flex; flex-direction: column; }
@@ -445,7 +468,6 @@ table.positions tr:last-child td{ border-bottom:none; }
   border: 1px solid var(--rule);
   background: var(--bg-sunken);
   padding: 22px 24px 24px;
-  margin-top: 24px;
   max-width: 640px;
 }
 

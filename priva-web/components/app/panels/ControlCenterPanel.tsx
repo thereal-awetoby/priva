@@ -58,9 +58,11 @@ function EquityCurve({ points }: { points: EquityPoint[] }) {
 
   const yTicks = [min, min + range / 2, max];
   const tickIndexes =
-    values.length <= 1
-      ? []
-      : [0, Math.floor((values.length - 1) / 2), values.length - 1];
+      values.length <= 1
+        ? []
+        : Array.from(
+            new Set([0, Math.floor((values.length - 1) / 2), values.length - 1])
+          );
 
   const formatTime = (iso: string) => {
     if (!iso) return "";
@@ -270,9 +272,9 @@ export default function ControlCenterPanel() {
               </div>
 
               <div className="risk-row">
-        <div className="risk-label-row">
-          <span>Daily loss usage</span>
-          <span>{dailyLossUsage}% of daily limit</span>
+                <div className="risk-label-row">
+          <span>Today's risk used</span>
+          <span>{dailyLossUsage}% of your daily loss limit</span>
         </div>
         <div className="risk-bar">
           <div
@@ -355,9 +357,9 @@ export default function ControlCenterPanel() {
                 <span className="log-time">{timeAgo(entry.timestamp)}</span>
                 <span>
                   {cleanSymbol(entry.symbol)} — {entry.action}
-                  {entry.status === "skipped_existing_position"
-                    ? " (position already open)"
-                    : ""}
+                                    {entry.status === "skipped_existing_position"
+                                      ? " (position already open)"
+                                      : ""}
                 </span>
               </div>
             ))

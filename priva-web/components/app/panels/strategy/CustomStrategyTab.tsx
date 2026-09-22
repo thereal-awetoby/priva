@@ -42,10 +42,12 @@ function SymbolSelector({
 function ActivationBanner({ result }: { result: ActivationResult }) {
   return (
     <div className="backtest-result">
-      <div className="backtest-result-title">Strategy activated</div>
+      <div className="backtest-result-title">
+        {result.name ? `"${result.name}" is live` : "Strategy activated"}
+      </div>
       <p style={{ margin: 0, fontSize: "13.5px", color: "var(--ink-dim)" }}>
         This strategy is now live on your account and will act on the next
-        agent cycle.
+        agent cycle. You'll find it saved in the Pre-built tab going forward.
       </p>
       <div className="config-rows" style={{ marginTop: "16px", marginBottom: 0 }}>
         <div className="config-row">
@@ -118,26 +120,29 @@ function PlainEnglishForm() {
       <SymbolSelector symbols={symbols} onChange={setSymbols} />
 
       <div className="form-field">
-        <label className="form-label">Strategy name (optional)</label>
+        <label className="form-label">Name it (optional)</label>
         <input
           className="form-input"
           placeholder="e.g. AAPL Dip Buyer"
           value={strategyName}
           onChange={(e) => setStrategyName(e.target.value)}
         />
+        <div className="form-hint">
+          Give it a name so it's easy to find in your Pre-built list later.
+        </div>
       </div>
 
       <div className="form-field">
         <label className="form-label">Describe your strategy</label>
         <textarea
           className="form-textarea"
-          placeholder="e.g. Buy AAPL when RSI drops below 30, sell when it rises above 70"
+          placeholder="e.g. Buy when price rises 1% above today's open, sell when it falls 1% below"
           value={text}
           onChange={(e) => setText(e.target.value)}
         />
         <div className="form-hint">
-          Only AAPL and TSLA are supported in the paper environment right now.
-          This will run live on your account.
+          Only AAPL and TSLA are supported right now. This will run live on
+          your demo account — not a simulation.
         </div>
       </div>
 
@@ -146,7 +151,7 @@ function PlainEnglishForm() {
         onClick={handleGenerate}
         disabled={loading || text.trim() === "" || symbols.length === 0}
       >
-        {loading ? "Activating…" : "Create & Activate"}
+        {loading ? "Creating…" : "Create & Activate"}
       </button>
 
       {error && (
@@ -200,7 +205,7 @@ function JsonStrategyForm() {
       parsed = JSON.parse(jsonText);
       setParseError(null);
     } catch (err: any) {
-      setParseError(`Invalid JSON: ${err.message}`);
+      setParseError(`That's not valid JSON: ${err.message}`);
       return;
     }
 
@@ -226,17 +231,17 @@ function JsonStrategyForm() {
       <SymbolSelector symbols={symbols} onChange={setSymbols} />
 
       <div className="form-field">
-        <label className="form-label">Strategy name (optional)</label>
+        <label className="form-label">Name it (optional)</label>
         <input
           className="form-input"
-          placeholder="e.g. AAPL Dip Buyer"
+          placeholder="e.g. Gap Reversion v2"
           value={strategyName}
           onChange={(e) => setStrategyName(e.target.value)}
         />
       </div>
 
       <div className="form-field">
-        <label className="form-label">Strategy JSON</label>
+        <label className="form-label">Strategy rules (JSON)</label>
         <textarea
           className="form-textarea"
           style={{ fontFamily: "var(--font-ibm-plex-mono), monospace", minHeight: "180px" }}
@@ -249,14 +254,14 @@ function JsonStrategyForm() {
           </div>
         )}
         <div className="form-hint" style={{ marginTop: "8px" }}>
-          Required: action (&quot;buy&quot;/&quot;sell&quot;), comparison (&quot;open&quot;/&quot;close&quot;), threshold_pct.
-          Optional: position_size, leverage, take_profit_pct, stop_loss_pct.
-          This will run live on your account.
+          Required: action ("buy"/"sell"), comparison ("open"/"close"),
+          threshold_pct. Optional: position_size, leverage, take_profit_pct,
+          stop_loss_pct. This will run live on your account.
         </div>
       </div>
 
       <div className="form-field">
-        <label className="form-label">Or upload a .json file</label>
+        <label className="form-label">Or upload a saved .json file</label>
         <input
           type="file"
           accept="application/json,.json"
@@ -271,7 +276,7 @@ function JsonStrategyForm() {
         onClick={handleSubmit}
         disabled={loading || symbols.length === 0}
       >
-        {loading ? "Activating…" : "Create & Activate"}
+        {loading ? "Creating…" : "Create & Activate"}
       </button>
 
       {error && (

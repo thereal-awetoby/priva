@@ -9,6 +9,8 @@ type SidebarProps = {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8001";
 
+const WORKSPACE_NAME_KEY = "priva_workspace_name";
+
 const navItems = [
   {
     id: "control",
@@ -71,12 +73,24 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
   const [disconnecting, setDisconnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [credentials, setCredentials] = useState({ apiKey: "", apiSecret: "", passphrase: "" });
+  const [workspaceName, setWorkspaceName] = useState("Unknown");
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState("");
 
-  useEffect(() => {
+    useEffect(() => {
     fetch(`${API_BASE}/debug/bitget-account`)
       .then((response) => response.json())
       .then((payload) => setConnection(payload))
       .catch(() => setConnection({ status: "unavailable" }));
+  }, []);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(WORKSPACE_NAME_KEY);
+      if (stored) setWorkspaceName(stored);
+    } catch {
+      // localStorage unavailable — name just stays "Unknown"
+    }
   }, []);
 
   const connected = connection?.status === "ok";
@@ -122,6 +136,18 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
       setIsConnectOpen(false);
     } finally {
       setDisconnecting(false);
+    }
+  };
+
+  const saveName = () => {
+    const trimmed = nameInput.trim();
+    const finalName = trimmed === "" ? "Unknown" : trimmed;
+    setWorkspaceName(finalName);
+    setIsEditingName(false);
+    try {
+      localStorage.setItem(WORKSPACE_NAME_KEY, finalName);
+    } catch {
+      // localStorage unavailable — won't persist across reloads, that's fine
     }
   };
 
@@ -184,12 +210,40 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
             </div>
           </button>
           <div className="profile-row">
-            <div className="profile-avatar">J</div>
-            <div>
-              <div className="profile-name">Jordan S.</div>
-              <div className="profile-sub">Private workspace</div>
-            </div>
-          </div>
+                      <div className="profile-avatar">{workspaceName.charAt(0).toUpperCase()}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {isEditingName ? (
+                          <input
+                            className="profile-name-input"
+                            value={nameInput}
+                            onChange={(e) => setNameInput(e.target.value)}
+                            onBlur={saveName}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveName();
+                              if (e.key === "Escape") setIsEditingName(false);
+                            }}
+                            autoFocus
+                          />
+                        ) : (
+                          <div className="profile-name">{workspaceName}</div>
+                        )}
+                        <div className="profile-sub">Private workspace</div>
+                      </div>
+                      <button
+                        className="profile-edit-btn"
+                        type="button"
+                        onClick={() => {
+                          setNameInput(workspaceName === "Unknown" ? "" : workspaceName);
+                          setIsEditingName(true);
+                        }}
+                        aria-label="Edit workspace name"
+                        title="Edit name"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                          <path d="M8.5 1.5L11.5 4.5L4 12H1V9L8.5 1.5Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                    </div>
         </div>
       </aside>
 
