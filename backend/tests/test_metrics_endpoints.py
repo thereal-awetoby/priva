@@ -66,6 +66,84 @@ def test_account_balance_reports_daily_change_percent(monkeypatch):
     assert second["futures_equity"] == 1100.0
 
 
+def test_account_balance_history_exposes_equity_curve_summary(monkeypatch):
+    main._balance_history.clear()
+    monkeypatch.setattr(main.cycle_logger, "fetch_balance_snapshots", lambda **kwargs: [])
+    monkeypatch.setattr(main.agent_loop, "recent_balance_snapshots", lambda: [])
+    main._balance_history.extend(
+        [
+            {"timestamp": "2026-09-20T00:00:00Z", "balance": 1000.0, "equity": 1000.0},
+            {"timestamp": "2026-09-20T00:10:00Z", "balance": 1100.0, "equity": 1100.0},
+        ]
+    )
+
+    result = main.account_balance_history()
+
+    assert result["status"] == "ok"
+    assert result["starting_balance"] == 1000.0
+    assert result["latest_balance"] == 1100.0
+    assert result["point_count"] == 2
+    assert result["points"][0]["balance"] == 1000.0
+
+
+def test_trade_metrics_detect_real_drawdown_from_closed_pnl(monkeypatch):
+    cycles = [
+        {
+            "created_at": "2026-09-10T00:00:00Z",
+            "status": "submitted",
+            "symbol": "AAPLUSDT",
+            "decision": {"action": "buy"},
+            "ticker": {"last_price": 100.0},
+            "risk_check": {"risk": {"notional": 1000.0}},
+        },
+        {
+            "created_at": "2026-09-10T00:01:00Z",
+            "status": "closed",
+            "symbol": "AAPLUSDT",
+            "decision": {"action": "close", "closed_position_side": "buy"},
+            "ticker": {"last_price": 110.0},
+            "order_result": {"closed_position_side": "buy", "qty": 10.0, "entry_price": 110.0},
+        },
+        {
+            "created_at": "2026-09-10T00:02:00Z",
+            "status": "submitted",
+            "symbol": "TSLAUSDT",
+            "decision": {"action": "buy"},
+            "ticker": {"last_price": 100.0},
+            "risk_check": {"risk": {"notional": 1000.0}},
+        },
+        {
+            "created_at": "2026-09-10T00:03:00Z",
+            "status": "closed",
+            "symbol": "TSLAUSDT",
+            "decision": {"action": "close", "closed_position_side": "buy"},
+            "ticker": {"last_price": 90.0},
+            "order_result": {"closed_position_side": "buy", "qty": 10.0, "entry_price": 90.0},
+        },
+        {
+            "created_at": "2026-09-10T00:04:00Z",
+            "status": "submitted",
+            "symbol": "NVDAUSDT",
+            "decision": {"action": "buy"},
+            "ticker": {"last_price": 100.0},
+            "risk_check": {"risk": {"notional": 1000.0}},
+        },
+        {
+            "created_at": "2026-09-10T00:05:00Z",
+            "status": "closed",
+            "symbol": "NVDAUSDT",
+            "decision": {"action": "close", "closed_position_side": "buy"},
+            "ticker": {"last_price": 105.0},
+            "order_result": {"closed_position_side": "buy", "qty": 10.0, "entry_price": 105.0},
+        },
+    ]
+
+    metrics = main._trade_metrics(cycles)
+
+    assert metrics["win_rate_pct"] == 66.67
+    assert metrics["max_drawdown_pct"] == 100.0
+
+
 def test_risk_usage_reflects_live_position(monkeypatch):
     monkeypatch.setattr(main, "paper_execution_client", ActiveExecutionClient())
     monkeypatch.setattr(main.cycle_logger, "fetch_cycles", lambda **kwargs: [])

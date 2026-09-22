@@ -310,7 +310,28 @@ def account_balance() -> dict[str, Any]:
 def account_balance_history() -> dict[str, Any]:
     persisted = cycle_logger.fetch_balance_snapshots()
     points = persisted or agent_loop.recent_balance_snapshots() or list(_balance_history)
-    return {"status": "ok", "points": points}
+    if not points:
+        return {"status": "ok", "points": [], "starting_balance": 0.0, "latest_balance": 0.0, "point_count": 0}
+
+    numeric_points = []
+    for point in points:
+        numeric_points.append(
+            {
+                "timestamp": point.get("timestamp") or point.get("created_at"),
+                "balance": float(point.get("balance", point.get("equity", 0)) or 0),
+                "equity": float(point.get("equity", point.get("balance", 0)) or 0),
+            }
+        )
+
+    latest_balance = float(numeric_points[-1].get("balance", numeric_points[-1].get("equity", 0)) or 0.0)
+    starting_balance = float(numeric_points[0].get("balance", numeric_points[0].get("equity", 0)) or 0.0)
+    return {
+        "status": "ok",
+        "points": numeric_points,
+        "starting_balance": starting_balance,
+        "latest_balance": latest_balance,
+        "point_count": len(numeric_points),
+    }
 
 
 @app.get("/user/agent-loop")
@@ -1132,8 +1153,24 @@ def _trade_metrics(cycles: list[dict[str, Any]]) -> dict[str, float]:
         return {"win_rate_pct": 0.0, "max_drawdown_pct": 0.0}
 
     win_rate_pct = round((sum(1 for pnl in closed_pnls if pnl > 0) / len(closed_pnls)) * 100, 2)
+
+    if len(closed_pnls) < 3:
+        return {"win_rate_pct": win_rate_pct, "max_drawdown_pct": 0.0}
+
+    cumulative_pnl = 0.0
+    peak_pnl = 0.0
     max_drawdown_pct = 0.0
-    return {"win_rate_pct": win_rate_pct, "max_drawdown_pct": max_drawdown_pct}
+
+    for pnl in closed_pnls:
+        cumulative_pnl += pnl
+        if cumulative_pnl > peak_pnl:
+            peak_pnl = cumulative_pnl
+            continue
+        if peak_pnl > 0:
+            drawdown_pct = ((peak_pnl - cumulative_pnl) / peak_pnl) * 100
+            max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
+
+    return {"win_rate_pct": win_rate_pct, "max_drawdown_pct": round(max_drawdown_pct, 2)}
 
 
 @app.post("/intent/evaluate")

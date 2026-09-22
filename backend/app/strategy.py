@@ -419,6 +419,11 @@ def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_c
         if std_return > 0:
             sharpe_ratio = (mean_return / std_return) * sqrt(len(period_returns))
 
+    deflated_sharpe_ratio = 0.0
+    if period_returns:
+        adjustment = sqrt(len(period_returns) / 2.0)
+        deflated_sharpe_ratio = sharpe_ratio - (adjustment * 0.35)
+
     return {
         "strategy_id": strategy_id,
         "status": "completed",
@@ -427,6 +432,7 @@ def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_c
             "return": round(total_return, 4),
             "win_rate": round(win_rate, 4),
             "sharpe_ratio": round(sharpe_ratio, 4),
+            "deflated_sharpe_ratio": round(deflated_sharpe_ratio, 4),
             "max_drawdown": round(max_drawdown, 4),
         },
         "trade_count": len(closed_trades),

@@ -13,4 +13,4 @@ def test_backtest_strategy_returns_shared_metrics_response():
     assert result["strategy_id"] == "mean_reversion"
     assert result["status"] == "completed"
     assert result["candles_analyzed"] == 3
-    assert set(result["metrics"]).issuperset({"return", "win_rate", "sharpe_ratio", "max_drawdown"})
+    assert set(result["metrics"]).issuperset({"return", "win_rate", "sharpe_ratio", "max_drawdown", "deflated_sharpe_ratio"})
