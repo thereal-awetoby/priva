@@ -54,6 +54,7 @@ alter table public.user_agent_settings
 
 alter table public.agent_cycles
   add column if not exists mode text not null default 'autonomous',
+  add column if not exists market text not null default 'futures',
   add column if not exists user_id uuid references auth.users(id) on delete cascade;
 
 alter table public.user_bitget_credentials enable row level security;
