@@ -128,7 +128,7 @@ export default function ControlCenterPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [killSwitchLoading, setKillSwitchLoading] = useState(false);
-  const [activityMode, setActivityMode] = useState<"autonomous" | "strategy">("autonomous");
+  const [activityMode, setActivityMode] = useState<"autonomous" | "strategy" | "imported">("autonomous");
 
     const loadData = () => {
     Promise.all([
@@ -341,10 +341,16 @@ export default function ControlCenterPanel() {
             >
               Strategy
             </button>
+            <button
+              className={activityMode === "imported" ? "active" : ""}
+              onClick={() => setActivityMode("imported")}
+            >
+              Imported
+            </button>
           </div>
         </div>
         <div className="panel-title panel-title-center">
-          Recent activity — <span>{activityMode === "autonomous" ? "Autonomous" : "Strategy"}</span>
+          Recent activity — <span>{activityMode === "autonomous" ? "Autonomous" : activityMode === "strategy" ? "Strategy" : "Imported history"}</span>
         </div>
         <div className="activity-log">
           {filteredActivity.length === 0 ? (
