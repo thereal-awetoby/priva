@@ -396,7 +396,7 @@ def update_user_agent_settings(payload: UserAgentSettingsRequest, user: Authenti
 
 
 @app.post("/connection/bitget")
-def connect_bitget(payload: BitgetConnectionRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+async def connect_bitget(payload: BitgetConnectionRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     values = (payload.api_key.strip(), payload.api_secret.strip(), payload.passphrase.strip())
     if not all(values):
         return {"status": "rejected", "message": "All Bitget credential fields are required"}
