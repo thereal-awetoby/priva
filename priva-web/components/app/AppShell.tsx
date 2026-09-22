@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { apiGet } from "@/lib/api";
 import Sidebar from "@/components/app/Sidebar";
 import ControlCenterPanel from "@/components/app/panels/ControlCenterPanel";
 import StrategyLabPanel from "@/components/app/panels/StrategyLabPanel";
@@ -20,12 +21,24 @@ const crumbLabels: Record<string, string> = {
 export default function AppShell() {
   const [activeTab, setActiveTab] = useState("control");
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [authDebug, setAuthDebug] = useState<{ userId?: string; email?: string; running?: boolean; workerError?: string; error?: string } | null>(null);
   const router = useRouter();
 
   useEffect(() => {
     if (!hasSeenOnboarding()) {
       setShowOnboarding(true);
     }
+
+    Promise.all([
+      apiGet<{ user_id?: string; email?: string }>("/auth/session"),
+      apiGet<{ running?: boolean; last_error?: string | null }>("/user/agent-loop"),
+    ])
+      .then(([session, worker]) => {
+        setAuthDebug({ userId: session.user_id, email: session.email, running: worker.running, workerError: worker.last_error ?? undefined });
+      })
+      .catch((error) => {
+        setAuthDebug({ error: error instanceof Error ? error.message : "Unable to verify session" });
+      });
   }, []);
 
   return (
@@ -39,6 +52,20 @@ export default function AppShell() {
           </div>
           <div className="topbar-right">
             <div className="env-tag">Paper environment</div>
+            <div className="auth-debug" title="Temporary authentication diagnostics">
+              {authDebug?.error ? (
+                <span className="auth-debug-error">Auth error</span>
+              ) : authDebug ? (
+                <>
+                  <span>{authDebug.email ?? authDebug.userId}</span>
+                  <span className={authDebug.workerError ? "auth-debug-error" : authDebug.running ? "auth-debug-live" : "auth-debug-stopped"}>
+                    {authDebug.workerError ? "worker error" : `worker ${authDebug.running ? "running" : "stopped"}`}
+                  </span>
+                </>
+              ) : (
+                <span>Checking auth...</span>
+              )}
+            </div>
             <button
               className="sign-out-btn"
               type="button"

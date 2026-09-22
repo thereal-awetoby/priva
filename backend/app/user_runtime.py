@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +12,8 @@ from app.paper_execution import BitgetPaperExecutionClient
 from app.risk_engine import RiskEngine
 from app.supabase_logging import SupabaseCycleLogger
 from app.strategy import configure_builtin_strategy, get_active_strategy_id, register_custom_strategy
+
+logger = logging.getLogger("priva.user_runtime")
 
 
 @dataclass
@@ -28,6 +31,7 @@ class UserRuntime:
     close_on_signal_violation: bool
     task: asyncio.Task | None = None
     stop_event: asyncio.Event | None = None
+    last_error: str | None = None
 
 
 class UserRuntimeRegistry:
@@ -98,34 +102,41 @@ class UserRuntimeRegistry:
         interval = int(os.getenv("AGENT_LOOP_INTERVAL_SECONDS", "300"))
         market_service = BitgetMarketDataService()
         while runtime.stop_event and not runtime.stop_event.is_set():
-            if runtime.strategy_id == "pairs_trading" and len(runtime.symbols) >= 2:
-                await agent_loop.run_pair_cycle(
-                    runtime.symbols[0],
-                    runtime.symbols[1],
-                    market_service=market_service,
-                    risk_engine=runtime.risk_engine,
-                    execution_client=runtime.execution_client,
-                    cycle_logger=runtime.cycle_logger,
-                    market_type=runtime.market_type,
-                    stop_loss_pct=runtime.stop_loss_pct,
-                )
-            else:
-                for symbol in runtime.symbols:
-                    if runtime.stop_event.is_set():
-                        break
-                    await agent_loop.run_cycle(
-                        symbol,
+            try:
+                if runtime.strategy_id == "pairs_trading" and len(runtime.symbols) >= 2:
+                    await agent_loop.run_pair_cycle(
+                        runtime.symbols[0],
+                        runtime.symbols[1],
                         market_service=market_service,
                         risk_engine=runtime.risk_engine,
                         execution_client=runtime.execution_client,
                         cycle_logger=runtime.cycle_logger,
-                        strategy_id=runtime.strategy_id,
-                        strategy_by_symbol=runtime.strategy_by_symbol,
                         market_type=runtime.market_type,
-                        take_profit_pct=runtime.take_profit_pct,
                         stop_loss_pct=runtime.stop_loss_pct,
-                        close_on_signal_violation=runtime.close_on_signal_violation,
                     )
+                else:
+                    for symbol in runtime.symbols:
+                        if runtime.stop_event.is_set():
+                            break
+                        await agent_loop.run_cycle(
+                            symbol,
+                            market_service=market_service,
+                            risk_engine=runtime.risk_engine,
+                            execution_client=runtime.execution_client,
+                            cycle_logger=runtime.cycle_logger,
+                            strategy_id=runtime.strategy_id,
+                            strategy_by_symbol=runtime.strategy_by_symbol,
+                            market_type=runtime.market_type,
+                            take_profit_pct=runtime.take_profit_pct,
+                            stop_loss_pct=runtime.stop_loss_pct,
+                            close_on_signal_violation=runtime.close_on_signal_violation,
+                        )
+                runtime.last_error = None
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                runtime.last_error = str(exc)
+                logger.exception("User runtime cycle failed for %s", runtime.user_id)
             try:
                 await asyncio.wait_for(runtime.stop_event.wait(), timeout=interval)
             except asyncio.TimeoutError:
@@ -148,6 +159,7 @@ class UserRuntimeRegistry:
             "running": bool(runtime and runtime.task and not runtime.task.done()),
             "user_id": user_id,
             "symbols": runtime.symbols if runtime else [],
+            "last_error": runtime.last_error if runtime else None,
             "strategy_id": runtime.strategy_id if runtime else None,
             "strategy_by_symbol": runtime.strategy_by_symbol if runtime else {},
             "market": runtime.market_type if runtime else None,

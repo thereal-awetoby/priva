@@ -140,6 +140,20 @@
 }
 .env-tag::before{ content:''; width: 5px; height: 5px; background: var(--up); }
 
+.auth-debug{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--rule);
+  color: var(--ink-faint);
+  padding: 6px 9px;
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 10px;
+  max-width: 280px;
+}
+.auth-debug-live{ color: var(--up); }
+.auth-debug-stopped,.auth-debug-error{ color: var(--down); }
+
 .icon-btn{
   width: 32px; height: 32px;
   border: 1px solid var(--rule);
