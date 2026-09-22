@@ -31,10 +31,10 @@ export default function AppShell() {
 
     Promise.all([
       apiGet<{ user_id?: string; email?: string }>("/auth/session"),
-      apiGet<{ running?: boolean; last_error?: string | null }>("/user/agent-loop"),
+      apiGet<{ running?: boolean; last_error?: string | null; last_persistence_status?: string | null; supabase_logging_configured?: boolean }>("/user/agent-loop"),
     ])
       .then(([session, worker]) => {
-        setAuthDebug({ userId: session.user_id, email: session.email, running: worker.running, workerError: worker.last_error ?? undefined });
+        setAuthDebug({ userId: session.user_id, email: session.email, running: worker.running, workerError: worker.last_error ?? worker.last_persistence_status ?? (worker.supabase_logging_configured === false ? "Supabase logging not configured" : undefined) });
       })
       .catch((error) => {
         setAuthDebug({ error: error instanceof Error ? error.message : "Unable to verify session" });

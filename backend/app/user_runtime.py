@@ -32,6 +32,8 @@ class UserRuntime:
     task: asyncio.Task | None = None
     stop_event: asyncio.Event | None = None
     last_error: str | None = None
+    last_cycle_status: str | None = None
+    last_persistence_status: str | None = None
 
 
 class UserRuntimeRegistry:
@@ -104,7 +106,7 @@ class UserRuntimeRegistry:
         while runtime.stop_event and not runtime.stop_event.is_set():
             try:
                 if runtime.strategy_id == "pairs_trading" and len(runtime.symbols) >= 2:
-                    await agent_loop.run_pair_cycle(
+                    result = await agent_loop.run_pair_cycle(
                         runtime.symbols[0],
                         runtime.symbols[1],
                         market_service=market_service,
@@ -115,10 +117,11 @@ class UserRuntimeRegistry:
                         stop_loss_pct=runtime.stop_loss_pct,
                     )
                 else:
+                    result = None
                     for symbol in runtime.symbols:
                         if runtime.stop_event.is_set():
                             break
-                        await agent_loop.run_cycle(
+                        result = await agent_loop.run_cycle(
                             symbol,
                             market_service=market_service,
                             risk_engine=runtime.risk_engine,
@@ -132,6 +135,11 @@ class UserRuntimeRegistry:
                             close_on_signal_violation=runtime.close_on_signal_violation,
                         )
                 runtime.last_error = None
+                if isinstance(result, dict):
+                    runtime.last_cycle_status = str(result.get("status"))
+                    persistence = result.get("persistence")
+                    if isinstance(persistence, dict):
+                        runtime.last_persistence_status = str(persistence.get("status"))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -160,6 +168,9 @@ class UserRuntimeRegistry:
             "user_id": user_id,
             "symbols": runtime.symbols if runtime else [],
             "last_error": runtime.last_error if runtime else None,
+            "last_cycle_status": runtime.last_cycle_status if runtime else None,
+            "last_persistence_status": runtime.last_persistence_status if runtime else None,
+            "supabase_logging_configured": bool(runtime and runtime.cycle_logger.configured),
             "strategy_id": runtime.strategy_id if runtime else None,
             "strategy_by_symbol": runtime.strategy_by_symbol if runtime else {},
             "market": runtime.market_type if runtime else None,
