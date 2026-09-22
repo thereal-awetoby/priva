@@ -223,6 +223,26 @@ def test_activity_log_includes_cycle_mode(monkeypatch):
     assert result["entries"][0]["opened_at"] is None
 
 
+def test_activity_log_labels_closed_cycle_as_close(monkeypatch):
+    monkeypatch.setattr(
+        main.cycle_logger,
+        "fetch_cycles",
+        lambda **kwargs: [
+            {
+                "created_at": "2026-09-22T19:55:02Z",
+                "symbol": "AAPLUSDT",
+                "status": "closed",
+                "decision": {"action": "sell"},
+                "order_result": {"order_id": "close-1"},
+            }
+        ],
+    )
+
+    result = main.activity_log()
+
+    assert result["entries"][0]["action"] == "close"
+
+
 def test_agent_settings_can_switch_autonomous_market():
     original_market = main.agent_loop.MARKET_TYPE
     try:

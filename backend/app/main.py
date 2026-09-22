@@ -894,7 +894,7 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
                     "id": ((cycle.get("order_result") or cycle.get("order") or {}).get("order_id") or f"cycle_{cycle.get('created_at', '')}"),
                     "type": "trade" if (cycle.get("order_result") or cycle.get("order")) else "agent_cycle",
                     "symbol": cycle.get("symbol"),
-                    "action": (cycle.get("decision") or {}).get("action"),
+                    "action": "close" if cycle.get("status") == "closed" else (cycle.get("decision") or {}).get("action"),
                     "status": cycle.get("status"),
                     "risk_check": cycle.get("risk_check"),
                     "intent_hash": (cycle.get("intent") or {}).get("intent_hash"),
