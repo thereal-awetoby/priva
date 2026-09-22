@@ -37,6 +37,15 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
       });
   }, [typeFilter]);
 
+  const selected = strategies.find((s) => s.id === selectedId);
+  const isPairs = selected?.type === "pairs_trading";
+
+  useEffect(() => {
+    if (selected?.type === "pairs_trading") {
+      setSymbols(SUPPORTED_SYMBOLS);
+    }
+  }, [selectedId]);
+
   const toggleSymbol = (s: string) => {
     setSymbols((prev) =>
       prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
@@ -79,8 +88,6 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
       </div>
     );
   }
-
-  const selected = strategies.find((s) => s.id === selectedId);
 
   return (
     <div className="lab-grid">
@@ -127,12 +134,16 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
                     key={s}
                     type="button"
                     className={`symbol-chip ${symbols.includes(s) ? "active" : ""}`}
-                    onClick={() => toggleSymbol(s)}
+                    onClick={() => !isPairs && toggleSymbol(s)}
+                    disabled={isPairs}
                   >
                     {s.replace("USDT", "")}
                   </button>
                 ))}
               </div>
+              {isPairs && (
+                <div className="form-hint">Pairs trading requires both symbols.</div>
+              )}
             </div>
 
             <button

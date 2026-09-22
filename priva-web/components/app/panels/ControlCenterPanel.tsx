@@ -8,32 +8,108 @@ type Position = Record<string, any>;
 type ActivityEntry = Record<string, any>;
 type EquityPoint = { timestamp?: string; created_at?: string; balance?: number; equity?: number };
 
+function bucketByHour(points: EquityPoint[]): EquityPoint[] {
+  const buckets = new Map<string, EquityPoint>();
+
+  for (const point of points) {
+    const iso = point.timestamp ?? point.created_at;
+    if (!iso) continue;
+    const date = new Date(iso);
+    // Key = year-month-day-hour, so every point within the same hour collapses together
+    const hourKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`;
+
+    const existing = buckets.get(hourKey);
+    // Keep the LATEST snapshot within that hour (closest to "end of the hour")
+    if (!existing || new Date(iso).getTime() > new Date(existing.timestamp ?? existing.created_at ?? 0).getTime()) {
+      buckets.set(hourKey, point);
+    }
+  }
+
+  return Array.from(buckets.values()).sort((a, b) => {
+    const aTime = new Date(a.timestamp ?? a.created_at ?? 0).getTime();
+    const bTime = new Date(b.timestamp ?? b.created_at ?? 0).getTime();
+    return aTime - bTime;
+  });
+}
+
 function EquityCurve({ points }: { points: EquityPoint[] }) {
-  const values = points.map((point) => Number(point.balance ?? point.equity ?? 0));
-  const width = 720;
-  const height = 170;
-  const padding = 12;
+  const pointWidth = 40; // pixels per data point — controls how "zoomed in" the chart is
+  const width = Math.max(720, points.length * pointWidth);
+  const height = 200;
+  const padding = { top: 12, right: 12, bottom: 28, left: 60 };
+  const plotW = width - padding.left - padding.right;
+  const plotH = height - padding.top - padding.bottom;
+
+  const values = points.map((p) => Number(p.balance ?? p.equity ?? 0));
+  const times = points.map((p) => p.timestamp ?? p.created_at ?? "");
+
   const min = values.length ? Math.min(...values) : 0;
   const max = values.length ? Math.max(...values) : 1;
   const range = max - min || 1;
+
+  const xFor = (i: number) =>
+    padding.left + (i / Math.max(values.length - 1, 1)) * plotW;
+  const yFor = (v: number) =>
+    padding.top + plotH - ((v - min) / range) * plotH;
+
   const path = values
-    .map((value, index) => {
-      const x = padding + (index / Math.max(values.length - 1, 1)) * (width - padding * 2);
-      const y = height - padding - ((value - min) / range) * (height - padding * 2);
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
+    .map((v, i) => `${i === 0 ? "M" : "L"} ${xFor(i).toFixed(1)} ${yFor(v).toFixed(1)}`)
     .join(" ");
+
+  const yTicks = [min, min + range / 2, max];
+  const tickIndexes =
+    values.length <= 1
+      ? []
+      : [0, Math.floor((values.length - 1) / 2), values.length - 1];
+
+  const formatTime = (iso: string) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
 
   return (
     <div className="equity-panel">
       <div className="panel-title">Equity curve</div>
       {values.length < 2 ? (
         <p className="panel-lead equity-empty">Waiting for the next agent cycle.</p>
-      ) : (
-        <svg className="equity-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Balance over time">
-          <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} className="equity-axis" />
-          <path d={path} className="equity-line" />
+            ) : (
+        <div className="equity-scroll">
+        <svg
+          className="equity-chart"
+          viewBox={`0 0 ${width} ${height}`}
+          style={{ width: `${width}px`, height: `${height}px` }}
+          role="img"
+          aria-label="Balance over time"
+        >
+          {yTicks.map((v, i) => (
+            <g key={i}>
+              <line
+                x1={padding.left}
+                y1={yFor(v)}
+                x2={width - padding.right}
+                y2={yFor(v)}
+                className="equity-gridline"
+              />
+              <text x={padding.left - 8} y={yFor(v)} className="equity-axis-label" textAnchor="end" dominantBaseline="middle">
+                ${v.toFixed(0)}
+              </text>
+            </g>
+          ))}
+          {tickIndexes.map((i) => (
+            <text
+              key={i}
+              x={xFor(i)}
+              y={height - padding.bottom + 18}
+              className="equity-axis-label"
+              textAnchor="middle"
+            >
+              {formatTime(times[i])}
+            </text>
+          ))}
+                    <path d={path} className="equity-line" />
         </svg>
+        </div>
       )}
     </div>
   );
@@ -52,7 +128,7 @@ export default function ControlCenterPanel() {
   const [killSwitchLoading, setKillSwitchLoading] = useState(false);
   const [activityMode, setActivityMode] = useState<"autonomous" | "strategy">("autonomous");
 
-  useEffect(() => {
+    const loadData = () => {
     Promise.all([
       apiGet<any>("/positions"),
       apiGet<any>("/pnl"),
@@ -76,6 +152,12 @@ export default function ControlCenterPanel() {
         setError(err.message);
         setLoading(false);
       });
+  };
+
+  useEffect(() => {
+    loadData();
+    const interval = setInterval(loadData, 6 * 60 * 60 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleKillSwitch = async () => {
@@ -173,10 +255,21 @@ export default function ControlCenterPanel() {
             {(balance?.daily_change ?? 0) >= 0 ? "+" : ""}${Number(balance?.daily_change ?? 0).toFixed(2)} today
           </div>
         </div>
-        <EquityCurve points={equityHistory} />
-      </div>
+        <EquityCurve points={bucketByHour(equityHistory)} />
+              </div>
 
-      <div className="risk-row">
+              <div className="perf-row" style={{ gridTemplateColumns: "repeat(2, 1fr)", marginBottom: 24 }}>
+                <div className="perf-cell">
+                  <div className="perf-label">Futures equity</div>
+                  <div className="perf-value">${Number(balance?.futures_equity ?? 0).toFixed(2)}</div>
+                </div>
+                <div className="perf-cell">
+                  <div className="perf-label">Spot USDT</div>
+                  <div className="perf-value">${Number(balance?.spot_usdt ?? 0).toFixed(2)}</div>
+                </div>
+              </div>
+
+              <div className="risk-row">
         <div className="risk-label-row">
           <span>Daily loss usage</span>
           <span>{dailyLossUsage}% of daily limit</span>
