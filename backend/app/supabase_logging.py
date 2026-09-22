@@ -43,6 +43,7 @@ class SupabaseCycleLogger:
             record["created_at"] = cycle["created_at"]
         if self.user_id:
             record["user_id"] = self.user_id
+        response = None
         try:
             response = self.session.post(
                 f"{self.url}/rest/v1/agent_cycles",
@@ -58,8 +59,10 @@ class SupabaseCycleLogger:
             response.raise_for_status()
             return {"status": "logged"}
         except requests.RequestException as exc:
-            logger.warning("Supabase cycle logging failed: %s", exc)
-            return {"status": "error", "message": str(exc)}
+            detail = str(getattr(response, "text", "") or "").strip()
+            message = f"{exc}: {detail}" if detail else str(exc)
+            logger.warning("Supabase cycle logging failed: %s", message)
+            return {"status": "error", "message": message}
 
     def log_balance_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         if not self.configured:
