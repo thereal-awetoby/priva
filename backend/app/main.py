@@ -223,6 +223,15 @@ class UserAgentSettingsRequest(BaseModel):
     allowed_symbols: list[str] | None = None
 
 
+class UserMarketSettingsRequest(BaseModel):
+    market: Literal["spot", "futures", "autonomous"]
+
+
+class UserExecutionSettingsRequest(BaseModel):
+    markets: list[Literal["spot", "futures"]]
+    modes: list[Literal["autonomous", "strategy"]]
+
+
 class BitgetConnectionRequest(BaseModel):
     api_key: str
     api_secret: str
@@ -402,6 +411,39 @@ def user_agent_settings(user: AuthenticatedUser = Depends(current_user)) -> dict
     return {"status": "ok", **SupabaseCycleLogger(user_id=user.id).fetch_user_settings(user.id)}
 
 
+@app.post("/user/market-settings")
+def update_user_market_settings(payload: UserMarketSettingsRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    logger = SupabaseCycleLogger(user_id=user.id)
+    persistence = logger.save_user_settings(user.id, {"market": payload.market})
+    if logger.configured and persistence["status"] != "saved":
+        return {"status": "rejected", "message": "market setting could not be persisted"}
+    runtime = user_runtime_registry.get(user.id)
+    if runtime:
+        selected_market = payload.market if payload.market in {"spot", "futures"} else "futures"
+        runtime.apply_profiles([
+            f"{mode}:{selected_market}"
+            for mode in {"strategy" if runtime.strategy_id else "autonomous"}
+        ])
+    return {"status": "updated", "market": payload.market}
+
+
+@app.post("/user/execution-settings")
+def update_user_execution_settings(payload: UserExecutionSettingsRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    markets = list(dict.fromkeys(payload.markets))
+    modes = list(dict.fromkeys(payload.modes))
+    if not markets or not modes:
+        return {"status": "rejected", "message": "Select at least one market and one mode"}
+    profiles = [f"{mode}:{market}" for mode in modes for market in markets]
+    logger = SupabaseCycleLogger(user_id=user.id)
+    persistence = logger.save_user_settings(user.id, {"execution_profiles": profiles})
+    if logger.configured and persistence["status"] != "saved":
+        return {"status": "rejected", "message": "execution settings could not be persisted"}
+    runtime = user_runtime_registry.get(user.id)
+    if runtime:
+        runtime.apply_profiles(profiles)
+    return {"status": "updated", "execution_profiles": profiles}
+
+
 @app.post("/user/agent-settings")
 def update_user_agent_settings(payload: UserAgentSettingsRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     settings = payload.model_dump()
@@ -414,20 +456,20 @@ def update_user_agent_settings(payload: UserAgentSettingsRequest, user: Authenti
         return {"status": "rejected", "message": "user settings could not be persisted"}
     runtime = user_runtime_registry.get(user.id)
     if runtime:
-        runtime.market_type = settings["market"]
         runtime.symbols = settings["symbols"]
         runtime.strategy_id = settings["strategy_id"] or runtime.strategy_id
         runtime.strategy_by_symbol = settings["strategy_by_symbol"] or {}
         runtime.take_profit_pct = settings["take_profit_pct"]
         runtime.stop_loss_pct = settings["stop_loss_pct"]
         runtime.close_on_signal_violation = settings["close_on_signal_violation"]
-        runtime.risk_engine.update_settings({
+        runtime.risk_settings = {
             "max_position_size": settings["max_position_size"],
             "max_daily_loss": settings["max_daily_loss"],
             "max_leverage": settings["max_leverage"],
             "enabled": settings["risk_enabled"],
             "allowed_symbols": settings["allowed_symbols"] or [],
-        })
+        }
+        runtime.apply_profiles(settings.get("execution_profiles") or runtime.profiles or [])
     return {"status": "updated", **settings, "persistence": persistence["status"]}
 
 
@@ -1078,6 +1120,7 @@ def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | Non
                 runtime.symbols = symbols
             if normalized_map:
                 runtime.strategy_by_symbol = normalized_map
+            runtime.apply_profiles(runtime.profiles or [])
         return {
             "strategy_id": strategy_id,
             "status": "activated",

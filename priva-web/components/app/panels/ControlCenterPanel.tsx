@@ -137,6 +137,10 @@ export default function ControlCenterPanel() {
   const [error, setError] = useState<string | null>(null);
   const [killSwitchLoading, setKillSwitchLoading] = useState(false);
   const [activityMode, setActivityMode] = useState<"autonomous" | "strategy">("autonomous");
+  const [markets, setMarkets] = useState<Array<"spot" | "futures">>(["futures"]);
+  const [modes, setModes] = useState<Array<"autonomous" | "strategy">>(["autonomous"]);
+  const [marketSaving, setMarketSaving] = useState(false);
+  const [marketError, setMarketError] = useState<string | null>(null);
 
     const loadData = () => {
     Promise.all([
@@ -147,8 +151,9 @@ export default function ControlCenterPanel() {
       apiGet<any>("/kill-switch"),
       apiGet<any>("/account/balance"),
       apiGet<any>("/account/balance-history"),
+      apiGet<any>("/user/agent-settings"),
     ])
-      .then(([positionsData, pnlData, riskData, activityData, killData, balanceData, historyData]) => {
+      .then(([positionsData, pnlData, riskData, activityData, killData, balanceData, historyData, settingsData]) => {
         setPositions(positionsData.positions ?? []);
         setPnl(pnlData);
         setRiskUsage(riskData);
@@ -156,6 +161,18 @@ export default function ControlCenterPanel() {
         setKillSwitchEnabled(killData.enabled ?? false);
         setBalance(balanceData);
         setEquityHistory(historyData.points ?? []);
+        if (Array.isArray(settingsData.execution_profiles) && settingsData.execution_profiles.length) {
+          const nextMarkets = settingsData.execution_profiles
+            .map((profile: string) => profile.split(":")[1])
+            .filter((value: string): value is "spot" | "futures" => value === "spot" || value === "futures");
+          const nextModes = settingsData.execution_profiles
+            .map((profile: string) => profile.split(":")[0])
+            .filter((value: string): value is "autonomous" | "strategy" => value === "autonomous" || value === "strategy");
+          setMarkets(Array.from(new Set(nextMarkets)));
+          setModes(Array.from(new Set(nextModes)));
+        } else if (settingsData.market === "spot" || settingsData.market === "futures") {
+          setMarkets([settingsData.market]);
+        }
         setLoading(false);
       })
       .catch((err) => {
@@ -183,6 +200,28 @@ export default function ControlCenterPanel() {
     }
   };
 
+  const handleExecutionChange = async (
+    nextMarkets: Array<"spot" | "futures">,
+    nextModes: Array<"autonomous" | "strategy">,
+  ) => {
+    if (!nextMarkets.length || !nextModes.length) return;
+    const previousMarkets = markets;
+    const previousModes = modes;
+    setMarkets(nextMarkets);
+    setModes(nextModes);
+    setMarketSaving(true);
+    setMarketError(null);
+    try {
+      await apiPost("/user/execution-settings", { markets: nextMarkets, modes: nextModes });
+    } catch (err: any) {
+      setMarkets(previousMarkets);
+      setModes(previousModes);
+      setMarketError(err.message);
+    } finally {
+      setMarketSaving(false);
+    }
+  };
+
   if (loading) {
     return <p className="panel-lead">Loading control center…</p>;
   }
@@ -203,19 +242,60 @@ export default function ControlCenterPanel() {
   return (
     <div>
       <div className="control-topline">
-        <div
-          className="status-pill"
-          style={
-            killSwitchEnabled
-              ? { borderColor: "var(--down)", color: "var(--down)" }
-              : {}
-          }
-        >
-          <span
-            className="status-dot"
-            style={killSwitchEnabled ? { background: "var(--down)" } : {}}
-          />
-          {killSwitchEnabled ? "Stopped" : "Running"}
+        <div className="control-status-group">
+          <div
+            className="status-pill"
+            style={
+              killSwitchEnabled
+                ? { borderColor: "var(--down)", color: "var(--down)" }
+                : {}
+            }
+          >
+            <span
+              className="status-dot"
+              style={killSwitchEnabled ? { background: "var(--down)" } : {}}
+            />
+            {killSwitchEnabled ? "Stopped" : "Running"}
+          </div>
+          <div className="market-control">
+            <span className="market-control-label">Markets</span>
+            <div className="mode-switch" aria-label="Trading market">
+              {(["spot", "futures"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  className={markets.includes(option) ? "active" : ""}
+                  onClick={() => handleExecutionChange(
+                    markets.includes(option) ? markets.filter((item) => item !== option) : [...markets, option],
+                    modes,
+                  )}
+                  disabled={marketSaving || (markets.length === 1 && markets.includes(option))}
+                >
+                  {option === "spot" ? "Spot" : "Futures"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="market-control">
+            <span className="market-control-label">Modes</span>
+            <div className="mode-switch" aria-label="Execution mode">
+              {(["autonomous", "strategy"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  className={modes.includes(option) ? "active" : ""}
+                  onClick={() => handleExecutionChange(
+                    markets,
+                    modes.includes(option) ? modes.filter((item) => item !== option) : [...modes, option],
+                  )}
+                  disabled={marketSaving || (modes.length === 1 && modes.includes(option))}
+                >
+                  {option === "autonomous" ? "Autonomous" : "Strategy"}
+                </button>
+              ))}
+            </div>
+            {marketError ? <span className="market-control-error">{marketError}</span> : null}
+          </div>
         </div>
         <div className="app-actions" style={{ marginTop: 0 }}>
           <button

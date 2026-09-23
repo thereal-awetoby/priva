@@ -191,6 +191,11 @@
 /* ---------- Control center ---------- */
 
 .control-topline{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 26px; }
+.control-status-group{ display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+.market-control{ display:flex; align-items:center; gap:9px; }
+.market-control-label{ font-family: var(--font-ibm-plex-mono), monospace; font-size:11px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.04em; }
+.market-control .mode-switch button:disabled{ cursor:default; }
+.market-control-error{ color:var(--down); font-family:var(--font-ibm-plex-mono), monospace; font-size:10px; }
 
 .status-pill{
   font-family: var(--font-ibm-plex-mono), monospace; font-size: 12px; padding: 5px 10px 5px 8px;

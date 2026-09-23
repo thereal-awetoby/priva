@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet } from "@/lib/api";
 import Sidebar from "@/components/app/Sidebar";
 import ControlCenterPanel from "@/components/app/panels/ControlCenterPanel";
 import StrategyLabPanel from "@/components/app/panels/StrategyLabPanel";
@@ -22,8 +22,6 @@ export default function AppShell() {
   const [activeTab, setActiveTab] = useState("control");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [authDebug, setAuthDebug] = useState<{ running?: boolean; workerError?: string; persistenceError?: string; error?: string } | null>(null);
-  const [backfillStatus, setBackfillStatus] = useState<string | null>(null);
-  const [resetStatus, setResetStatus] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -42,36 +40,6 @@ export default function AppShell() {
         setAuthDebug({ error: error instanceof Error ? error.message : "Unable to verify session" });
       });
   }, []);
-
-  const importTradeHistory = async () => {
-    setBackfillStatus("Importing...");
-    try {
-      const result = await apiPost<{ imported?: number; skipped?: number; message?: string }>(
-        "/user/backfill-trades",
-        {
-          start_time: Date.parse("2026-09-17T00:00:00Z"),
-          end_time: Date.now(),
-        },
-      );
-      setBackfillStatus(`${result.imported ?? 0} imported, ${result.skipped ?? 0} skipped`);
-    } catch (error) {
-      setBackfillStatus(error instanceof Error ? error.message : "Import failed");
-    }
-  };
-
-  const resetTradingSession = async () => {
-    if (!window.confirm("Close all open positions and start a new P&L session?")) return;
-    setResetStatus("Resetting...");
-    try {
-      const result = await apiPost<{ status?: string; message?: string; closed?: Array<{ symbol?: string }> }>(
-        "/user/reset-trading-session",
-        { confirm: true },
-      );
-      setResetStatus(result.status === "reset" ? `${result.closed?.length ?? 0} positions closed` : result.message ?? "Reset failed");
-    } catch (error) {
-      setResetStatus(error instanceof Error ? error.message : "Reset failed");
-    }
-  };
 
   return (
     <div className="app-root">
@@ -97,14 +65,6 @@ export default function AppShell() {
                 <span>Checking auth...</span>
               )}
             </div>
-            <button className="sign-out-btn" type="button" onClick={importTradeHistory}>
-              Import history
-            </button>
-            {backfillStatus ? <span className="backfill-status">{backfillStatus}</span> : null}
-            <button className="sign-out-btn" type="button" onClick={resetTradingSession}>
-              Reset session
-            </button>
-            {resetStatus ? <span className="backfill-status">{resetStatus}</span> : null}
             <button
               className="sign-out-btn"
               type="button"

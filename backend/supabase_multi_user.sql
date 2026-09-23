@@ -14,6 +14,7 @@ create table if not exists public.user_agent_settings (
   take_profit_pct numeric not null default 5,
   stop_loss_pct numeric not null default 2,
   close_on_signal_violation boolean not null default true,
+  execution_profiles jsonb not null default '["autonomous:futures"]'::jsonb,
   enabled boolean not null default false,
   updated_at timestamptz not null default now()
 );
@@ -52,6 +53,9 @@ alter table public.user_agent_settings
   add column if not exists risk_enabled boolean not null default true,
   add column if not exists allowed_symbols jsonb not null default '[]'::jsonb,
   add column if not exists pnl_reset_at timestamptz;
+
+alter table public.user_agent_settings
+  add column if not exists execution_profiles jsonb not null default '["autonomous:futures"]'::jsonb;
 
 alter table public.agent_cycles
   add column if not exists mode text not null default 'autonomous',
