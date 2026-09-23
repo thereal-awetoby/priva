@@ -140,26 +140,6 @@
 }
 .env-tag::before{ content:''; width: 5px; height: 5px; background: var(--up); }
 
-.auth-debug{
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--rule);
-  color: var(--ink-faint);
-  padding: 6px 9px;
-  font-family: var(--font-ibm-plex-mono), monospace;
-  font-size: 10px;
-  max-width: 280px;
-}
-.auth-debug-live{ color: var(--up); }
-.auth-debug-stopped,.auth-debug-error{ color: var(--down); }
-.backfill-status{
-  color: var(--ink-faint);
-  font-family: var(--font-ibm-plex-mono), monospace;
-  font-size: 10px;
-  white-space: nowrap;
-}
-
 .icon-btn{
   width: 32px; height: 32px;
   border: 1px solid var(--rule);
@@ -167,17 +147,6 @@
   background: none; color: var(--ink-dim); cursor: pointer;
 }
 .icon-btn:hover{ color: var(--ink); border-color: var(--ink-faint); }
-
-.sign-out-btn{
-  border: 1px solid var(--rule);
-  background: transparent;
-  color: var(--ink-dim);
-  padding: 7px 10px;
-  font-family: var(--font-ibm-plex-mono), monospace;
-  font-size: 11px;
-  cursor: pointer;
-}
-.sign-out-btn:hover{ color: var(--ink); border-color: var(--ink-faint); }
 
 .app-content{ flex: 1; overflow-y: auto; padding: 30px 34px 60px; }
 .app-content::-webkit-scrollbar{ width: 10px; }
@@ -191,11 +160,6 @@
 /* ---------- Control center ---------- */
 
 .control-topline{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 26px; }
-.control-status-group{ display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
-.market-control{ display:flex; align-items:center; gap:9px; }
-.market-control-label{ font-family: var(--font-ibm-plex-mono), monospace; font-size:11px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.04em; }
-.market-control .mode-switch button:disabled{ cursor:default; }
-.market-control-error{ color:var(--down); font-family:var(--font-ibm-plex-mono), monospace; font-size:10px; }
 
 .status-pill{
   font-family: var(--font-ibm-plex-mono), monospace; font-size: 12px; padding: 5px 10px 5px 8px;
@@ -217,16 +181,14 @@
 .balance-value{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 24px; margin: 12px 0 8px; }
 .balance-change{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 12px; }
 .equity-panel{ min-width: 0; }
-.equity-market-grid{ display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:1px; background:var(--rule); }
-.market-equity-card{ background:var(--bg-sunken); min-width:0; padding:18px 20px 10px; }
-.market-balance-value{ font-family:var(--font-ibm-plex-mono), monospace; font-size:20px; margin:8px 0 2px; }
 .equity-chart{ display:block; height:200px; overflow:visible; }
 .equity-axis{ stroke: var(--rule); stroke-width: 1; }
 .equity-line{ fill:none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .equity-empty{ margin: 36px 0 0; }
 .equity-scroll{
-  overflow: hidden;
-  max-height: 240px;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 220px;
 }
 .equity-scroll::-webkit-scrollbar{ height: 8px; width: 8px; }
 .equity-scroll::-webkit-scrollbar-thumb{ background: var(--rule); }
@@ -378,7 +340,6 @@ table.positions tr:last-child td{ border-bottom:none; }
   .app-content{ padding: 20px 18px 40px; overflow-y: visible; }
   .perf-row{ grid-template-columns: repeat(2,1fr); }
   .equity-layout{ grid-template-columns: 1fr; }
-  .equity-market-grid{ grid-template-columns:1fr; }
   .split{ grid-template-columns: 1fr; }
   .control-topline{ flex-wrap: wrap; gap: 14px; }
   .positions-section{ overflow-x: auto; }
