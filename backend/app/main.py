@@ -1100,12 +1100,17 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
 @app.get("/strategies")
 def strategies(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     restore_custom_strategies(user.id)
+    runtime = user_runtime_registry.get(user.id)
+    active_strategy_id = runtime.strategy_id if runtime else get_active_strategy_id()
+    if runtime is None and supabase_auth.required:
+        settings = SupabaseCycleLogger(user_id=user.id).fetch_user_settings(user.id)
+        active_strategy_id = settings.get("strategy_id") or active_strategy_id
     catalog = []
     for strategy_id, definition in list_strategy_catalog().items():
         catalog.append(
             {
                 **definition,
-                "status": "active" if get_active_strategy_id() == strategy_id else "inactive",
+                "status": "active" if active_strategy_id == strategy_id else "inactive",
             }
         )
     return {"strategies": catalog}

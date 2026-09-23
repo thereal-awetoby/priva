@@ -269,6 +269,32 @@ def test_strategy_activation_applies_builtin_risk_configuration(monkeypatch):
     activate_strategy("momentum_breakout")
 
 
+def test_strategy_catalog_uses_authenticated_runtime_active_strategy(monkeypatch):
+    custom_id = "custom_buy_open_0_0_1"
+    register_custom_strategy(
+        custom_id,
+        {
+            "kind": "custom",
+            "action": "buy",
+            "comparison": "open",
+            "threshold_pct": 0.1,
+        },
+        name="Charlie Bear",
+    )
+
+    class Runtime:
+        strategy_id = custom_id
+
+    monkeypatch.setattr(main, "restore_custom_strategies", lambda user_id: None)
+    monkeypatch.setattr(main.user_runtime_registry, "get", lambda user_id: Runtime())
+
+    catalog = main.strategies(main.AuthenticatedUser("user-1"))["strategies"]
+    statuses = {strategy["id"]: strategy["status"] for strategy in catalog}
+
+    assert statuses[custom_id] == "active"
+    assert statuses["momentum_breakout"] == "inactive"
+
+
 def test_strategy_activation_rejects_unsupported_symbols_without_mutation(monkeypatch):
     main.agent_loop.configure_watched_symbols(["AAPLUSDT"])
     activate_strategy("momentum_breakout")
