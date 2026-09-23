@@ -501,6 +501,44 @@ async def run_cycle(
             if selected_market == "futures"
             else None
         )
+        if selected_market == "spot" and decision["action"] == "sell":
+            if not live_position:
+                result = {
+                    "status": "logged",
+                    "symbol": symbol.upper(),
+                    "mode": cycle_mode,
+                    "decision": decision,
+                    "ticker": ticker,
+                    "risk_check": {"allowed": False, "reasons": ["no_spot_position_to_close"]},
+                    "order": None,
+                }
+                return persist(result)
+            current_price = float(ticker.get("last_price", 0.0) or 0.0)
+            close_result = await asyncio.to_thread(
+                _close_live_position,
+                symbol,
+                live_position,
+                market="spot",
+                execution_client=execution_client,
+            )
+            close_result = {
+                **close_result,
+                "closed_position_side": live_position["side"],
+                "qty": live_position["qty"],
+                "entry_price": live_position["entry_price"],
+                "exit_price": current_price,
+            }
+            result = {
+                "status": "closed" if close_result.get("status") == "submitted" else close_result.get("status", "close_failed"),
+                "symbol": symbol.upper(),
+                "mode": cycle_mode,
+                "decision": decision,
+                "ticker": ticker,
+                "exit_reason": "signal",
+                "position": live_position,
+                "order": close_result,
+            }
+            return persist(result)
         has_existing_position = live_position_state is True or (
             live_position_state is None
             and cycle_logger is not None

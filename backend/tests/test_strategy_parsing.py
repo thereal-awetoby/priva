@@ -1,8 +1,28 @@
 from app.main import parse_strategy as parse_strategy_endpoint
 from app import main
+from app import strategy as strategy_module
 from app.strategy import STRATEGY_CATALOG, build_pairs_signal, build_signal_from_ticker, configure_builtin_strategy, configure_symbol_strategies, get_active_strategy_id, list_strategy_catalog, parse_natural_language_strategy, parse_structured_strategy, register_custom_strategy, activate_strategy
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_strategy_state():
+    original_strategies = dict(strategy_module.STRATEGIES)
+    original_catalog = dict(strategy_module._registered_strategy_catalog)
+    original_configs = {key: dict(value) for key, value in strategy_module._builtin_strategy_configs.items()}
+    original_symbols = dict(strategy_module._symbol_strategy_ids)
+    original_active = strategy_module._active_strategy_id
+    yield
+    strategy_module.STRATEGIES.clear()
+    strategy_module.STRATEGIES.update(original_strategies)
+    strategy_module._registered_strategy_catalog.clear()
+    strategy_module._registered_strategy_catalog.update(original_catalog)
+    strategy_module._builtin_strategy_configs.clear()
+    strategy_module._builtin_strategy_configs.update({key: dict(value) for key, value in original_configs.items()})
+    strategy_module._symbol_strategy_ids.clear()
+    strategy_module._symbol_strategy_ids.update(original_symbols)
+    strategy_module._active_strategy_id = original_active
 
 
 def test_parse_natural_language_strategy_supports_mean_reversion_text():
@@ -169,17 +189,99 @@ def test_momentum_leverage_scales_with_higher_thresholds():
         configure_builtin_strategy("momentum_breakout", {"threshold_pct": 1})
 
 
-def test_configured_spot_sell_is_rejected():
+def test_configured_spot_sell_remains_a_close_signal():
     configure_builtin_strategy("mean_reversion", {"market": "spot", "threshold_pct": 1})
     try:
         signal = build_signal_from_ticker(
             {"status": "live", "last_price": 102.0, "open_price": 100.0},
             strategy_id="mean_reversion",
         )
-        assert signal["action"] == "hold"
-        assert "spot sells" in signal["reason"]
+        assert signal["action"] == "sell"
+        assert signal["market"] == "spot"
     finally:
-        configure_builtin_strategy("mean_reversion", {"market": "futures", "threshold_pct": 1})
+        configure_builtin_strategy("mean_reversion", {})
+
+
+@pytest.mark.parametrize(
+    ("strategy_id", "ticker_values"),
+    [
+        ("momentum_breakout", [(105.0, 1.0), (107.0, 2.0), (114.0, 3.0)]),
+        ("mean_reversion", [(101.0, 1.0), (101.4, 2.0), (102.8, 3.0)]),
+        ("overnight_gap", [(101.0, 1.0), (101.4, 2.0), (102.8, 3.0)]),
+    ],
+)
+def test_each_builtin_strategy_has_expected_leverage_tiers(strategy_id, ticker_values):
+    configure_builtin_strategy(strategy_id, {"threshold_pct": 5 if strategy_id == "momentum_breakout" else 1})
+    for last_price, expected_leverage in ticker_values:
+        ticker = {"status": "live", "last_price": last_price, "open_price": 100.0}
+        if strategy_id == "overnight_gap":
+            ticker.update({"previous_close": 100.0, "session_open": last_price})
+        signal = build_signal_from_ticker(ticker, strategy_id=strategy_id)
+        assert signal["leverage"] == expected_leverage
+
+
+def test_builtin_and_pairs_strategies_have_hold_cases():
+    assert build_signal_from_ticker(
+        {"status": "live", "last_price": 100.5, "open_price": 100.0},
+        strategy_id="momentum_breakout",
+    )["action"] == "hold"
+    assert build_signal_from_ticker(
+        {"status": "live", "last_price": 100.5, "open_price": 100.0},
+        strategy_id="mean_reversion",
+    )["action"] == "hold"
+    assert build_signal_from_ticker(
+        {"status": "live", "last_price": 100.0, "previous_close": 100.0, "session_open": 100.5},
+        strategy_id="overnight_gap",
+    )["action"] == "hold"
+    pair = build_pairs_signal("AAPLUSDT", "TSLAUSDT", [100, 101, 100], [100, 100, 100], entry_zscore=2.0, exit_zscore=0.5)
+    assert pair["action"] == "hold"
+
+
+def test_pairs_signal_can_exit_and_config_does_not_apply_trade_values_to_hold():
+    pair = build_pairs_signal("AAPLUSDT", "TSLAUSDT", [100, 110, 105], [100, 100, 100], entry_zscore=2.0, exit_zscore=0.5)
+    assert pair["action"] == "exit_pair"
+    configure_builtin_strategy("mean_reversion", {"position_size": 4, "leverage": 3, "threshold_pct": 1})
+    signal = build_signal_from_ticker({"status": "live", "last_price": 100.5, "open_price": 100.0}, strategy_id="mean_reversion")
+    assert signal["action"] == "hold"
+    assert signal["size"] == 0.0
+    assert signal["leverage"] == 1.0
+
+
+def test_unregister_clears_active_and_symbol_mapping():
+    strategy_id = "custom_unregister_state"
+    register_custom_strategy(strategy_id, parse_structured_strategy({"action": "buy", "comparison": "open", "threshold_pct": 1}))
+    configure_symbol_strategies({"AAPLUSDT": strategy_id})
+    activate_strategy(strategy_id)
+    assert strategy_module.unregister_custom_strategy(strategy_id) is True
+    assert get_active_strategy_id() == "momentum_breakout"
+    assert strategy_module.get_strategy_for_symbol("AAPLUSDT") == "momentum_breakout"
+
+
+def test_strategy_config_rejects_leverage_and_stop_loss_above_bounds():
+    with pytest.raises(ValueError, match="leverage"):
+        configure_builtin_strategy("momentum_breakout", {"leverage": 4})
+    with pytest.raises(ValueError, match="stop_loss"):
+        configure_builtin_strategy("momentum_breakout", {"stop_loss_pct": 0})
+    with pytest.raises(ValueError, match="leverage"):
+        parse_structured_strategy({"action": "buy", "comparison": "open", "threshold_pct": 1, "leverage": 4})
+    with pytest.raises(ValueError, match="stop_loss"):
+        parse_structured_strategy({"action": "buy", "comparison": "open", "threshold_pct": 1, "stop_loss_pct": 0})
+
+
+def test_activation_endpoint_rejects_unsafe_strategy_config():
+    leverage_result = main.activate_strategy(
+        "mean_reversion",
+        main.StrategyActivationRequest(strategy_config={"leverage": 4}),
+    )
+    stop_loss_result = main.activate_strategy(
+        "mean_reversion",
+        main.StrategyActivationRequest(strategy_config={"stop_loss_pct": 0}),
+    )
+
+    assert leverage_result["status"] == "rejected"
+    assert "leverage" in leverage_result["message"]
+    assert stop_loss_result["status"] == "rejected"
+    assert "stop_loss" in stop_loss_result["message"]
 
 
 def test_parse_structured_strategy_rejects_invalid_market():

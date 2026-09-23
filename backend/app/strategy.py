@@ -9,6 +9,8 @@ from typing import Any, Literal
 
 import requests
 
+MAX_LEVERAGE = 3.0
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -228,8 +230,6 @@ def _apply_builtin_strategy_config(strategy_id: str, decision: Decision) -> Deci
     take_profit_pct = config.get("take_profit_pct", decision.take_profit_pct)
     stop_loss_pct = config.get("stop_loss_pct", decision.stop_loss_pct)
     market = config.get("market", decision.market)
-    if market == "spot" and decision.action == "sell":
-        return Decision("hold", 0.0, 1.0, "spot sells are disabled by strategy safety rules")
     if market == "spot":
         leverage = 1.0
 
@@ -282,13 +282,18 @@ def configure_builtin_strategy(strategy_id: str, config: dict[str, Any]) -> None
                 raise ValueError(f"strategy {field} must be numeric") from exc
             if normalized[field] <= 0:
                 raise ValueError(f"strategy {field} must be greater than zero")
+            if normalized[field] > MAX_LEVERAGE:
+                raise ValueError(f"strategy {field} must not exceed {MAX_LEVERAGE:g}x")
 
     for field in ("take_profit_pct", "take_profit", "stop_loss_pct", "stop_loss"):
         if field in config and config[field] is not None:
             try:
-                normalized[field.replace("take_profit", "take_profit_pct").replace("stop_loss", "stop_loss_pct")] = float(config[field])
+                value = float(config[field])
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"strategy {field} must be numeric") from exc
+            if value <= 0 or value > 100:
+                raise ValueError(f"strategy {field} must be between 0 and 100")
+            normalized[field.replace("take_profit", "take_profit_pct").replace("stop_loss", "stop_loss_pct")] = value
 
     if "market" in config:
         market = str(config["market"]).strip().lower()
@@ -353,12 +358,15 @@ def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_c
     position: dict[str, Any] | None = None
     closed_trades: list[dict[str, Any]] = []
     equity_curve = [initial_capital]
+    last_valid_price: float | None = None
 
     for candle in candles:
         price = _price_from_candle(candle)
         if price <= 0:
-            equity_curve.append(initial_capital + realized_pnl + (_position_pnl(position, price) if position else 0.0))
+            mark_price = last_valid_price if last_valid_price is not None else 0.0
+            equity_curve.append(initial_capital + realized_pnl + (_position_pnl(position, mark_price) if position else 0.0))
             continue
+        last_valid_price = price
         ticker = _build_ticker_from_candle(candle)
         decision = STRATEGIES[strategy_id](ticker)
         target_side = decision.action if decision.action in {"buy", "sell"} else None
@@ -398,14 +406,14 @@ def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_c
         current_equity = initial_capital + realized_pnl + (_position_pnl(position, price) if position else 0.0)
         equity_curve.append(current_equity)
 
-    if position is not None:
-        close_pnl = _position_pnl(position, _price_from_candle(candles[-1]))
+    if position is not None and last_valid_price is not None:
+        close_pnl = _position_pnl(position, last_valid_price)
         realized_pnl += close_pnl
         closed_trades.append(
             {
                 "side": position["side"],
                 "entry_price": position["entry_price"],
-                "exit_price": _price_from_candle(candles[-1]),
+                "exit_price": last_valid_price,
                 "pnl": close_pnl,
             }
         )
@@ -654,6 +662,8 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("structured strategy leverage must be numeric") from exc
         if leverage <= 0:
             raise ValueError("structured strategy leverage must be greater than zero")
+        if leverage > MAX_LEVERAGE:
+            raise ValueError(f"structured strategy leverage must not exceed {MAX_LEVERAGE:g}x")
 
         take_profit_pct = payload.get("take_profit_pct", payload.get("take_profit"))
         stop_loss_pct = payload.get("stop_loss_pct", payload.get("stop_loss"))
@@ -674,7 +684,15 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
         if take_profit_pct is not None:
             result["take_profit_pct"] = float(take_profit_pct)
         if stop_loss_pct is not None:
-            result["stop_loss_pct"] = float(stop_loss_pct)
+            stop_loss_pct = float(stop_loss_pct)
+            if stop_loss_pct <= 0 or stop_loss_pct > 100:
+                raise ValueError("structured strategy stop_loss_pct must be between 0 and 100")
+            result["stop_loss_pct"] = stop_loss_pct
+        if take_profit_pct is not None:
+            take_profit_pct = float(take_profit_pct)
+            if take_profit_pct <= 0 or take_profit_pct > 100:
+                raise ValueError("structured strategy take_profit_pct must be between 0 and 100")
+            result["take_profit_pct"] = take_profit_pct
         if market is not None:
             result["market"] = market
         return result
@@ -716,6 +734,8 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("structured strategy leverage must be numeric") from exc
     if leverage <= 0:
         raise ValueError("structured strategy leverage must be greater than zero")
+    if leverage > MAX_LEVERAGE:
+        raise ValueError(f"structured strategy leverage must not exceed {MAX_LEVERAGE:g}x")
 
     take_profit_pct = payload.get("take_profit_pct", payload.get("take_profit"))
     stop_loss_pct = payload.get("stop_loss_pct", payload.get("stop_loss"))
@@ -739,6 +759,15 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
         market = str(market).strip().lower()
         if market not in {"spot", "futures"}:
             raise ValueError("structured strategy market must be spot or futures")
+
+    for field_name, field_value in (("take_profit_pct", take_profit_pct), ("stop_loss_pct", stop_loss_pct)):
+        if field_value is not None:
+            try:
+                numeric_value = float(field_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"structured strategy {field_name} must be numeric") from exc
+            if numeric_value <= 0 or numeric_value > 100:
+                raise ValueError(f"structured strategy {field_name} must be between 0 and 100")
 
     result = {
         "kind": "custom",
@@ -815,10 +844,17 @@ def register_custom_strategy(
     action = str(parsed_strategy.get("action", "buy")).lower()
     comparison = str(parsed_strategy.get("comparison", "open")).lower()
     threshold_pct = float(parsed_strategy.get("threshold_pct", 0.0) or 0.0)
+    if threshold_pct <= 0:
+        raise ValueError("custom strategy threshold_pct must be greater than zero")
     position_size = float(parsed_strategy.get("position_size", parsed_strategy.get("size", 1.0)) or 1.0)
     leverage = float(parsed_strategy.get("leverage", 1.0) or 1.0)
+    if leverage <= 0 or leverage > MAX_LEVERAGE:
+        raise ValueError(f"custom strategy leverage must be between 0 and {MAX_LEVERAGE:g}")
     take_profit_pct = parsed_strategy.get("take_profit_pct")
     stop_loss_pct = parsed_strategy.get("stop_loss_pct")
+    for field_name, field_value in (("take_profit_pct", take_profit_pct), ("stop_loss_pct", stop_loss_pct)):
+        if field_value is not None and (float(field_value) <= 0 or float(field_value) > 100):
+            raise ValueError(f"custom strategy {field_name} must be between 0 and 100")
     trailing_profit_trigger_usd = parsed_strategy.get("trailing_profit_trigger_usd")
     trailing_profit_floor_usd = parsed_strategy.get("trailing_profit_floor_usd")
     trailing_profit_lock_pct = parsed_strategy.get("trailing_profit_lock_pct")
@@ -900,6 +936,11 @@ def unregister_custom_strategy(strategy_id: str) -> bool:
         return False
     STRATEGIES.pop(strategy_id, None)
     _registered_strategy_catalog.pop(strategy_id, None)
+    for symbol, mapped_strategy_id in list(_symbol_strategy_ids.items()):
+        if mapped_strategy_id == strategy_id:
+            del _symbol_strategy_ids[symbol]
+    if _active_strategy_id == strategy_id:
+        activate_strategy("momentum_breakout")
     return True
 
 
@@ -913,10 +954,7 @@ def build_signal_from_ticker(ticker: dict[str, Any], strategy_id: str | None = N
             market="futures" if decision.action == "sell" or decision.leverage > 1 else "spot",
         )
     if decision.market == "spot":
-        if decision.action == "sell":
-            decision = replace(decision, action="hold", size=0.0, leverage=1.0, reason="spot sells are disabled by strategy safety rules")
-        else:
-            decision = replace(decision, leverage=1.0)
+        decision = replace(decision, leverage=1.0)
     return decision_to_dict(decision)
 
 

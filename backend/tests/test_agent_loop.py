@@ -230,6 +230,44 @@ class FakeCycleLogger:
         return {"status": "logged"}
 
 
+class SpotPositionExecutionClient(FakeExecutionClient):
+    def fetch_spot_assets(self):
+        return {"status": "ok", "assets": [{"coin": "AAPL", "available": "1"}]}
+
+
+class SpotPositionCycleLogger(FakeCycleLogger):
+    def fetch_cycles(self):
+        return [{
+            "created_at": "2026-09-23T10:00:00Z",
+            "symbol": "AAPLUSDT",
+            "market": "spot",
+            "status": "submitted",
+            "decision": {"action": "buy"},
+            "ticker": {"last_price": 100.0},
+            "order_result": {"qty": 1.0},
+        }]
+
+
+def test_agent_cycle_closes_existing_spot_position_on_sell_signal():
+    execution = SpotPositionExecutionClient()
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+            cycle_logger=SpotPositionCycleLogger(),
+            market_type="spot",
+            strategy_id="mean_reversion",
+        )
+    )
+
+    assert result["status"] == "closed"
+    assert result["exit_reason"] == "signal"
+    assert execution.trades[0]["side"] == "sell"
+    assert execution.trades[0]["trade_side"] == "close"
+
+
 class LoggedPositionCycleLogger(FakeCycleLogger):
     def fetch_cycles(self):
         return [
@@ -347,11 +385,15 @@ def test_agent_cycle_uses_selected_spot_market():
 
 
 def test_agent_cycle_autonomously_selects_spot_for_one_x_signal():
+    class WeakMarketService:
+        def fetch_spot_ticker(self, symbol):
+            return {"symbol": symbol, "last_price": 101.0, "open_price": 100.0, "status": "live"}
+
     execution = FakeExecutionClient()
     result = asyncio.run(
         run_cycle(
             "AAPLUSDT",
-            market_service=FakeMarketService(),
+            market_service=WeakMarketService(),
             risk_engine=RiskEngine(),
             execution_client=execution,
             market_type="autonomous",
