@@ -18,23 +18,26 @@ type EquityPoint = {
 type ChartTimeframe = "hourly" | "daily" | "weekly" | "monthly";
 
 function filterByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe): EquityPoint[] {
-  const validPoints = points.filter((point) => point.timestamp ?? point.created_at);
-  if (!validPoints.length) return [];
+  const buckets = new Map<string, EquityPoint>();
 
-  const latestTime = Math.max(...validPoints.map((point) => new Date(point.timestamp ?? point.created_at ?? 0).getTime()));
-  const rangeMs = timeframe === "hourly"
-    ? 60 * 60 * 1000
-    : timeframe === "daily"
-      ? 24 * 60 * 60 * 1000
-      : timeframe === "weekly"
-        ? 7 * 24 * 60 * 60 * 1000
-        : 30 * 24 * 60 * 60 * 1000;
-  const earliestTime = latestTime - rangeMs;
+  for (const point of points) {
+    const iso = point.timestamp ?? point.created_at;
+    if (!iso) continue;
+    const date = new Date(iso);
+    const bucketKey = timeframe === "hourly"
+      ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`
+      : timeframe === "daily"
+        ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+        : timeframe === "weekly"
+          ? String(Math.floor(date.getTime() / (7 * 24 * 60 * 60 * 1000)))
+          : `${date.getFullYear()}-${date.getMonth()}`;
+    const existing = buckets.get(bucketKey);
+    if (!existing || new Date(iso).getTime() > new Date(existing.timestamp ?? existing.created_at ?? 0).getTime()) {
+      buckets.set(bucketKey, point);
+    }
+  }
 
-  return validPoints.filter((point) => {
-    const pointTime = new Date(point.timestamp ?? point.created_at ?? 0).getTime();
-    return pointTime >= earliestTime;
-  }).sort((a, b) => {
+  return Array.from(buckets.values()).sort((a, b) => {
     const aTime = new Date(a.timestamp ?? a.created_at ?? 0).getTime();
     const bTime = new Date(b.timestamp ?? b.created_at ?? 0).getTime();
     return aTime - bTime;
@@ -62,26 +65,26 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
   const plotH = height - padding.top - padding.bottom;
 
   // Only plot points that carry a real value for this market. Snapshots are
-    // written by two sources: the agent worker (combined balance only) and the
-    // balance endpoint (combined + per-market breakdowns). Without this filter,
-    // legacy/worker snapshots would punch the Spot curve down to $0 and mix
-    // combined totals into the Futures curve.
-    let chartPoints = filterByTimeframe(points, timeframe).filter((p) => p[valueKey] != null);
-    if (chartPoints.length === 0 && valueKey === "futures_equity") {
-      // Legacy snapshots only stored the combined balance; fall back to it so
-      // the Futures curve still renders before per-market fields exist.
-      chartPoints = filterByTimeframe(points, timeframe).filter((p) => p.balance != null || p.equity != null);
-    }
+  // written by two sources: the agent worker (combined balance only) and the
+  // balance endpoint (combined + per-market breakdowns). Without this filter,
+  // legacy/worker snapshots would punch the Spot curve down to $0 and mix
+  // combined totals into the Futures curve.
+  let chartPoints = filterByTimeframe(points, timeframe).filter((p) => p[valueKey] != null);
+  if (chartPoints.length < 2 && valueKey === "futures_equity") {
+    // Legacy snapshots only stored the combined balance; fall back to it so
+    // the Futures curve still renders before per-market fields exist.
+    chartPoints = filterByTimeframe(points, timeframe).filter((p) => p.balance != null || p.equity != null);
+  }
 
-    const hasMarketData = chartPoints.length > 0;
-    const values = chartPoints.map((p) =>
-      Number(
-        valueKey === "futures_equity" && p[valueKey] == null
-          ? p.balance ?? p.equity ?? 0
-          : p[valueKey],
-      ),
-    );
-    const times = chartPoints.map((p) => p.timestamp ?? p.created_at ?? "");
+  const hasMarketData = chartPoints.length > 0;
+  const values = chartPoints.map((p) =>
+    Number(
+      valueKey === "futures_equity" && p[valueKey] == null
+        ? p.balance ?? p.equity ?? 0
+        : p[valueKey],
+    ),
+  );
+  const times = chartPoints.map((p) => p.timestamp ?? p.created_at ?? "");
 
   const min = values.length ? Math.min(...values) : 0;
   const max = values.length ? Math.max(...values) : 1;
@@ -98,11 +101,11 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
 
   const yTicks = [min, min + range / 2, max];
   const tickIndexes =
-      values.length <= 1
-        ? []
-        : Array.from(
-            new Set([0, Math.floor((values.length - 1) / 2), values.length - 1])
-          );
+    values.length <= 1
+      ? []
+      : Array.from(
+          new Set([0, Math.floor((values.length - 1) / 2), values.length - 1])
+        );
 
   const formatTime = (iso: string) => {
     if (!iso) return "";
@@ -116,28 +119,52 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
 
-  const handleChartWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+  // Reset zoom/pan whenever the underlying dataset changes shape (timeframe
+  // switch, or a different point count coming back from a refetch) so users
+  // don't end up zoomed into empty space.
+  useEffect(() => {
+    setZoom(1);
+    if (chartRef.current) chartRef.current.scrollLeft = 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeframe, values.length]);
+
+  // Wheel zoom/pan is bound manually (not via onWheel) because React attaches
+  // its root wheel listener as passive by default, which silently ignores
+  // preventDefault() and lets the page scroll underneath the chart instead of
+  // zooming it. Ctrl/Cmd+wheel zooms (matches the OS/browser zoom gesture and
+  // trackpad pinch), Shift+wheel pans horizontally, plain wheel is left alone
+  // so the page can still scroll normally when the cursor passes over the chart.
+  useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
 
-    if (event.shiftKey) {
+    const onWheel = (event: WheelEvent) => {
+      if (event.shiftKey) {
+        event.preventDefault();
+        chart.scrollLeft += event.deltaY;
+        return;
+      }
+
+      if (!(event.ctrlKey || event.metaKey)) return; // let the page scroll normally
+
       event.preventDefault();
-      chart.scrollLeft += event.deltaY;
-      return;
-    }
+      const pointerX = event.clientX - chart.getBoundingClientRect().left;
 
-    event.preventDefault();
-    const pointerX = event.clientX - chart.getBoundingClientRect().left;
-    const oldScale = zoom;
-    const nextScale = Math.min(4, Math.max(1, oldScale * Math.exp(-event.deltaY * 0.002)));
-    if (nextScale === oldScale) return;
+      setZoom((oldScale) => {
+        const nextScale = Math.min(4, Math.max(1, oldScale * Math.exp(-event.deltaY * 0.002)));
+        if (nextScale === oldScale) return oldScale;
 
-    const contentX = chart.scrollLeft + pointerX;
-    setZoom(nextScale);
-    requestAnimationFrame(() => {
-      chart.scrollLeft = contentX * (nextScale / oldScale) - pointerX;
-    });
-  };
+        const contentX = chart.scrollLeft + pointerX;
+        requestAnimationFrame(() => {
+          chart.scrollLeft = contentX * (nextScale / oldScale) - pointerX;
+        });
+        return nextScale;
+      });
+    };
+
+    chart.addEventListener("wheel", onWheel, { passive: false });
+    return () => chart.removeEventListener("wheel", onWheel);
+  }, []);
 
   const handleChartPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -158,6 +185,11 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
     const chart = chartRef.current;
     if (chart?.hasPointerCapture(event.pointerId)) chart.releasePointerCapture(event.pointerId);
     setIsPanning(false);
+  };
+
+  const resetView = () => {
+    setZoom(1);
+    if (chartRef.current) chartRef.current.scrollLeft = 0;
   };
 
   return (
@@ -181,50 +213,51 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
       </div>
       {!hasMarketData || values.length < 2 ? (
         <p className="panel-lead equity-empty">Waiting for the next agent cycle.</p>
-            ) : (
+      ) : (
         <div
           ref={chartRef}
           className={`equity-scroll${isPanning ? " is-panning" : ""}`}
-          onWheel={handleChartWheel}
           onPointerDown={handleChartPointerDown}
           onPointerMove={handleChartPointerMove}
           onPointerUp={stopChartPanning}
           onPointerCancel={stopChartPanning}
+          onDoubleClick={resetView}
+          title="Ctrl/Cmd+scroll to zoom · Shift+scroll or drag to pan · double-click to reset"
         >
-        <svg
-          className="equity-chart"
-          viewBox={`0 0 ${width} ${height}`}
-          style={{ width: `${zoom * 100}%`, height: `${height}px` }}
-          role="img"
-          aria-label="Balance over time"
-        >
-          {yTicks.map((v, i) => (
-            <g key={i}>
-              <line
-                x1={padding.left}
-                y1={yFor(v)}
-                x2={width - padding.right}
-                y2={yFor(v)}
-                className="equity-gridline"
-              />
-              <text x={padding.left - 8} y={yFor(v)} className="equity-axis-label" textAnchor="end" dominantBaseline="middle">
-                ${v.toFixed(0)}
+          <svg
+            className="equity-chart"
+            viewBox={`0 0 ${width} ${height}`}
+            style={{ width: `${zoom * 100}%`, height: `${height}px` }}
+            role="img"
+            aria-label="Balance over time"
+          >
+            {yTicks.map((v, i) => (
+              <g key={i}>
+                <line
+                  x1={padding.left}
+                  y1={yFor(v)}
+                  x2={width - padding.right}
+                  y2={yFor(v)}
+                  className="equity-gridline"
+                />
+                <text x={padding.left - 8} y={yFor(v)} className="equity-axis-label" textAnchor="end" dominantBaseline="middle">
+                  ${v.toFixed(0)}
+                </text>
+              </g>
+            ))}
+            {tickIndexes.map((i) => (
+              <text
+                key={i}
+                x={xFor(i)}
+                y={height - padding.bottom + 18}
+                className="equity-axis-label"
+                textAnchor="middle"
+              >
+                {formatTime(times[i])}
               </text>
-            </g>
-          ))}
-          {tickIndexes.map((i) => (
-            <text
-              key={i}
-              x={xFor(i)}
-              y={height - padding.bottom + 18}
-              className="equity-axis-label"
-              textAnchor="middle"
-            >
-              {formatTime(times[i])}
-            </text>
-          ))}
-                    <path d={path} className="equity-line" />
-        </svg>
+            ))}
+            <path d={path} className="equity-line" />
+          </svg>
         </div>
       )}
     </div>
@@ -247,8 +280,10 @@ export default function ControlCenterPanel() {
   const [modes, setModes] = useState<Array<"autonomous" | "strategy">>(["autonomous"]);
   const [marketSaving, setMarketSaving] = useState(false);
   const [marketError, setMarketError] = useState<string | null>(null);
+  const loadVersionRef = useRef(0);
 
-    const loadData = () => {
+  const loadData = () => {
+    const loadVersion = ++loadVersionRef.current;
     Promise.all([
       apiGet<any>("/positions"),
       apiGet<any>("/pnl"),
@@ -260,6 +295,7 @@ export default function ControlCenterPanel() {
       apiGet<any>("/user/agent-settings"),
     ])
       .then(([positionsData, pnlData, riskData, activityData, killData, balanceData, historyData, settingsData]) => {
+        if (loadVersion !== loadVersionRef.current) return;
         setPositions(positionsData.positions ?? []);
         setPnl(pnlData);
         setRiskUsage(riskData);
@@ -279,9 +315,11 @@ export default function ControlCenterPanel() {
         } else if (settingsData.market === "spot" || settingsData.market === "futures") {
           setMarkets([settingsData.market]);
         }
+        setError(null);
         setLoading(false);
       })
       .catch((err) => {
+        if (loadVersion !== loadVersionRef.current) return;
         setError(err.message);
         setLoading(false);
       });
@@ -340,9 +378,10 @@ export default function ControlCenterPanel() {
     );
   }
 
-  const dailyLossUsage = riskUsage?.usage_percent?.daily_loss ?? 0;
+  const dailyLossUsage = Math.max(0, Math.min(100, Number(riskUsage?.usage_percent?.daily_loss) || 0));
   const filteredActivity = activity
     .filter((entry) => (entry.mode ?? "autonomous") === activityMode)
+    .sort((a, b) => new Date(b.timestamp ?? b.created_at ?? 0).getTime() - new Date(a.timestamp ?? a.created_at ?? 0).getTime())
     .slice(0, 8);
 
   return (
@@ -471,19 +510,19 @@ export default function ControlCenterPanel() {
         </div>
       </div>
 
-              <div className="perf-row" style={{ gridTemplateColumns: "repeat(2, 1fr)", marginBottom: 24 }}>
-                <div className="perf-cell">
-                  <div className="perf-label">Futures equity</div>
-                  <div className="perf-value">${Number(balance?.futures_equity ?? 0).toFixed(2)}</div>
-                </div>
-                <div className="perf-cell">
-                  <div className="perf-label">Spot equity</div>
-                  <div className="perf-value">${Number(balance?.spot_equity ?? balance?.spot_usdt ?? 0).toFixed(2)}</div>
-                </div>
-              </div>
+      <div className="perf-row" style={{ gridTemplateColumns: "repeat(2, 1fr)", marginBottom: 24 }}>
+        <div className="perf-cell">
+          <div className="perf-label">Futures equity</div>
+          <div className="perf-value">${Number(balance?.futures_equity ?? 0).toFixed(2)}</div>
+        </div>
+        <div className="perf-cell">
+          <div className="perf-label">Spot equity</div>
+          <div className="perf-value">${Number(balance?.spot_equity ?? balance?.spot_usdt ?? 0).toFixed(2)}</div>
+        </div>
+      </div>
 
-              <div className="risk-row">
-                <div className="risk-label-row">
+      <div className="risk-row">
+        <div className="risk-label-row">
           <span>Today's risk used</span>
           <span>{dailyLossUsage}% of your daily loss limit</span>
         </div>
@@ -514,8 +553,8 @@ export default function ControlCenterPanel() {
               </tr>
             </thead>
             <tbody>
-              {positions.map((p, i) => (
-                <tr key={i}>
+              {positions.map((p) => (
+                <tr key={p.position_id ?? p.id ?? `${p.symbol}-${p.side}`}>
                   <td>{cleanSymbol(p.symbol)}</td>
                   <td>
                     <span

@@ -330,6 +330,41 @@ async def run_cycle(
                             "balance": float(balance.get("equity", 0) or 0),
                             "equity": float(balance.get("equity", 0) or 0),
                         }
+                        if market_type == "futures":
+                            snapshot["futures_equity"] = float(balance.get("equity", 0) or 0)
+                        elif market_type == "spot":
+                            fetch_assets = getattr(execution_client, "fetch_spot_assets", None)
+                            if callable(fetch_assets):
+                                spot = fetch_assets()
+                                if spot.get("status") == "ok":
+                                    assets = spot.get("assets", [])
+                                    usdt_asset = next(
+                                        (asset for asset in assets if str(asset.get("coin", "")).upper() == "USDT"),
+                                        {},
+                                    )
+                                    spot_equity = float(
+                                        usdt_asset.get(
+                                            "usdtBalance",
+                                            usdt_asset.get(
+                                                "balance",
+                                                usdt_asset.get("available", usdt_asset.get("availableBalance", 0)),
+                                            ),
+                                        )
+                                        or 0
+                                    )
+                                    for asset in assets:
+                                        coin = str(asset.get("coin", "")).upper()
+                                        if not coin or coin == "USDT":
+                                            continue
+                                        quantity = float(asset.get("total", asset.get("available", asset.get("balance", 0))) or 0)
+                                        if quantity <= 0:
+                                            continue
+                                        ticker = market_service.fetch_spot_ticker(f"{coin}USDT")
+                                        if ticker.get("status") == "live":
+                                            spot_equity += quantity * float(ticker.get("last_price", 0) or 0)
+                                    snapshot["balance"] = round(spot_equity, 4)
+                                    snapshot["equity"] = round(spot_equity, 4)
+                                    snapshot["spot_equity"] = round(spot_equity, 4)
                         _recent_balance_snapshots.append(snapshot)
                         del _recent_balance_snapshots[:-1000]
                         if callable(log_snapshot):
