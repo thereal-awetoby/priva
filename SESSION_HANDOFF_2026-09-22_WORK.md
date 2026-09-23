@@ -73,6 +73,7 @@ Date: 2026-09-22
 - Spot's separate curve displays a waiting state until snapshots containing `spot_equity` exist, avoiding a misleading zero line from legacy combined-only snapshots.
 - Fixed zero per-market daily changes by persisting `futures_equity` and `spot_equity` in `balance_snapshots` and selecting the first valid market snapshot as each baseline.
 - Apply the updated `backend/add_execution_profiles.sql` (or the corresponding `balance_snapshots` additions in `backend/supabase_multi_user.sql`) before deployment, then deploy both services.
+- Corrected the follow-up baseline bug where legacy worker snapshots stored market equity as zero; those placeholders are now ignored, and snapshots omit market fields unless real values are supplied.
 
 ## Session Purpose
 

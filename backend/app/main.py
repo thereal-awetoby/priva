@@ -355,8 +355,8 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
         if today_points
         else current_equity
     )
-    first_futures_point = next((point for point in today_points if point.get("futures_equity") is not None), None)
-    first_spot_point = next((point for point in today_points if point.get("spot_equity") is not None), None)
+    first_futures_point = next((point for point in today_points if float(point.get("futures_equity") or 0) > 0), None)
+    first_spot_point = next((point for point in today_points if float(point.get("spot_equity") or 0) > 0), None)
     starting_futures_equity = float(first_futures_point["futures_equity"]) if first_futures_point else futures_equity
     starting_spot_equity = float(first_spot_point["spot_equity"]) if first_spot_point else spot_equity
     daily_change = round(current_equity - starting_balance, 4)

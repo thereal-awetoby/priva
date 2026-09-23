@@ -72,9 +72,11 @@ class SupabaseCycleLogger:
             "session_id": self.session_id,
             "balance": float(snapshot.get("balance", 0) or 0),
             "equity": float(snapshot.get("equity", 0) or 0),
-            "futures_equity": float(snapshot.get("futures_equity", 0) or 0),
-            "spot_equity": float(snapshot.get("spot_equity", 0) or 0),
         }
+        if snapshot.get("futures_equity") is not None:
+            record["futures_equity"] = float(snapshot["futures_equity"] or 0)
+        if snapshot.get("spot_equity") is not None:
+            record["spot_equity"] = float(snapshot["spot_equity"] or 0)
         if self.user_id:
             record["user_id"] = self.user_id
         try:
