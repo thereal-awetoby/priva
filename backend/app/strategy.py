@@ -46,13 +46,13 @@ def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
     config = _get_builtin_strategy_config("momentum_breakout")
     threshold_pct = float(config.get("threshold_pct", 1.0) or 1.0)
     threshold = threshold_pct / 100.0
-    if last_price > open_price and (last_price - open_price) / max(open_price, 1.0) >= threshold:
+    if last_price > open_price and (last_price - open_price) / open_price >= threshold:
         signal = "buy"
-        move = (last_price - open_price) / max(open_price, 1.0)
+        move = (last_price - open_price) / open_price
         strength = min(1.0, max(0.0, move / max(threshold * 4, 0.01)))
-    elif last_price < open_price and (open_price - last_price) / max(open_price, 1.0) >= threshold:
+    elif last_price < open_price and (open_price - last_price) / open_price >= threshold:
         signal = "sell"
-        move = (open_price - last_price) / max(open_price, 1.0)
+        move = (open_price - last_price) / open_price
         strength = min(1.0, max(0.0, move / max(threshold * 4, 0.01)))
     else:
         signal = "hold"
@@ -230,6 +230,8 @@ def _apply_builtin_strategy_config(strategy_id: str, decision: Decision) -> Deci
     market = config.get("market", decision.market)
     if market == "spot" and decision.action == "sell":
         return Decision("hold", 0.0, 1.0, "spot sells are disabled by strategy safety rules")
+    if market == "spot":
+        leverage = 1.0
 
     return Decision(
         action=decision.action,
@@ -260,6 +262,8 @@ def configure_builtin_strategy(strategy_id: str, config: dict[str, Any]) -> None
             normalized["threshold_pct"] = float(config["threshold_pct"])
         except (TypeError, ValueError) as exc:
             raise ValueError("strategy threshold_pct must be numeric") from exc
+        if normalized["threshold_pct"] <= 0:
+            raise ValueError("strategy threshold_pct must be greater than zero")
 
     for field in ("position_size", "size"):
         if field in config:
@@ -336,6 +340,8 @@ def _safe_std(values: list[float]) -> float:
 def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_capital: float = 10000.0) -> dict[str, Any]:
     if strategy_id not in STRATEGIES:
         raise ValueError(f"unknown strategy: {strategy_id}")
+    if strategy_id in {"overnight_gap", "pairs_trading"}:
+        raise ValueError(f"{strategy_id} is not backtestable with single-symbol candles")
     if not candles:
         raise ValueError("candles are required")
 
@@ -350,6 +356,9 @@ def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_c
 
     for candle in candles:
         price = _price_from_candle(candle)
+        if price <= 0:
+            equity_curve.append(initial_capital + realized_pnl + (_position_pnl(position, price) if position else 0.0))
+            continue
         ticker = _build_ticker_from_candle(candle)
         decision = STRATEGIES[strategy_id](ticker)
         target_side = decision.action if decision.action in {"buy", "sell"} else None
@@ -363,7 +372,7 @@ def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_c
             position = {
                 "side": target_side,
                 "entry_price": price,
-                "qty": initial_capital / max(price, 1.0),
+                "qty": initial_capital / price,
             }
             current_equity = initial_capital + realized_pnl + _position_pnl(position, price)
             equity_curve.append(current_equity)
@@ -383,7 +392,7 @@ def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_c
             position = {
                 "side": target_side,
                 "entry_price": price,
-                "qty": initial_capital / max(price, 1.0),
+                "qty": initial_capital / price,
             }
 
         current_equity = initial_capital + realized_pnl + (_position_pnl(position, price) if position else 0.0)
@@ -475,14 +484,7 @@ def _extract_json_from_content(content: str) -> dict[str, Any]:
 
 
 def _parse_with_gemini(text: str) -> dict[str, Any]:
-    api_key = (
-        os.getenv("GEMINI_API_KEY")
-        or os.getenv("GOOGLE_API_KEY")
-        or os.getenv("GROK_API_KEY")
-        or os.getenv("XAI_API_KEY")
-        or os.getenv("QWEN_API_KEY")
-        or os.getenv("DASHSCOPE_API_KEY")
-    )
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise ValueError("Gemini API key is required. Set GEMINI_API_KEY or GOOGLE_API_KEY.")
 
@@ -490,9 +492,10 @@ def _parse_with_gemini(text: str) -> dict[str, Any]:
     model = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
 
     response = requests.post(
-        f"{base_url}/models/{model}:generateContent?key={api_key}",
+        f"{base_url}/models/{model}:generateContent",
         headers={
             "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
         },
         json={
             "contents": [
@@ -631,6 +634,8 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError("structured strategy threshold_pct must be numeric") from exc
         else:
             threshold_pct = 1.0 if target_strategy == "mean_reversion" else None
+        if threshold_pct is not None and threshold_pct <= 0:
+            raise ValueError("structured strategy threshold_pct must be greater than zero")
 
         position_size_raw = payload.get("position_size", payload.get("size", 1.0))
         if position_size_raw is None:
@@ -689,6 +694,8 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
         threshold_pct = float(threshold_pct)
     except (TypeError, ValueError) as exc:
         raise ValueError("structured strategy threshold_pct must be numeric") from exc
+    if threshold_pct <= 0:
+        raise ValueError("structured strategy threshold_pct must be greater than zero")
 
     position_size_raw = payload.get("position_size", payload.get("size", 1.0))
     if position_size_raw is None:
@@ -905,6 +912,11 @@ def build_signal_from_ticker(ticker: dict[str, Any], strategy_id: str | None = N
             decision,
             market="futures" if decision.action == "sell" or decision.leverage > 1 else "spot",
         )
+    if decision.market == "spot":
+        if decision.action == "sell":
+            decision = replace(decision, action="hold", size=0.0, leverage=1.0, reason="spot sells are disabled by strategy safety rules")
+        else:
+            decision = replace(decision, leverage=1.0)
     return decision_to_dict(decision)
 
 

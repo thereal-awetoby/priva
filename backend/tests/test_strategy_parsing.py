@@ -147,16 +147,16 @@ def test_momentum_breakout_respects_threshold_and_defaults_sells_to_futures():
         assert sell_signal["action"] == "sell"
         assert sell_signal["market"] == "futures"
     finally:
-        configure_builtin_strategy("momentum_breakout", {"threshold_pct": 0})
+        configure_builtin_strategy("momentum_breakout", {"threshold_pct": 1})
 
 
 def test_momentum_breakout_uses_safe_default_threshold_and_price_guard():
-    configure_builtin_strategy("momentum_breakout", {})
+    configure_builtin_strategy("momentum_breakout", {"threshold_pct": 1})
     try:
         assert build_signal_from_ticker({"status": "live", "last_price": 100.2, "open_price": 100.0})["action"] == "hold"
         assert build_signal_from_ticker({"status": "live", "last_price": 100.0, "open_price": 0.0})["action"] == "hold"
     finally:
-        configure_builtin_strategy("momentum_breakout", {"threshold_pct": 0})
+        configure_builtin_strategy("momentum_breakout", {"threshold_pct": 1})
 
 
 def test_momentum_leverage_scales_with_higher_thresholds():
@@ -166,7 +166,7 @@ def test_momentum_leverage_scales_with_higher_thresholds():
         assert signal["action"] == "buy"
         assert signal["leverage"] == 1.0
     finally:
-        configure_builtin_strategy("momentum_breakout", {"threshold_pct": 0})
+        configure_builtin_strategy("momentum_breakout", {"threshold_pct": 1})
 
 
 def test_configured_spot_sell_is_rejected():
@@ -190,6 +190,50 @@ def test_parse_structured_strategy_rejects_invalid_market():
             "threshold_pct": 1.5,
             "market": "options",
         })
+
+
+def test_parse_structured_strategy_rejects_non_positive_threshold():
+    with pytest.raises(ValueError, match="threshold"):
+        parse_structured_strategy({
+            "action": "buy",
+            "comparison": "open",
+            "threshold_pct": 0,
+        })
+
+
+def test_momentum_uses_percentage_for_sub_dollar_assets():
+    from app.strategy import configure_builtin_strategy
+
+    configure_builtin_strategy("momentum_breakout", {"threshold_pct": 10})
+    try:
+        signal = build_signal_from_ticker({"status": "live", "last_price": 0.55, "open_price": 0.50})
+        assert signal["action"] == "buy"
+    finally:
+        configure_builtin_strategy("momentum_breakout", {"threshold_pct": 1})
+
+
+def test_spot_buy_clamps_configured_leverage_to_one():
+    strategy_id = "custom_spot_leverage_boundary"
+    parsed = parse_structured_strategy({
+        "action": "buy",
+        "comparison": "open",
+        "threshold_pct": 1,
+        "market": "spot",
+        "leverage": 3,
+    })
+    register_custom_strategy(strategy_id, parsed)
+    signal = build_signal_from_ticker(
+        {"status": "live", "last_price": 102.0, "open_price": 100.0},
+        strategy_id=strategy_id,
+    )
+    assert signal["leverage"] == 1.0
+
+
+def test_backtest_rejects_single_symbol_only_strategies():
+    from app.strategy import backtest_strategy
+
+    with pytest.raises(ValueError, match="not backtestable"):
+        backtest_strategy("overnight_gap", [{"open": 100, "close": 101}])
 
 
 def test_parse_natural_language_strategy_requires_explicit_threshold():
@@ -228,8 +272,9 @@ def test_parse_natural_language_strategy_supports_gemini_json(monkeypatch):
             }
 
     def fake_post(url, headers, json, timeout):
-        assert url == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=test-key"
+        assert url == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
         assert headers["Content-Type"] == "application/json"
+        assert headers["x-goog-api-key"] == "test-key"
         return DummyResponse()
 
     monkeypatch.setattr("app.strategy.requests.post", fake_post)
