@@ -348,10 +348,14 @@ export default function ControlCenterPanel() {
         <EquityCurve points={bucketByHour(equityHistory)} />
               </div>
 
-              <div className="perf-row" style={{ gridTemplateColumns: "repeat(2, 1fr)", marginBottom: 24 }}>
+              <div className="perf-row" style={{ gridTemplateColumns: "repeat(3, 1fr)", marginBottom: 24 }}>
                 <div className="perf-cell">
                   <div className="perf-label">Futures equity</div>
                   <div className="perf-value">${Number(balance?.futures_equity ?? 0).toFixed(2)}</div>
+                </div>
+                <div className="perf-cell">
+                  <div className="perf-label">Spot equity</div>
+                  <div className="perf-value">${Number(balance?.spot_equity ?? balance?.spot_usdt ?? 0).toFixed(2)}</div>
                 </div>
                 <div className="perf-cell">
                   <div className="perf-label">Spot USDT</div>

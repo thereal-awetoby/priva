@@ -56,8 +56,19 @@ Date: 2026-09-22
 - Root cause found for Spot workers reporting `skipped_existing_position`: the fallback Supabase query checked only symbol and status, so a submitted Futures cycle could be mistaken for an open Spot position.
 - Fixed `SupabaseCycleLogger.has_open_position()` to accept and filter by market.
 - Spot and Futures position gates now pass their selected market into the fallback query.
-- Focused validation passed: 34 tests.
+- The live Futures-position check is now skipped for Spot workers; Spot workers no longer call the Futures position endpoint as part of their open-position gate.
+- Focused validation passed: 35 tests.
 - Deploy the backend patch before expecting new Spot orders. After deployment, verify `/user/agent-loop` and look for a Spot worker cycle with `last_cycle_status: "submitted"` or a persisted activity record with `market: "spot"`.
+
+### Combined Balance and Equity Curve: 2026-09-23
+
+- Account balance now combines Futures equity with Spot equity.
+- Spot equity includes Spot USDT cash plus the marked value of non-USDT Spot assets returned by Bitget.
+- New balance responses expose `futures_equity`, `spot_usdt`, `spot_equity`, and `spot_holdings` alongside the combined `balance`.
+- New balance snapshots and future equity-curve points use the combined total.
+- The dashboard now displays Futures equity, Spot equity, and Spot USDT as separate subtotals.
+- Existing historical balance snapshots are not retroactively recalculated; the combined curve applies to new snapshots after deployment.
+- Combined-balance regression coverage passes. The metrics test file still contains two unrelated pre-existing failures involving daily baseline state and trade win-rate reconstruction.
 
 ## Session Purpose
 

@@ -421,7 +421,13 @@ async def run_cycle(
             "market": selected_market,
         }
         live_position = _live_position(symbol, execution_client, market=selected_market, cycle_logger=cycle_logger)
-        live_position_state = True if live_position else _live_position_state(symbol, execution_client)
+        live_position_state = (
+            True
+            if live_position
+            else _live_position_state(symbol, execution_client)
+            if selected_market == "futures"
+            else None
+        )
         has_existing_position = live_position_state is True or (
             live_position_state is None
             and cycle_logger is not None

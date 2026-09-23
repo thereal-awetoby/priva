@@ -222,6 +222,8 @@ class FakeCycleLogger:
         self.has_open_position_value = has_open_position
 
     def has_open_position(self, symbol, market=None):
+        if market == "spot":
+            return False
         return self.has_open_position_value
 
     def log_cycle(self, result):
@@ -452,6 +454,25 @@ def test_agent_cycle_skips_when_live_position_exists():
 
     assert result["status"] == "skipped_existing_position"
     assert execution.trades == []
+
+
+def test_spot_cycle_does_not_block_on_futures_position():
+    execution = LivePositionsExecutionClient(
+        [{"symbol": "AAPLUSDT", "total": "1", "holdSide": "long", "openPriceAvg": "111", "unrealizedPL": "-1"}]
+    )
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+            market_type="spot",
+            cycle_logger=FakeCycleLogger(has_open_position=True),
+        )
+    )
+
+    assert result["status"] == "submitted"
+    assert execution.trades[0]["market"] == "spot"
 
 
 def test_agent_cycle_adds_to_profitable_same_direction_position():

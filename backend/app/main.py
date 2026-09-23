@@ -323,11 +323,28 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
         )
         or 0
     )
-    current_equity = float(
-        futures.get("equity") or 0
-        if futures.get("status") == "ok"
-        else spot_balance
-    )
+    spot_holdings = []
+    for asset in spot_assets:
+        coin = str(asset.get("coin", "")).upper()
+        if not coin or coin == "USDT":
+            continue
+        quantity = float(asset.get("total", asset.get("available", asset.get("balance", 0))) or 0)
+        if quantity <= 0:
+            continue
+        ticker = market_service.fetch_spot_ticker(f"{coin}USDT")
+        mark_price = float(ticker.get("last_price", 0) or 0) if ticker.get("status") == "live" else 0.0
+        value = quantity * mark_price
+        if value <= 0:
+            continue
+        spot_holdings.append({
+            "coin": coin,
+            "quantity": quantity,
+            "mark_price": mark_price,
+            "value_usd": round(value, 4),
+        })
+    spot_equity = round(spot_balance + sum(item["value_usd"] for item in spot_holdings), 4)
+    futures_equity = float(futures.get("equity", 0) or 0) if futures.get("status") == "ok" else 0.0
+    current_equity = round(futures_equity + spot_equity, 4) if futures.get("status") == "ok" else spot_equity
     today = datetime.now(timezone.utc).date().isoformat()
     today_points = user_logger.fetch_balance_snapshots(
         session_id=None,
@@ -358,8 +375,10 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
         "balance": current_equity,
         "daily_change": daily_change,
         "daily_change_pct": daily_change_pct,
-        "futures_equity": float(futures.get("equity", 0) or 0) if futures.get("status") == "ok" else 0.0,
+        "futures_equity": futures_equity,
         "spot_usdt": spot_balance,
+        "spot_equity": spot_equity,
+        "spot_holdings": spot_holdings,
         "futures": futures,
         "spot": {
             "status": spot.get("status"),

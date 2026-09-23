@@ -37,6 +37,22 @@ class BalanceExecutionClient:
         return {"status": "ok", "assets": []}
 
 
+class CombinedBalanceExecutionClient(BalanceExecutionClient):
+    def fetch_spot_assets(self):
+        return {
+            "status": "ok",
+            "assets": [
+                {"coin": "USDT", "available": "500"},
+                {"coin": "AAPL", "total": "2"},
+            ],
+        }
+
+
+class BalanceMarketService:
+    def fetch_spot_ticker(self, symbol):
+        return {"status": "live", "last_price": 100.0}
+
+
 def test_pnl_uses_live_positions_and_zero_realized_without_cycles(monkeypatch):
     monkeypatch.setattr(main, "paper_execution_client", EmptyExecutionClient())
     monkeypatch.setattr(main.cycle_logger, "fetch_cycles", lambda **kwargs: [])
@@ -84,6 +100,22 @@ def test_account_balance_history_exposes_equity_curve_summary(monkeypatch):
     assert result["latest_balance"] == 1100.0
     assert result["point_count"] == 2
     assert result["points"][0]["balance"] == 1000.0
+
+
+def test_account_balance_combines_futures_and_spot_equity(monkeypatch):
+    main._daily_balance_baselines.clear()
+    monkeypatch.setattr(main, "paper_execution_client", CombinedBalanceExecutionClient(1000.0))
+    monkeypatch.setattr(main, "market_service", BalanceMarketService())
+
+    result = main.account_balance()
+
+    assert result["futures_equity"] == 1000.0
+    assert result["spot_usdt"] == 500.0
+    assert result["spot_equity"] == 700.0
+    assert result["balance"] == 1700.0
+    assert result["spot_holdings"] == [
+        {"coin": "AAPL", "quantity": 2.0, "mark_price": 100.0, "value_usd": 200.0}
+    ]
 
 
 def test_trade_metrics_detect_real_drawdown_from_closed_pnl(monkeypatch):
