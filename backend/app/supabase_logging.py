@@ -100,36 +100,47 @@ class SupabaseCycleLogger:
     def fetch_balance_snapshots(
         self,
         *,
-        limit: int = 1000,
+        limit: int | None = None,
         session_id: str | None = None,
         created_after: str | None = None,
     ) -> list[dict[str, Any]]:
         if not self.configured:
             return []
         try:
-            params = {
-                "select": "created_at,balance,equity,futures_equity,spot_equity",
-                "order": "created_at.asc",
-                "limit": min(limit, 1000),
-            }
-            if session_id:
-                params["session_id"] = f"eq.{session_id}"
-            if created_after:
-                params["created_at"] = f"gte.{created_after}"
-            if self.user_id:
-                params["user_id"] = f"eq.{self.user_id}"
-            response = self.session.get(
-                f"{self.url}/rest/v1/balance_snapshots",
-                headers={
-                    "apikey": self.service_role_key,
-                    "Authorization": f"Bearer {self.service_role_key}",
-                },
-                params=params,
-                timeout=15,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            return payload if isinstance(payload, list) else []
+            page_size = 1000
+            snapshots: list[dict[str, Any]] = []
+            offset = 0
+            while limit is None or len(snapshots) < limit:
+                params = {
+                    "select": "created_at,balance,equity,futures_equity,spot_equity",
+                    "order": "created_at.asc",
+                    "limit": page_size if limit is None else min(page_size, limit - len(snapshots)),
+                    "offset": offset,
+                }
+                if session_id:
+                    params["session_id"] = f"eq.{session_id}"
+                if created_after:
+                    params["created_at"] = f"gte.{created_after}"
+                if self.user_id:
+                    params["user_id"] = f"eq.{self.user_id}"
+                response = self.session.get(
+                    f"{self.url}/rest/v1/balance_snapshots",
+                    headers={
+                        "apikey": self.service_role_key,
+                        "Authorization": f"Bearer {self.service_role_key}",
+                    },
+                    params=params,
+                    timeout=15,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, list):
+                    break
+                snapshots.extend(payload)
+                if len(payload) < page_size:
+                    break
+                offset += len(payload)
+            return snapshots[:limit] if limit is not None else snapshots
         except (requests.RequestException, ValueError) as exc:
             logger.warning("Supabase balance snapshot read failed: %s", exc)
             return []
