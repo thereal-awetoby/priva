@@ -6,7 +6,14 @@ import { timeAgo, cleanSymbol } from "@/lib/format";
 
 type Position = Record<string, any>;
 type ActivityEntry = Record<string, any>;
-type EquityPoint = { timestamp?: string; created_at?: string; balance?: number; equity?: number };
+type EquityPoint = {
+  timestamp?: string;
+  created_at?: string;
+  balance?: number;
+  equity?: number;
+  futures_equity?: number | null;
+  spot_equity?: number | null;
+};
 
 function bucketByHour(points: EquityPoint[]): EquityPoint[] {
   const buckets = new Map<string, EquityPoint>();
@@ -40,7 +47,7 @@ function executionLabel(entry: ActivityEntry): string {
   return "Signal logged";
 }
 
-function EquityCurve({ points }: { points: EquityPoint[] }) {
+function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; market: "Futures" | "Spot"; valueKey: "futures_equity" | "spot_equity" }) {
   const pointWidth = 40; // pixels per data point — controls how "zoomed in" the chart is
   const width = Math.max(720, points.length * pointWidth);
   const height = 200;
@@ -48,7 +55,12 @@ function EquityCurve({ points }: { points: EquityPoint[] }) {
   const plotW = width - padding.left - padding.right;
   const plotH = height - padding.top - padding.bottom;
 
-  const values = points.map((p) => Number(p.balance ?? p.equity ?? 0));
+  const hasMarketData = points.some((p) =>
+    valueKey === "futures_equity"
+      ? p[valueKey] != null || p.balance != null || p.equity != null
+      : p[valueKey] != null,
+  );
+  const values = points.map((p) => Number(p[valueKey] ?? (valueKey === "futures_equity" ? p.balance ?? p.equity ?? 0 : 0)));
   const times = points.map((p) => p.timestamp ?? p.created_at ?? "");
 
   const min = values.length ? Math.min(...values) : 0;
@@ -80,8 +92,8 @@ function EquityCurve({ points }: { points: EquityPoint[] }) {
 
   return (
     <div className="equity-panel">
-      <div className="panel-title">Equity curve</div>
-      {values.length < 2 ? (
+      <div className="panel-title">{market} equity curve</div>
+      {!hasMarketData || values.length < 2 ? (
         <p className="panel-lead equity-empty">Waiting for the next agent cycle.</p>
             ) : (
         <div className="equity-scroll">
@@ -345,10 +357,21 @@ export default function ControlCenterPanel() {
             {(balance?.daily_change ?? 0) >= 0 ? "+" : ""}${Number(balance?.daily_change ?? 0).toFixed(2)} today
           </div>
         </div>
-        <EquityCurve points={bucketByHour(equityHistory)} />
-              </div>
+        <div className="equity-market-grid">
+          <div className="market-equity-card">
+            <div className="perf-label">Futures balance</div>
+            <div className="market-balance-value">${Number(balance?.futures_equity ?? 0).toFixed(2)}</div>
+            <EquityCurve points={bucketByHour(equityHistory)} market="Futures" valueKey="futures_equity" />
+          </div>
+          <div className="market-equity-card">
+            <div className="perf-label">Spot balance</div>
+            <div className="market-balance-value">${Number(balance?.spot_equity ?? 0).toFixed(2)}</div>
+            <EquityCurve points={bucketByHour(equityHistory)} market="Spot" valueKey="spot_equity" />
+          </div>
+        </div>
+      </div>
 
-              <div className="perf-row" style={{ gridTemplateColumns: "repeat(3, 1fr)", marginBottom: 24 }}>
+              <div className="perf-row" style={{ gridTemplateColumns: "repeat(2, 1fr)", marginBottom: 24 }}>
                 <div className="perf-cell">
                   <div className="perf-label">Futures equity</div>
                   <div className="perf-value">${Number(balance?.futures_equity ?? 0).toFixed(2)}</div>
@@ -356,10 +379,6 @@ export default function ControlCenterPanel() {
                 <div className="perf-cell">
                   <div className="perf-label">Spot equity</div>
                   <div className="perf-value">${Number(balance?.spot_equity ?? balance?.spot_usdt ?? 0).toFixed(2)}</div>
-                </div>
-                <div className="perf-cell">
-                  <div className="perf-label">Spot USDT</div>
-                  <div className="perf-value">${Number(balance?.spot_usdt ?? 0).toFixed(2)}</div>
                 </div>
               </div>
 

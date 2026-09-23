@@ -362,6 +362,8 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "balance": current_equity,
         "equity": current_equity,
+        "futures_equity": futures_equity,
+        "spot_equity": spot_equity,
     }
     _balance_history.append(snapshot)
     del _balance_history[:-1000]
@@ -403,6 +405,16 @@ def account_balance_history() -> dict[str, Any]:
                 "timestamp": point.get("timestamp") or point.get("created_at"),
                 "balance": float(point.get("balance", point.get("equity", 0)) or 0),
                 "equity": float(point.get("equity", point.get("balance", 0)) or 0),
+                "futures_equity": (
+                    float(point.get("futures_equity") or 0)
+                    if point.get("futures_equity") is not None
+                    else None
+                ),
+                "spot_equity": (
+                    float(point.get("spot_equity") or 0)
+                    if point.get("spot_equity") is not None
+                    else None
+                ),
             }
         )
 

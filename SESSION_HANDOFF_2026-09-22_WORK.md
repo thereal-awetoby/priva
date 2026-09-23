@@ -69,6 +69,8 @@ Date: 2026-09-22
 - The dashboard now displays Futures equity, Spot equity, and Spot USDT as separate subtotals.
 - Existing historical balance snapshots are not retroactively recalculated; the combined curve applies to new snapshots after deployment.
 - Combined-balance regression coverage passes. The metrics test file still contains two unrelated pre-existing failures involving daily baseline state and trade win-rate reconstruction.
+- The dashboard now renders separate Futures and Spot equity curves with separate latest balances; the combined current balance remains the headline total.
+- Spot's separate curve displays a waiting state until snapshots containing `spot_equity` exist, avoiding a misleading zero line from legacy combined-only snapshots.
 
 ## Session Purpose
 
