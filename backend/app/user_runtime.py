@@ -194,7 +194,7 @@ class UserRuntimeRegistry:
             close_on_signal_violation=bool(settings.get("close_on_signal_violation", True)),
             stop_event=asyncio.Event(),
             risk_settings=risk_settings,
-            profiles=self.normalize_profiles(
+            profiles=UserRuntime.normalize_profiles(
                 settings.get("execution_profiles"),
                 fallback_market=str(settings.get("market", "futures")),
                 strategy_id=strategy_id if settings.get("strategy_id") else None,
