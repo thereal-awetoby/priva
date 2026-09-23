@@ -217,6 +217,22 @@
 .balance-value{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 24px; margin: 12px 0 8px; }
 .balance-change{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 12px; }
 .equity-panel{ min-width: 0; }
+.equity-chart-head{ display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.equity-chart-head .panel-title{ margin-bottom: 10px; }
+.equity-timeframes{ display: flex; border: 1px solid var(--rule); }
+.equity-timeframes button{
+  border: 0;
+  border-right: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 10px;
+  padding: 5px 8px;
+}
+.equity-timeframes button:last-child{ border-right: 0; }
+.equity-timeframes button:hover{ color: var(--ink); }
+.equity-timeframes button.active{ background: var(--accent); color: var(--accent-ink); }
 .equity-chart{ display:block; height:200px; overflow:visible; }
 .equity-axis{ stroke: var(--rule); stroke-width: 1; }
 .equity-line{ fill:none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }

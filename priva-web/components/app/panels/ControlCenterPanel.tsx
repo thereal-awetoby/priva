@@ -15,20 +15,26 @@ type EquityPoint = {
   spot_equity?: number | null;
 };
 
-function bucketByHour(points: EquityPoint[]): EquityPoint[] {
+type ChartTimeframe = "hourly" | "daily" | "weekly" | "monthly";
+
+function bucketByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe): EquityPoint[] {
   const buckets = new Map<string, EquityPoint>();
 
   for (const point of points) {
     const iso = point.timestamp ?? point.created_at;
     if (!iso) continue;
     const date = new Date(iso);
-    // Key = year-month-day-hour, so every point within the same hour collapses together
-    const hourKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`;
+    const bucketKey = timeframe === "hourly"
+      ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`
+      : timeframe === "daily"
+        ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+        : timeframe === "weekly"
+          ? String(Math.floor(date.getTime() / (7 * 24 * 60 * 60 * 1000)))
+        : `${date.getFullYear()}-${date.getMonth()}`;
 
-    const existing = buckets.get(hourKey);
-    // Keep the LATEST snapshot within that hour (closest to "end of the hour")
+    const existing = buckets.get(bucketKey);
     if (!existing || new Date(iso).getTime() > new Date(existing.timestamp ?? existing.created_at ?? 0).getTime()) {
-      buckets.set(hourKey, point);
+      buckets.set(bucketKey, point);
     }
   }
 
@@ -48,6 +54,7 @@ function executionLabel(entry: ActivityEntry): string {
 }
 
 function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; market: "Futures" | "Spot"; valueKey: "futures_equity" | "spot_equity" }) {
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>("daily");
   const width = 720;
   const height = 220;
   const padding = { top: 12, right: 12, bottom: 28, left: 60 };
@@ -59,11 +66,11 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
     // balance endpoint (combined + per-market breakdowns). Without this filter,
     // legacy/worker snapshots would punch the Spot curve down to $0 and mix
     // combined totals into the Futures curve.
-    let chartPoints = points.filter((p) => p[valueKey] != null);
+    let chartPoints = bucketByTimeframe(points, timeframe).filter((p) => p[valueKey] != null);
     if (chartPoints.length === 0 && valueKey === "futures_equity") {
       // Legacy snapshots only stored the combined balance; fall back to it so
       // the Futures curve still renders before per-market fields exist.
-      chartPoints = points.filter((p) => p.balance != null || p.equity != null);
+      chartPoints = bucketByTimeframe(points, timeframe).filter((p) => p.balance != null || p.equity != null);
     }
 
     const hasMarketData = chartPoints.length > 0;
@@ -100,12 +107,32 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
   const formatTime = (iso: string) => {
     if (!iso) return "";
     const d = new Date(iso);
+    if (timeframe === "hourly") {
+      return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    }
+    if (timeframe === "monthly") {
+      return d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+    }
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
 
   return (
     <div className="equity-panel">
-      <div className="panel-title">{market} equity curve</div>
+      <div className="equity-chart-head">
+        <div className="panel-title">{market} equity curve</div>
+        <div className="equity-timeframes" role="group" aria-label={`${market} chart timeframe`}>
+          {(["hourly", "daily", "weekly", "monthly"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={timeframe === option ? "active" : ""}
+              onClick={() => setTimeframe(option)}
+            >
+              {option === "hourly" ? "1H" : option === "daily" ? "1D" : option === "weekly" ? "7D" : "1M"}
+            </button>
+          ))}
+        </div>
+      </div>
       {!hasMarketData || values.length < 2 ? (
         <p className="panel-lead equity-empty">Waiting for the next agent cycle.</p>
             ) : (
@@ -377,7 +404,7 @@ export default function ControlCenterPanel() {
             <div className={`balance-change ${(balance?.futures_daily_change ?? 0) >= 0 ? "up" : "down"}`}>
               {(balance?.futures_daily_change ?? 0) >= 0 ? "+" : ""}${Number(balance?.futures_daily_change ?? 0).toFixed(2)} today
             </div>
-            <EquityCurve points={bucketByHour(equityHistory)} market="Futures" valueKey="futures_equity" />
+            <EquityCurve points={equityHistory} market="Futures" valueKey="futures_equity" />
           </div>
           <div className="market-equity-card">
             <div className="perf-label">Spot balance</div>
@@ -385,7 +412,7 @@ export default function ControlCenterPanel() {
             <div className={`balance-change ${(balance?.spot_daily_change ?? 0) >= 0 ? "up" : "down"}`}>
               {(balance?.spot_daily_change ?? 0) >= 0 ? "+" : ""}${Number(balance?.spot_daily_change ?? 0).toFixed(2)} today
             </div>
-            <EquityCurve points={bucketByHour(equityHistory)} market="Spot" valueKey="spot_equity" />
+            <EquityCurve points={equityHistory} market="Spot" valueKey="spot_equity" />
           </div>
         </div>
       </div>
