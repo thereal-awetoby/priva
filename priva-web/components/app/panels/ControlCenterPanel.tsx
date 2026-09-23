@@ -18,21 +18,26 @@ type EquityPoint = {
 type ChartTimeframe = "hourly" | "daily" | "weekly" | "monthly";
 
 function filterByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe): EquityPoint[] {
+  const validPoints = points
+    .map((point) => ({ point, time: new Date(point.timestamp ?? point.created_at ?? 0).getTime() }))
+    .filter(({ time }) => Number.isFinite(time));
+  if (!validPoints.length) return [];
+
+  const settings = {
+    hourly: { windowMs: 60 * 60 * 1000, bucketMs: 60 * 1000 },
+    daily: { windowMs: 24 * 60 * 60 * 1000, bucketMs: 60 * 60 * 1000 },
+    weekly: { windowMs: 7 * 24 * 60 * 60 * 1000, bucketMs: 4 * 60 * 60 * 1000 },
+    monthly: { windowMs: 30 * 24 * 60 * 60 * 1000, bucketMs: 24 * 60 * 60 * 1000 },
+  }[timeframe];
+  const latestTime = Math.max(...validPoints.map(({ time }) => time));
+  const earliestTime = latestTime - settings.windowMs;
   const buckets = new Map<string, EquityPoint>();
 
-  for (const point of points) {
-    const iso = point.timestamp ?? point.created_at;
-    if (!iso) continue;
-    const date = new Date(iso);
-    const bucketKey = timeframe === "hourly"
-      ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`
-      : timeframe === "daily"
-        ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
-        : timeframe === "weekly"
-          ? String(Math.floor(date.getTime() / (7 * 24 * 60 * 60 * 1000)))
-          : `${date.getFullYear()}-${date.getMonth()}`;
+  for (const { point, time } of validPoints) {
+    if (time < earliestTime) continue;
+    const bucketKey = String(Math.floor(time / settings.bucketMs));
     const existing = buckets.get(bucketKey);
-    if (!existing || new Date(iso).getTime() > new Date(existing.timestamp ?? existing.created_at ?? 0).getTime()) {
+    if (!existing || time > new Date(existing.timestamp ?? existing.created_at ?? 0).getTime()) {
       buckets.set(bucketKey, point);
     }
   }
@@ -116,7 +121,7 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
     if (timeframe === "monthly") {
       return d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
     }
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
   };
 
   // Reset zoom/pan whenever the underlying dataset changes shape (timeframe
@@ -251,7 +256,7 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
                 x={xFor(i)}
                 y={height - padding.bottom + 18}
                 className="equity-axis-label"
-                textAnchor="middle"
+                textAnchor={i === 0 ? "start" : i === values.length - 1 ? "end" : "middle"}
               >
                 {formatTime(times[i])}
               </text>
@@ -302,7 +307,16 @@ export default function ControlCenterPanel() {
         setActivity(activityData.entries ?? []);
         setKillSwitchEnabled(killData.enabled ?? false);
         setBalance(balanceData);
-        setEquityHistory(historyData.points ?? []);
+        setEquityHistory([
+          ...(historyData.points ?? []),
+          {
+            timestamp: new Date().toISOString(),
+            balance: Number(balanceData.balance ?? balanceData.current_balance ?? 0),
+            equity: Number(balanceData.balance ?? balanceData.current_balance ?? 0),
+            futures_equity: balanceData.futures_equity != null ? Number(balanceData.futures_equity) : null,
+            spot_equity: balanceData.spot_equity != null ? Number(balanceData.spot_equity) : null,
+          },
+        ]);
         if (Array.isArray(settingsData.execution_profiles) && settingsData.execution_profiles.length) {
           const nextMarkets = settingsData.execution_profiles
             .map((profile: string) => profile.split(":")[1])
