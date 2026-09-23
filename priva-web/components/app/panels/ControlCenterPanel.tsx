@@ -54,13 +54,27 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
   const plotW = width - padding.left - padding.right;
   const plotH = height - padding.top - padding.bottom;
 
-  const hasMarketData = points.some((p) =>
-    valueKey === "futures_equity"
-      ? p[valueKey] != null || p.balance != null || p.equity != null
-      : p[valueKey] != null,
-  );
-  const values = points.map((p) => Number(p[valueKey] ?? (valueKey === "futures_equity" ? p.balance ?? p.equity ?? 0 : 0)));
-  const times = points.map((p) => p.timestamp ?? p.created_at ?? "");
+  // Only plot points that carry a real value for this market. Snapshots are
+    // written by two sources: the agent worker (combined balance only) and the
+    // balance endpoint (combined + per-market breakdowns). Without this filter,
+    // legacy/worker snapshots would punch the Spot curve down to $0 and mix
+    // combined totals into the Futures curve.
+    let chartPoints = points.filter((p) => p[valueKey] != null);
+    if (chartPoints.length === 0 && valueKey === "futures_equity") {
+      // Legacy snapshots only stored the combined balance; fall back to it so
+      // the Futures curve still renders before per-market fields exist.
+      chartPoints = points.filter((p) => p.balance != null || p.equity != null);
+    }
+
+    const hasMarketData = chartPoints.length > 0;
+    const values = chartPoints.map((p) =>
+      Number(
+        valueKey === "futures_equity" && p[valueKey] == null
+          ? p.balance ?? p.equity ?? 0
+          : p[valueKey],
+      ),
+    );
+    const times = chartPoints.map((p) => p.timestamp ?? p.created_at ?? "");
 
   const min = values.length ? Math.min(...values) : 0;
   const max = values.length ? Math.max(...values) : 1;

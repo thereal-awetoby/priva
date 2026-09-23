@@ -425,18 +425,10 @@ table.positions tr:last-child td{ border-bottom:none; }
   max-width: 640px;
 }
 
-.form-field{ margin-bottom: 18px; }
-.form-field:last-child{ margin-bottom: 0; }
+/* .form-field, .form-label, .form-input and .form-hint live in globals.css
+   so the landing-page login modal and the app share one source of truth. */
 
-.form-label{
-  display: block;
-  font-family: var(--font-ibm-plex-mono), monospace;
-  font-size: 11.5px;
-  color: var(--ink-faint);
-  margin-bottom: 8px;
-}
-
-.form-textarea, .form-input{
+.form-textarea{
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--rule);
@@ -444,14 +436,12 @@ table.positions tr:last-child td{ border-bottom:none; }
   font-family: var(--font-libre-caslon), Georgia, serif;
   font-size: 14px;
   padding: 11px 13px;
-}
-.form-textarea{
   min-height: 110px;
   resize: vertical;
   line-height: 1.5;
 }
-.form-textarea::placeholder, .form-input::placeholder{ color: var(--ink-faint); }
-.form-textarea:focus, .form-input:focus{ outline: none; border-color: var(--accent); }
+.form-textarea::placeholder{ color: var(--ink-faint); }
+.form-textarea:focus{ outline: none; border-color: var(--accent); }
 
 .form-row-split{
   display: grid;

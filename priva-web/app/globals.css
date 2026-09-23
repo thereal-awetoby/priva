@@ -607,6 +607,40 @@ a{ color: inherit; }
   width: 100%;
 }
 
+/* ---------- Shared form controls ----------
+   Used by the login modal on the landing page and by the app
+   panels (app.css no longer duplicates these). */
+
+.form-field{ margin-bottom: 18px; }
+.form-field:last-child{ margin-bottom: 0; }
+
+.form-label{
+  display: block;
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  margin-bottom: 8px;
+}
+
+.form-input{
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  font-family: var(--font-libre-caslon), Georgia, serif;
+  font-size: 14px;
+  padding: 11px 13px;
+}
+.form-input::placeholder{ color: var(--ink-faint); }
+.form-input:focus{ outline: none; border-color: var(--accent); }
+
+.form-hint{
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-top: 8px;
+}
+
 .auth-switch{
   display: block;
   margin: 0 auto 22px;
