@@ -20,6 +20,9 @@ class Decision:
     take_profit_pct: float | None = None
     stop_loss_pct: float | None = None
     market: Literal["spot", "futures"] | None = None
+    trailing_profit_trigger_usd: float | None = None
+    trailing_profit_floor_usd: float | None = None
+    trailing_profit_lock_pct: float | None = None
 
 
 def _adaptive_leverage(signal_strength: float) -> float:
@@ -697,6 +700,21 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
 
     take_profit_pct = payload.get("take_profit_pct", payload.get("take_profit"))
     stop_loss_pct = payload.get("stop_loss_pct", payload.get("stop_loss"))
+    trailing_profit_trigger_usd = payload.get("trailing_profit_trigger_usd")
+    trailing_profit_floor_usd = payload.get("trailing_profit_floor_usd")
+    trailing_profit_lock_pct = payload.get("trailing_profit_lock_pct")
+    if trailing_profit_trigger_usd is not None or trailing_profit_floor_usd is not None:
+        if trailing_profit_trigger_usd is None or trailing_profit_floor_usd is None:
+            raise ValueError("trailing profit trigger and floor must be provided together")
+        try:
+            trailing_profit_trigger_usd = float(trailing_profit_trigger_usd)
+            trailing_profit_floor_usd = float(trailing_profit_floor_usd)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("trailing profit values must be numeric") from exc
+        if trailing_profit_trigger_usd <= 0 or trailing_profit_floor_usd <= 0:
+            raise ValueError("trailing profit values must be greater than zero")
+        if trailing_profit_floor_usd >= trailing_profit_trigger_usd:
+            raise ValueError("trailing profit floor must be below its trigger")
     market = payload.get("market")
     if market is not None:
         market = str(market).strip().lower()
@@ -715,6 +733,17 @@ def parse_structured_strategy(payload: dict[str, Any]) -> dict[str, Any]:
         result["take_profit_pct"] = float(take_profit_pct)
     if stop_loss_pct is not None:
         result["stop_loss_pct"] = float(stop_loss_pct)
+    if trailing_profit_trigger_usd is not None:
+        result["trailing_profit_trigger_usd"] = trailing_profit_trigger_usd
+        result["trailing_profit_floor_usd"] = trailing_profit_floor_usd
+    if trailing_profit_lock_pct is not None:
+        try:
+            trailing_profit_lock_pct = float(trailing_profit_lock_pct)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("trailing_profit_lock_pct must be numeric") from exc
+        if trailing_profit_lock_pct <= 0 or trailing_profit_lock_pct >= 100:
+            raise ValueError("trailing_profit_lock_pct must be between 0 and 100")
+        result["trailing_profit_lock_pct"] = trailing_profit_lock_pct
     if market is not None:
         result["market"] = market
     return result
@@ -771,6 +800,9 @@ def register_custom_strategy(
     leverage = float(parsed_strategy.get("leverage", 1.0) or 1.0)
     take_profit_pct = parsed_strategy.get("take_profit_pct")
     stop_loss_pct = parsed_strategy.get("stop_loss_pct")
+    trailing_profit_trigger_usd = parsed_strategy.get("trailing_profit_trigger_usd")
+    trailing_profit_floor_usd = parsed_strategy.get("trailing_profit_floor_usd")
+    trailing_profit_lock_pct = parsed_strategy.get("trailing_profit_lock_pct")
     market = parsed_strategy.get("market")
 
     def custom_strategy(ticker: dict[str, Any]) -> Decision:
@@ -800,8 +832,10 @@ def register_custom_strategy(
                     take_profit_pct,
                     stop_loss_pct,
                     market,
+                    trailing_profit_trigger_usd,
+                    trailing_profit_floor_usd,
                 )
-            return Decision("hold", 0.0, 1.0, f"custom strategy: price not yet above {comparison} by {threshold_pct}%")
+            return Decision("hold", 0.0, 1.0, f"custom strategy: price not yet above {comparison} by {threshold_pct}%", 0.0, take_profit_pct, stop_loss_pct, market, trailing_profit_trigger_usd, trailing_profit_floor_usd, trailing_profit_lock_pct)
 
         if deviation <= -threshold:
             strength = min(1.0, max(0.0, abs(deviation) / max(threshold, 0.01)))
@@ -814,9 +848,13 @@ def register_custom_strategy(
                 take_profit_pct,
                 stop_loss_pct,
                 market,
+                trailing_profit_trigger_usd,
+                trailing_profit_floor_usd,
+                    trailing_profit_lock_pct,
+                trailing_profit_lock_pct,
             )
 
-        return Decision("hold", 0.0, 1.0, f"custom strategy: price not yet below {comparison} by {threshold_pct}%")
+        return Decision("hold", 0.0, 1.0, f"custom strategy: price not yet below {comparison} by {threshold_pct}%", 0.0, take_profit_pct, stop_loss_pct, market, trailing_profit_trigger_usd, trailing_profit_floor_usd, trailing_profit_lock_pct)
 
     STRATEGIES[strategy_id] = custom_strategy
     _registered_strategy_catalog[strategy_id] = {
@@ -825,6 +863,15 @@ def register_custom_strategy(
         "type": "structured",
         "description": description or f"Custom {action} signal using {comparison} comparison with a {threshold_pct}% threshold.",
     }
+
+
+def unregister_custom_strategy(strategy_id: str) -> bool:
+    definition = _registered_strategy_catalog.get(strategy_id)
+    if not definition or definition.get("type") != "structured":
+        return False
+    STRATEGIES.pop(strategy_id, None)
+    _registered_strategy_catalog.pop(strategy_id, None)
+    return True
 
 
 def build_signal_from_ticker(ticker: dict[str, Any], strategy_id: str | None = None) -> dict[str, Any]:

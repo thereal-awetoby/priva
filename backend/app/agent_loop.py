@@ -17,8 +17,11 @@ LOOP_INTERVAL_SECONDS = int(os.getenv("AGENT_LOOP_INTERVAL_SECONDS", "300"))
 MARKET_TYPE = os.getenv("AGENT_MARKET_TYPE", "futures").strip().lower()
 if MARKET_TYPE not in {"spot", "futures"}:
     MARKET_TYPE = "futures"
-TAKE_PROFIT_PCT = float(os.getenv("AGENT_TAKE_PROFIT_PCT", "5"))
+TAKE_PROFIT_PCT = float(os.getenv("AGENT_TAKE_PROFIT_PCT", "3.5"))
 STOP_LOSS_PCT = float(os.getenv("AGENT_STOP_LOSS_PCT", "2"))
+TRAILING_PROFIT_TRIGGER_USD = float(os.getenv("AGENT_TRAILING_PROFIT_TRIGGER_USD", "30"))
+TRAILING_PROFIT_FLOOR_USD = float(os.getenv("AGENT_TRAILING_PROFIT_FLOOR_USD", "20"))
+TRAILING_PROFIT_LOCK_PCT = float(os.getenv("AGENT_TRAILING_PROFIT_LOCK_PCT", "30"))
 CLOSE_ON_SIGNAL_VIOLATION = os.getenv("AGENT_CLOSE_ON_SIGNAL_VIOLATION", "true").lower() == "true"
 WATCHED_SYMBOLS = [
     symbol.strip().upper()
@@ -33,6 +36,7 @@ _loop_task: asyncio.Task | None = None
 _stop_event = asyncio.Event()
 _recent_cycles: list[dict[str, Any]] = []
 _recent_balance_snapshots: list[dict[str, Any]] = []
+_profit_peaks: dict[tuple[str, str, str, float], float] = {}
 
 
 def _record_cycle(entry: dict[str, Any]) -> None:
@@ -46,6 +50,40 @@ def recent_cycles() -> list[dict[str, Any]]:
 
 def recent_balance_snapshots() -> list[dict[str, Any]]:
     return list(_recent_balance_snapshots)
+
+
+def _trailing_profit_exit_reason(
+    symbol: str,
+    market: str,
+    live_position: dict[str, Any],
+    decision: dict[str, Any],
+    cycle_logger: Any | None,
+) -> str | None:
+    trigger = decision.get("trailing_profit_trigger_usd") or TRAILING_PROFIT_TRIGGER_USD
+    floor = decision.get("trailing_profit_floor_usd") or TRAILING_PROFIT_FLOOR_USD
+    lock_pct = decision.get("trailing_profit_lock_pct")
+    if lock_pct is None and decision.get("trailing_profit_trigger_usd") is None and decision.get("trailing_profit_floor_usd") is None:
+        lock_pct = TRAILING_PROFIT_LOCK_PCT
+
+    entry_price = float(live_position.get("entry_price", 0) or 0)
+    current_profit = float(live_position.get("unrealized_pnl", 0) or 0)
+    key = (
+        str(getattr(cycle_logger, "user_id", "local-development")),
+        symbol.upper(),
+        market,
+        round(entry_price, 8),
+    )
+    _profit_peaks[key] = max(_profit_peaks.get(key, current_profit), current_profit)
+    if lock_pct is None:
+        if _profit_peaks[key] >= float(trigger) and current_profit <= float(floor):
+            return "trailing_profit_floor"
+        return None
+    if current_profit <= 0:
+        return None
+    protected_profit = _profit_peaks[key] * float(lock_pct) / 100.0
+    if current_profit <= protected_profit:
+        return "trailing_profit_lock"
+    return None
 
 
 def configure_watched_symbols(symbols: list[str]) -> list[str]:
@@ -369,7 +407,7 @@ async def run_cycle(
                 )
                 take_profit = float(decision.get("take_profit_pct") or take_profit_pct or TAKE_PROFIT_PCT)
                 stop_loss = float(decision.get("stop_loss_pct") or stop_loss_pct or STOP_LOSS_PCT)
-                exit_reason = "take_profit" if price_change_pct >= take_profit else "stop_loss" if price_change_pct <= -stop_loss else None
+                exit_reason = "take_profit" if price_change_pct >= take_profit else "stop_loss" if price_change_pct <= -stop_loss else _trailing_profit_exit_reason(symbol, exit_market, live_position, decision, cycle_logger)
                 if exit_reason:
                     close_result = await asyncio.to_thread(
                         _close_live_position,
@@ -452,7 +490,9 @@ async def run_cycle(
                     exit_reason = "take_profit"
                 elif price_change_pct <= -stop_loss:
                     exit_reason = "stop_loss"
-                elif (CLOSE_ON_SIGNAL_VIOLATION if close_on_signal_violation is None else close_on_signal_violation) and opposite_signal:
+                else:
+                    exit_reason = _trailing_profit_exit_reason(symbol, selected_market, live_position, decision, cycle_logger)
+                if exit_reason is None and (CLOSE_ON_SIGNAL_VIOLATION if close_on_signal_violation is None else close_on_signal_violation) and opposite_signal:
                     exit_reason = "signal_violation"
 
                 if exit_reason:

@@ -429,3 +429,25 @@ class SupabaseCycleLogger:
         except (requests.RequestException, ValueError) as exc:
             logger.warning("Supabase custom strategy read failed: %s", exc)
             return []
+
+    def delete_custom_strategy(self, user_id: str, strategy_id: str) -> dict[str, Any]:
+        if not self.configured:
+            return {"status": "not_configured"}
+        try:
+            response = self.session.delete(
+                f"{self.url}/rest/v1/custom_strategies",
+                headers={
+                    "apikey": self.service_role_key,
+                    "Authorization": f"Bearer {self.service_role_key}",
+                },
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "strategy_id": f"eq.{strategy_id}",
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            return {"status": "deleted"}
+        except requests.RequestException as exc:
+            logger.warning("Supabase custom strategy delete failed: %s", exc)
+            return {"status": "error", "message": str(exc)}

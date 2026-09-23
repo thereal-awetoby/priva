@@ -26,6 +26,7 @@ from app.strategy import (
     parse_natural_language_strategy,
     parse_structured_strategy,
     register_custom_strategy,
+    unregister_custom_strategy,
 )
 from app import agent_loop
 from app.supabase_logging import SupabaseCycleLogger
@@ -210,7 +211,7 @@ class AgentSettingsRequest(BaseModel):
 
 class UserAgentSettingsRequest(BaseModel):
     market: Literal["spot", "futures", "autonomous"] = "futures"
-    take_profit_pct: float = 5
+    take_profit_pct: float = 3.5
     stop_loss_pct: float = 2
     close_on_signal_violation: bool = True
     symbols: list[str] | None = None
@@ -1213,6 +1214,37 @@ def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | Non
         "strategy_config": strategy_config or {},
         "persistence": persistence["status"],
     }
+
+
+@app.delete("/strategies/{strategy_id}")
+def delete_strategy(strategy_id: str, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    if not isinstance(user, AuthenticatedUser):
+        user = AuthenticatedUser("local-development")
+    restore_custom_strategies(user.id)
+    definition = list_strategy_catalog().get(strategy_id)
+    if not definition or definition.get("type") != "structured":
+        return {"strategy_id": strategy_id, "status": "rejected", "message": "only custom strategies can be deleted"}
+
+    runtime = user_runtime_registry.get(user.id)
+    active_strategy_id = runtime.strategy_id if runtime else get_active_strategy_id()
+    if active_strategy_id == strategy_id:
+        return {
+            "strategy_id": strategy_id,
+            "status": "rejected",
+            "message": "activate another strategy before deleting this one",
+        }
+
+    logger = SupabaseCycleLogger(user_id=user.id)
+    persistence = logger.delete_custom_strategy(user.id, strategy_id)
+    if logger.configured and persistence["status"] != "deleted":
+        return {
+            "strategy_id": strategy_id,
+            "status": "rejected",
+            "message": "custom strategy could not be deleted",
+        }
+
+    unregister_custom_strategy(strategy_id)
+    return {"strategy_id": strategy_id, "status": "deleted", "persistence": persistence["status"]}
 
 
 @app.post("/strategies/{strategy_id}/backtest")

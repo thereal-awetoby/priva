@@ -203,7 +203,7 @@ class UserRuntimeRegistry:
             symbols=symbols,
             strategy_id=strategy_id,
             strategy_by_symbol=settings.get("strategy_by_symbol") if isinstance(settings.get("strategy_by_symbol"), dict) else {},
-            take_profit_pct=float(settings.get("take_profit_pct", 5)),
+            take_profit_pct=float(settings.get("take_profit_pct", 3.5)),
             stop_loss_pct=float(settings.get("stop_loss_pct", 2)),
             close_on_signal_violation=bool(settings.get("close_on_signal_violation", True)),
             stop_event=asyncio.Event(),

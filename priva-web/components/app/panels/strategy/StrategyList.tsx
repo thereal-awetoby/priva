@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPost } from "@/lib/api";
 
 type Strategy = Record<string, any>;
 
@@ -15,6 +15,7 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
   const [error, setError] = useState<string | null>(null);
   const [activating, setActivating] = useState(false);
   const [activateResult, setActivateResult] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     apiGet<any>("/strategies")
@@ -66,6 +67,24 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
       setActivateResult(`Couldn't activate: ${err.message}`);
     } finally {
       setActivating(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!selected || selected.type !== "structured") return;
+    if (!window.confirm(`Delete "${selected.name}"? This cannot be undone.`)) return;
+
+    setDeleting(true);
+    setActivateResult(null);
+    try {
+      await apiDelete(`/strategies/${selected.id}`);
+      const remaining = strategies.filter((strategy) => strategy.id !== selected.id);
+      setStrategies(remaining);
+      setSelectedId(remaining[0]?.id ?? null);
+    } catch (err: any) {
+      setActivateResult(`Couldn't delete: ${err.message}`);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -163,6 +182,16 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
               <div className="form-hint" style={{ marginTop: "12px" }}>
                 {activateResult}
               </div>
+            )}
+            {selected.type === "structured" && (
+              <button
+                className="btn btn-danger"
+                onClick={handleDelete}
+                disabled={deleting || selected.status === "active"}
+                style={{ width: "100%", textAlign: "center", display: "block", marginTop: "10px" }}
+              >
+                {deleting ? "Deleting…" : "Delete custom strategy"}
+              </button>
             )}
           </div>
         ) : (
