@@ -406,7 +406,16 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
 def account_balance_history(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user_logger = cycle_logger_for(user)
     persisted = user_logger.fetch_balance_snapshots()
-    points = persisted or agent_loop.recent_balance_snapshots() or list(_balance_history)
+    runtime_points = agent_loop.recent_balance_snapshots() + list(_balance_history)
+    points_by_timestamp = {
+        point.get("timestamp") or point.get("created_at"): point
+        for point in [*persisted, *runtime_points]
+        if point.get("timestamp") or point.get("created_at")
+    }
+    points = sorted(
+        points_by_timestamp.values(),
+        key=lambda point: point.get("timestamp") or point.get("created_at") or "",
+    )
     if not points:
         return {"status": "ok", "points": [], "starting_balance": 0.0, "latest_balance": 0.0, "point_count": 0}
 
