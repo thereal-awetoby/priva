@@ -48,9 +48,8 @@ function executionLabel(entry: ActivityEntry): string {
 }
 
 function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; market: "Futures" | "Spot"; valueKey: "futures_equity" | "spot_equity" }) {
-  const pointWidth = 40; // pixels per data point — controls how "zoomed in" the chart is
-  const width = Math.max(720, points.length * pointWidth);
-  const height = 200;
+  const width = 720;
+  const height = 220;
   const padding = { top: 12, right: 12, bottom: 28, left: 60 };
   const plotW = width - padding.left - padding.right;
   const plotH = height - padding.top - padding.bottom;
@@ -100,7 +99,7 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
         <svg
           className="equity-chart"
           viewBox={`0 0 ${width} ${height}`}
-          style={{ width: `${width}px`, height: `${height}px` }}
+          style={{ width: "100%", height: `${height}px` }}
           role="img"
           aria-label="Balance over time"
         >

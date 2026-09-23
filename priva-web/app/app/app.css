@@ -225,9 +225,8 @@
 .equity-line{ fill:none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .equity-empty{ margin: 36px 0 0; }
 .equity-scroll{
-  overflow-x: auto;
-  overflow-y: auto;
-  max-height: 220px;
+  overflow: hidden;
+  max-height: 240px;
 }
 .equity-scroll::-webkit-scrollbar{ height: 8px; width: 8px; }
 .equity-scroll::-webkit-scrollbar-thumb{ background: var(--rule); }
