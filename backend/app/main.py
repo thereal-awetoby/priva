@@ -355,8 +355,14 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
         if today_points
         else current_equity
     )
+    first_futures_point = next((point for point in today_points if point.get("futures_equity") is not None), None)
+    first_spot_point = next((point for point in today_points if point.get("spot_equity") is not None), None)
+    starting_futures_equity = float(first_futures_point["futures_equity"]) if first_futures_point else futures_equity
+    starting_spot_equity = float(first_spot_point["spot_equity"]) if first_spot_point else spot_equity
     daily_change = round(current_equity - starting_balance, 4)
     daily_change_pct = round((daily_change / starting_balance) * 100, 4) if starting_balance else 0.0
+    futures_daily_change = round(futures_equity - starting_futures_equity, 4)
+    spot_daily_change = round(spot_equity - starting_spot_equity, 4)
 
     snapshot = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -377,6 +383,10 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
         "balance": current_equity,
         "daily_change": daily_change,
         "daily_change_pct": daily_change_pct,
+        "futures_daily_change": futures_daily_change,
+        "futures_daily_change_pct": round((futures_daily_change / starting_futures_equity) * 100, 4) if starting_futures_equity else 0.0,
+        "spot_daily_change": spot_daily_change,
+        "spot_daily_change_pct": round((spot_daily_change / starting_spot_equity) * 100, 4) if starting_spot_equity else 0.0,
         "futures_equity": futures_equity,
         "spot_usdt": spot_balance,
         "spot_equity": spot_equity,

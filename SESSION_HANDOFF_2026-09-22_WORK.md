@@ -71,6 +71,8 @@ Date: 2026-09-22
 - Combined-balance regression coverage passes. The metrics test file still contains two unrelated pre-existing failures involving daily baseline state and trade win-rate reconstruction.
 - The dashboard now renders separate Futures and Spot equity curves with separate latest balances; the combined current balance remains the headline total.
 - Spot's separate curve displays a waiting state until snapshots containing `spot_equity` exist, avoiding a misleading zero line from legacy combined-only snapshots.
+- Fixed zero per-market daily changes by persisting `futures_equity` and `spot_equity` in `balance_snapshots` and selecting the first valid market snapshot as each baseline.
+- Apply the updated `backend/add_execution_profiles.sql` (or the corresponding `balance_snapshots` additions in `backend/supabase_multi_user.sql`) before deployment, then deploy both services.
 
 ## Session Purpose
 

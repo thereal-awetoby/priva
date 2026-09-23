@@ -361,11 +361,17 @@ export default function ControlCenterPanel() {
           <div className="market-equity-card">
             <div className="perf-label">Futures balance</div>
             <div className="market-balance-value">${Number(balance?.futures_equity ?? 0).toFixed(2)}</div>
+            <div className={`balance-change ${(balance?.futures_daily_change ?? 0) >= 0 ? "up" : "down"}`}>
+              {(balance?.futures_daily_change ?? 0) >= 0 ? "+" : ""}${Number(balance?.futures_daily_change ?? 0).toFixed(2)} today
+            </div>
             <EquityCurve points={bucketByHour(equityHistory)} market="Futures" valueKey="futures_equity" />
           </div>
           <div className="market-equity-card">
             <div className="perf-label">Spot balance</div>
             <div className="market-balance-value">${Number(balance?.spot_equity ?? 0).toFixed(2)}</div>
+            <div className={`balance-change ${(balance?.spot_daily_change ?? 0) >= 0 ? "up" : "down"}`}>
+              {(balance?.spot_daily_change ?? 0) >= 0 ? "+" : ""}${Number(balance?.spot_daily_change ?? 0).toFixed(2)} today
+            </div>
             <EquityCurve points={bucketByHour(equityHistory)} market="Spot" valueKey="spot_equity" />
           </div>
         </div>

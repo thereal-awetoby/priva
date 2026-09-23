@@ -72,6 +72,8 @@ class SupabaseCycleLogger:
             "session_id": self.session_id,
             "balance": float(snapshot.get("balance", 0) or 0),
             "equity": float(snapshot.get("equity", 0) or 0),
+            "futures_equity": float(snapshot.get("futures_equity", 0) or 0),
+            "spot_equity": float(snapshot.get("spot_equity", 0) or 0),
         }
         if self.user_id:
             record["user_id"] = self.user_id
@@ -104,7 +106,7 @@ class SupabaseCycleLogger:
             return []
         try:
             params = {
-                "select": "created_at,balance,equity",
+                "select": "created_at,balance,equity,futures_equity,spot_equity",
                 "order": "created_at.asc",
                 "limit": min(limit, 1000),
             }
