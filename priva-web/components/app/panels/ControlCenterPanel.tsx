@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useRef, useState, useEffect } from "react";
 import { apiGet, apiPost } from "@/lib/api";
 import { timeAgo, cleanSymbol } from "@/lib/format";
 
@@ -17,28 +17,24 @@ type EquityPoint = {
 
 type ChartTimeframe = "hourly" | "daily" | "weekly" | "monthly";
 
-function bucketByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe): EquityPoint[] {
-  const buckets = new Map<string, EquityPoint>();
+function filterByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe): EquityPoint[] {
+  const validPoints = points.filter((point) => point.timestamp ?? point.created_at);
+  if (!validPoints.length) return [];
 
-  for (const point of points) {
-    const iso = point.timestamp ?? point.created_at;
-    if (!iso) continue;
-    const date = new Date(iso);
-    const bucketKey = timeframe === "hourly"
-      ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`
-      : timeframe === "daily"
-        ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
-        : timeframe === "weekly"
-          ? String(Math.floor(date.getTime() / (7 * 24 * 60 * 60 * 1000)))
-        : `${date.getFullYear()}-${date.getMonth()}`;
+  const latestTime = Math.max(...validPoints.map((point) => new Date(point.timestamp ?? point.created_at ?? 0).getTime()));
+  const rangeMs = timeframe === "hourly"
+    ? 60 * 60 * 1000
+    : timeframe === "daily"
+      ? 24 * 60 * 60 * 1000
+      : timeframe === "weekly"
+        ? 7 * 24 * 60 * 60 * 1000
+        : 30 * 24 * 60 * 60 * 1000;
+  const earliestTime = latestTime - rangeMs;
 
-    const existing = buckets.get(bucketKey);
-    if (!existing || new Date(iso).getTime() > new Date(existing.timestamp ?? existing.created_at ?? 0).getTime()) {
-      buckets.set(bucketKey, point);
-    }
-  }
-
-  return Array.from(buckets.values()).sort((a, b) => {
+  return validPoints.filter((point) => {
+    const pointTime = new Date(point.timestamp ?? point.created_at ?? 0).getTime();
+    return pointTime >= earliestTime;
+  }).sort((a, b) => {
     const aTime = new Date(a.timestamp ?? a.created_at ?? 0).getTime();
     const bTime = new Date(b.timestamp ?? b.created_at ?? 0).getTime();
     return aTime - bTime;
@@ -54,9 +50,12 @@ function executionLabel(entry: ActivityEntry): string {
 }
 
 function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; market: "Futures" | "Spot"; valueKey: "futures_equity" | "spot_equity" }) {
-  const [timeframe, setTimeframe] = useState<ChartTimeframe>("daily");
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>("hourly");
   const [zoom, setZoom] = useState(1);
-  const width = 720 * zoom;
+  const [isPanning, setIsPanning] = useState(false);
+  const chartRef = useRef<HTMLDivElement>(null);
+  const panRef = useRef({ startX: 0, startScrollLeft: 0 });
+  const width = 720;
   const height = 260;
   const padding = { top: 12, right: 12, bottom: 28, left: 60 };
   const plotW = width - padding.left - padding.right;
@@ -67,11 +66,11 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
     // balance endpoint (combined + per-market breakdowns). Without this filter,
     // legacy/worker snapshots would punch the Spot curve down to $0 and mix
     // combined totals into the Futures curve.
-    let chartPoints = bucketByTimeframe(points, timeframe).filter((p) => p[valueKey] != null);
+    let chartPoints = filterByTimeframe(points, timeframe).filter((p) => p[valueKey] != null);
     if (chartPoints.length === 0 && valueKey === "futures_equity") {
       // Legacy snapshots only stored the combined balance; fall back to it so
       // the Futures curve still renders before per-market fields exist.
-      chartPoints = bucketByTimeframe(points, timeframe).filter((p) => p.balance != null || p.equity != null);
+      chartPoints = filterByTimeframe(points, timeframe).filter((p) => p.balance != null || p.equity != null);
     }
 
     const hasMarketData = chartPoints.length > 0;
@@ -109,12 +108,56 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
     if (!iso) return "";
     const d = new Date(iso);
     if (timeframe === "hourly") {
-      return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
     }
     if (timeframe === "monthly") {
       return d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
     }
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+
+  const handleChartWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    if (event.shiftKey) {
+      event.preventDefault();
+      chart.scrollLeft += event.deltaY;
+      return;
+    }
+
+    event.preventDefault();
+    const pointerX = event.clientX - chart.getBoundingClientRect().left;
+    const oldScale = zoom;
+    const nextScale = Math.min(4, Math.max(1, oldScale * Math.exp(-event.deltaY * 0.002)));
+    if (nextScale === oldScale) return;
+
+    const contentX = chart.scrollLeft + pointerX;
+    setZoom(nextScale);
+    requestAnimationFrame(() => {
+      chart.scrollLeft = contentX * (nextScale / oldScale) - pointerX;
+    });
+  };
+
+  const handleChartPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    const chart = chartRef.current;
+    if (!chart) return;
+    panRef.current = { startX: event.clientX, startScrollLeft: chart.scrollLeft };
+    chart.setPointerCapture(event.pointerId);
+    setIsPanning(true);
+  };
+
+  const handleChartPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const chart = chartRef.current;
+    if (!chart || !isPanning) return;
+    chart.scrollLeft = panRef.current.startScrollLeft - (event.clientX - panRef.current.startX);
+  };
+
+  const stopChartPanning = (event: React.PointerEvent<HTMLDivElement>) => {
+    const chart = chartRef.current;
+    if (chart?.hasPointerCapture(event.pointerId)) chart.releasePointerCapture(event.pointerId);
+    setIsPanning(false);
   };
 
   return (
@@ -134,21 +177,24 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
               </button>
             ))}
           </div>
-          <div className="equity-zoom" role="group" aria-label={`${market} chart zoom`}>
-            <button type="button" onClick={() => setZoom((value) => Math.max(1, value - 0.5))} aria-label="Zoom out" title="Zoom out">−</button>
-            <button type="button" onClick={() => setZoom(1)} aria-label="Reset zoom" title="Reset zoom">{zoom}x</button>
-            <button type="button" onClick={() => setZoom((value) => Math.min(3, value + 0.5))} aria-label="Zoom in" title="Zoom in">+</button>
-          </div>
         </div>
       </div>
       {!hasMarketData || values.length < 2 ? (
         <p className="panel-lead equity-empty">Waiting for the next agent cycle.</p>
             ) : (
-        <div className="equity-scroll">
+        <div
+          ref={chartRef}
+          className={`equity-scroll${isPanning ? " is-panning" : ""}`}
+          onWheel={handleChartWheel}
+          onPointerDown={handleChartPointerDown}
+          onPointerMove={handleChartPointerMove}
+          onPointerUp={stopChartPanning}
+          onPointerCancel={stopChartPanning}
+        >
         <svg
           className="equity-chart"
           viewBox={`0 0 ${width} ${height}`}
-          style={{ width: zoom === 1 ? "100%" : `${width}px`, height: `${height}px` }}
+          style={{ width: `${zoom * 100}%`, height: `${height}px` }}
           role="img"
           aria-label="Balance over time"
         >
@@ -243,7 +289,7 @@ export default function ControlCenterPanel() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 30 * 1000);
+    const interval = setInterval(loadData, 15 * 1000);
     return () => clearInterval(interval);
   }, []);
 

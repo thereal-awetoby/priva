@@ -403,8 +403,9 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
 
 
 @app.get("/account/balance-history")
-def account_balance_history() -> dict[str, Any]:
-    persisted = cycle_logger.fetch_balance_snapshots()
+def account_balance_history(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user_logger = cycle_logger_for(user)
+    persisted = user_logger.fetch_balance_snapshots()
     points = persisted or agent_loop.recent_balance_snapshots() or list(_balance_history)
     if not points:
         return {"status": "ok", "points": [], "starting_balance": 0.0, "latest_balance": 0.0, "point_count": 0}

@@ -234,20 +234,6 @@
 .equity-timeframes button:last-child{ border-right: 0; }
 .equity-timeframes button:hover{ color: var(--ink); }
 .equity-timeframes button.active{ background: var(--accent); color: var(--accent-ink); }
-.equity-zoom{ display: flex; border: 1px solid var(--rule); }
-.equity-zoom button{
-  min-width: 28px;
-  border: 0;
-  border-right: 1px solid var(--rule);
-  background: transparent;
-  color: var(--ink-dim);
-  cursor: pointer;
-  font-family: var(--font-ibm-plex-mono), monospace;
-  font-size: 11px;
-  padding: 5px 7px;
-}
-.equity-zoom button:last-child{ border-right: 0; }
-.equity-zoom button:hover{ color: var(--ink); background: var(--bg-raised); }
 .equity-chart{ display:block; height:200px; overflow:visible; }
 .equity-axis{ stroke: var(--rule); stroke-width: 1; }
 .equity-line{ fill:none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
@@ -256,10 +242,13 @@
   overflow-x: auto;
   overflow-y: auto;
   max-height: 280px;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  cursor: grab;
+  touch-action: none;
 }
-.equity-scroll::-webkit-scrollbar{ height: 8px; width: 8px; }
-.equity-scroll::-webkit-scrollbar-thumb{ background: var(--rule); }
-.equity-scroll::-webkit-scrollbar-track{ background: var(--bg-sunken); }
+.equity-scroll::-webkit-scrollbar{ display: none; }
+.equity-scroll.is-panning{ cursor: grabbing; }
 .equity-gridline{ stroke: var(--rule-soft); stroke-width: 1; }
 .equity-axis-label{
   font-family: var(--font-ibm-plex-mono), monospace;
