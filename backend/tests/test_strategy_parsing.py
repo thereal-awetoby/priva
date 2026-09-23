@@ -1,6 +1,6 @@
 from app.main import parse_strategy as parse_strategy_endpoint
 from app import main
-from app.strategy import STRATEGY_CATALOG, build_pairs_signal, build_signal_from_ticker, configure_symbol_strategies, get_active_strategy_id, list_strategy_catalog, parse_natural_language_strategy, parse_structured_strategy, register_custom_strategy, activate_strategy
+from app.strategy import STRATEGY_CATALOG, build_pairs_signal, build_signal_from_ticker, configure_builtin_strategy, configure_symbol_strategies, get_active_strategy_id, list_strategy_catalog, parse_natural_language_strategy, parse_structured_strategy, register_custom_strategy, activate_strategy
 
 import pytest
 
@@ -148,6 +148,38 @@ def test_momentum_breakout_respects_threshold_and_defaults_sells_to_futures():
         assert sell_signal["market"] == "futures"
     finally:
         configure_builtin_strategy("momentum_breakout", {"threshold_pct": 0})
+
+
+def test_momentum_breakout_uses_safe_default_threshold_and_price_guard():
+    configure_builtin_strategy("momentum_breakout", {})
+    try:
+        assert build_signal_from_ticker({"status": "live", "last_price": 100.2, "open_price": 100.0})["action"] == "hold"
+        assert build_signal_from_ticker({"status": "live", "last_price": 100.0, "open_price": 0.0})["action"] == "hold"
+    finally:
+        configure_builtin_strategy("momentum_breakout", {"threshold_pct": 0})
+
+
+def test_momentum_leverage_scales_with_higher_thresholds():
+    configure_builtin_strategy("momentum_breakout", {"threshold_pct": 5})
+    try:
+        signal = build_signal_from_ticker({"status": "live", "last_price": 105.0, "open_price": 100.0})
+        assert signal["action"] == "buy"
+        assert signal["leverage"] == 1.0
+    finally:
+        configure_builtin_strategy("momentum_breakout", {"threshold_pct": 0})
+
+
+def test_configured_spot_sell_is_rejected():
+    configure_builtin_strategy("mean_reversion", {"market": "spot", "threshold_pct": 1})
+    try:
+        signal = build_signal_from_ticker(
+            {"status": "live", "last_price": 102.0, "open_price": 100.0},
+            strategy_id="mean_reversion",
+        )
+        assert signal["action"] == "hold"
+        assert "spot sells" in signal["reason"]
+    finally:
+        configure_builtin_strategy("mean_reversion", {"market": "futures", "threshold_pct": 1})
 
 
 def test_parse_structured_strategy_rejects_invalid_market():

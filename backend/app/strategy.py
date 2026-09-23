@@ -41,17 +41,19 @@ def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
 
     last_price = float(ticker.get("last_price", 0.0) or 0.0)
     open_price = float(ticker.get("open_price", 0.0) or 0.0)
+    if last_price <= 0 or open_price <= 0:
+        return Decision("hold", 0.0, 1.0, "invalid market prices")
     config = _get_builtin_strategy_config("momentum_breakout")
-    threshold_pct = float(config.get("threshold_pct", 0.0) or 0.0)
+    threshold_pct = float(config.get("threshold_pct", 1.0) or 1.0)
     threshold = threshold_pct / 100.0
     if last_price > open_price and (last_price - open_price) / max(open_price, 1.0) >= threshold:
         signal = "buy"
         move = (last_price - open_price) / max(open_price, 1.0)
-        strength = min(1.0, max(0.0, move / max(threshold, 0.05)))
+        strength = min(1.0, max(0.0, move / max(threshold * 4, 0.01)))
     elif last_price < open_price and (open_price - last_price) / max(open_price, 1.0) >= threshold:
         signal = "sell"
         move = (open_price - last_price) / max(open_price, 1.0)
-        strength = min(1.0, max(0.0, move / max(threshold, 0.05)))
+        strength = min(1.0, max(0.0, move / max(threshold * 4, 0.01)))
     else:
         signal = "hold"
         strength = 0.0
@@ -226,6 +228,8 @@ def _apply_builtin_strategy_config(strategy_id: str, decision: Decision) -> Deci
     take_profit_pct = config.get("take_profit_pct", decision.take_profit_pct)
     stop_loss_pct = config.get("stop_loss_pct", decision.stop_loss_pct)
     market = config.get("market", decision.market)
+    if market == "spot" and decision.action == "sell":
+        return Decision("hold", 0.0, 1.0, "spot sells are disabled by strategy safety rules")
 
     return Decision(
         action=decision.action,
