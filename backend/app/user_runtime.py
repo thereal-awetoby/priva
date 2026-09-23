@@ -41,6 +41,7 @@ class UserRuntime:
     stop_loss_pct: float
     close_on_signal_violation: bool
     stop_event: asyncio.Event | None = None
+    event_loop: asyncio.AbstractEventLoop | None = None
     risk_settings: dict[str, Any] | None = None
     profiles: list[str] | None = None
     workers: dict[str, WorkerRuntime] | None = None
@@ -65,7 +66,7 @@ class UserRuntime:
     def _new_risk_engine(self) -> RiskEngine:
         return RiskEngine(**(self.risk_settings or {}))
 
-    def apply_profiles(self, profiles: list[str]) -> None:
+    def _apply_profiles_on_loop(self, profiles: list[str]) -> None:
         normalized = self.normalize_profiles(profiles, fallback_market="futures", strategy_id=self.strategy_id)
         if self.workers:
             for worker in self.workers.values():
@@ -84,6 +85,19 @@ class UserRuntime:
             )
             worker.task = asyncio.create_task(self._run_worker(worker))
             self.workers[profile] = worker
+
+    def apply_profiles(self, profiles: list[str]) -> None:
+        """Apply profile changes on the event loop that owns the worker tasks."""
+        if self.event_loop is None:
+            raise RuntimeError("user runtime event loop is not initialized")
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is self.event_loop:
+            self._apply_profiles_on_loop(profiles)
+        else:
+            self.event_loop.call_soon_threadsafe(self._apply_profiles_on_loop, profiles)
 
     async def _run_worker(self, worker: WorkerRuntime) -> None:
         interval = int(os.getenv("AGENT_LOOP_INTERVAL_SECONDS", "300"))
@@ -193,6 +207,7 @@ class UserRuntimeRegistry:
             stop_loss_pct=float(settings.get("stop_loss_pct", 2)),
             close_on_signal_violation=bool(settings.get("close_on_signal_violation", True)),
             stop_event=asyncio.Event(),
+            event_loop=asyncio.get_running_loop(),
             risk_settings=risk_settings,
             profiles=UserRuntime.normalize_profiles(
                 settings.get("execution_profiles"),
