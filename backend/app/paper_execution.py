@@ -181,7 +181,11 @@ class BitgetPaperExecutionClient:
                 position_side = self.normalize_position_side(
                     trade.get("position_side")
                     if trade.get("position_side") is not None
-                    else ("buy" if side == "sell" else "sell" if trade.get("reduce_only") else side)
+                    else (
+                        ("buy" if side == "sell" else "sell")
+                        if trade.get("reduce_only") or trade_side == "close"
+                        else side
+                    )
                 )
                 body["posSide"] = "long" if position_side in {"buy", "long"} else "short"
             elif trade_side != "open":

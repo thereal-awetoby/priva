@@ -140,6 +140,36 @@
 }
 .env-tag::before{ content:''; width: 5px; height: 5px; background: var(--up); }
 
+.auth-debug{
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 11px;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  padding: 6px 11px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.auth-debug-live::before,
+.auth-debug-stopped::before,
+.auth-debug-error::before{ content:''; width: 5px; height: 5px; display: inline-block; }
+.auth-debug-live::before{ background: var(--up); }
+.auth-debug-stopped::before,
+.auth-debug-error::before{ background: var(--down); }
+.auth-debug-stopped{ color: var(--down); }
+.auth-debug-error{ color: var(--down); }
+
+.sign-out-btn{
+  border: 1px solid var(--rule);
+  color: var(--ink-dim);
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 11px;
+  padding: 6px 11px;
+  background: none;
+  cursor: pointer;
+}
+.sign-out-btn:hover{ color: var(--ink); border-color: var(--ink-faint); }
+
 .icon-btn{
   width: 32px; height: 32px;
   border: 1px solid var(--rule);
@@ -160,6 +190,10 @@
 /* ---------- Control center ---------- */
 
 .control-topline{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 26px; }
+.control-status-group{ display: flex; align-items: center; gap: 24px; }
+.market-control{ display: flex; align-items: center; gap: 10px; }
+.market-control-label{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 11px; color: var(--ink-faint); }
+.market-control-error{ color: var(--down); font-family: var(--font-ibm-plex-mono), monospace; font-size: 11px; }
 
 .status-pill{
   font-family: var(--font-ibm-plex-mono), monospace; font-size: 12px; padding: 5px 10px 5px 8px;
@@ -178,6 +212,8 @@
 
 .equity-layout{ display:grid; grid-template-columns: 220px 1fr; gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin-bottom: 24px; }
 .balance-summary, .equity-panel{ background: var(--bg-sunken); padding: 18px 20px; }
+.equity-market-grid{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--rule); }
+.market-equity-card{ min-width: 0; background: var(--bg-sunken); padding: 18px 20px; }
 .balance-value{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 24px; margin: 12px 0 8px; }
 .balance-change{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 12px; }
 .equity-panel{ min-width: 0; }
@@ -340,8 +376,10 @@ table.positions tr:last-child td{ border-bottom:none; }
   .app-content{ padding: 20px 18px 40px; overflow-y: visible; }
   .perf-row{ grid-template-columns: repeat(2,1fr); }
   .equity-layout{ grid-template-columns: 1fr; }
+  .equity-market-grid{ grid-template-columns: 1fr; }
   .split{ grid-template-columns: 1fr; }
   .control-topline{ flex-wrap: wrap; gap: 14px; }
+  .control-status-group{ flex-wrap: wrap; gap: 14px; }
   .positions-section{ overflow-x: auto; }
   table.positions{ min-width: 620px; }
   .mode-activity-block{ padding: 22px 18px 6px; }

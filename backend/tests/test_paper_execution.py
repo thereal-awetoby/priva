@@ -334,6 +334,23 @@ def test_paper_client_submits_hedge_mode_open_order(monkeypatch):
     assert body["posSide"] == "long"
 
 
+def test_paper_client_submits_hedge_mode_short_open_order(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+    monkeypatch.setenv("BITGET_POSITION_MODE", "hedge")
+
+    session = FakeSession()
+    client = BitgetPaperExecutionClient(session=session)
+    client.place_market_order(
+        {"symbol": "AAPLUSDT", "side": "sell", "qty": 1, "market": "futures"}
+    )
+
+    body = json.loads(session.calls[-1][1]["data"])
+    assert body["tradeSide"] == "open"
+    assert body["posSide"] == "short"
+
+
 def test_paper_client_infers_pos_side_for_reduce_only_close(monkeypatch):
     monkeypatch.setenv("BITGET_API_KEY", "key")
     monkeypatch.setenv("BITGET_API_SECRET", "secret")
