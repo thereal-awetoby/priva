@@ -41,16 +41,20 @@ def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
 
     last_price = float(ticker.get("last_price", 0.0) or 0.0)
     open_price = float(ticker.get("open_price", 0.0) or 0.0)
-    if last_price > open_price:
+    config = _get_builtin_strategy_config("momentum_breakout")
+    threshold_pct = float(config.get("threshold_pct", 0.0) or 0.0)
+    threshold = threshold_pct / 100.0
+    if last_price > open_price and (last_price - open_price) / max(open_price, 1.0) >= threshold:
         signal = "buy"
-        strength = min(1.0, max(0.0, (last_price - open_price) / max(open_price, 1.0)))
-    elif last_price < open_price:
+        move = (last_price - open_price) / max(open_price, 1.0)
+        strength = min(1.0, max(0.0, move / max(threshold, 0.05)))
+    elif last_price < open_price and (open_price - last_price) / max(open_price, 1.0) >= threshold:
         signal = "sell"
-        strength = min(1.0, max(0.0, (open_price - last_price) / max(open_price, 1.0)))
+        move = (open_price - last_price) / max(open_price, 1.0)
+        strength = min(1.0, max(0.0, move / max(threshold, 0.05)))
     else:
         signal = "hold"
         strength = 0.0
-
     rounded_strength = round(strength, 4)
     leverage = _adaptive_leverage(rounded_strength) if signal != "hold" else 1.0
     return Decision(signal, 1.0 if signal != "hold" else 0.0, leverage, "simple price-vs-open momentum signal", rounded_strength)
@@ -95,10 +99,11 @@ def _overnight_gap_strategy(ticker: dict[str, Any]) -> Decision:
     threshold_pct = float(config.get("threshold_pct", 1.0) or 1.0)
     gap_pct = ((session_open - previous_close) / previous_close) * 100
     strength = min(1.0, abs(gap_pct) / max(threshold_pct, 0.01))
+    leverage_signal = min(1.0, abs(gap_pct) / max(threshold_pct * 4, 0.01))
     if gap_pct >= threshold_pct:
-        return Decision("sell", 1.0, _adaptive_leverage(strength), f"overnight gap: open {gap_pct:.2f}% above previous close", round(strength, 4))
+        return Decision("sell", 1.0, _adaptive_leverage(leverage_signal), f"overnight gap: open {gap_pct:.2f}% above previous close", round(strength, 4))
     if gap_pct <= -threshold_pct:
-        return Decision("buy", 1.0, _adaptive_leverage(strength), f"overnight gap: open {abs(gap_pct):.2f}% below previous close", round(strength, 4))
+        return Decision("buy", 1.0, _adaptive_leverage(leverage_signal), f"overnight gap: open {abs(gap_pct):.2f}% below previous close", round(strength, 4))
     return Decision("hold", 0.0, 1.0, f"overnight gap: {gap_pct:.2f}% within threshold", 0.0)
 
 
@@ -162,7 +167,7 @@ STRATEGY_CATALOG = {
         "id": "momentum_breakout",
         "name": "Momentum Breakout",
         "type": "prebuilt",
-        "description": "Long when trend and volume accelerate above baseline.",
+        "description": "Trade price moves above or below the opening price after the configured threshold.",
     },
     "mean_reversion": {
         "id": "mean_reversion",
@@ -224,13 +229,16 @@ def _apply_builtin_strategy_config(strategy_id: str, decision: Decision) -> Deci
 
     return Decision(
         action=decision.action,
-        size=size,
-        leverage=leverage,
+        size=size if decision.action in {"buy", "sell"} else decision.size,
+        leverage=leverage if decision.action in {"buy", "sell"} else decision.leverage,
         reason=decision.reason,
         signal_strength=decision.signal_strength,
         take_profit_pct=take_profit_pct,
         stop_loss_pct=stop_loss_pct,
         market=market,
+        trailing_profit_trigger_usd=decision.trailing_profit_trigger_usd,
+        trailing_profit_floor_usd=decision.trailing_profit_floor_usd,
+        trailing_profit_lock_pct=decision.trailing_profit_lock_pct,
     )
 
 
@@ -832,29 +840,39 @@ def register_custom_strategy(
                     take_profit_pct,
                     stop_loss_pct,
                     market,
-                    trailing_profit_trigger_usd,
-                    trailing_profit_floor_usd,
+                    trailing_profit_trigger_usd=trailing_profit_trigger_usd,
+                    trailing_profit_floor_usd=trailing_profit_floor_usd,
+                    trailing_profit_lock_pct=trailing_profit_lock_pct,
                 )
-            return Decision("hold", 0.0, 1.0, f"custom strategy: price not yet above {comparison} by {threshold_pct}%", 0.0, take_profit_pct, stop_loss_pct, market, trailing_profit_trigger_usd, trailing_profit_floor_usd, trailing_profit_lock_pct)
+            return Decision(
+                action="hold", size=0.0, leverage=1.0,
+                reason=f"custom strategy: price not yet above {comparison} by {threshold_pct}%",
+                take_profit_pct=take_profit_pct, stop_loss_pct=stop_loss_pct, market=market,
+                trailing_profit_trigger_usd=trailing_profit_trigger_usd,
+                trailing_profit_floor_usd=trailing_profit_floor_usd,
+                trailing_profit_lock_pct=trailing_profit_lock_pct,
+            )
 
         if deviation <= -threshold:
             strength = min(1.0, max(0.0, abs(deviation) / max(threshold, 0.01)))
             return Decision(
-                "sell",
-                position_size,
-                leverage,
-                f"custom strategy: price below {comparison} by {threshold_pct}%",
-                round(strength, 4),
-                take_profit_pct,
-                stop_loss_pct,
-                market,
-                trailing_profit_trigger_usd,
-                trailing_profit_floor_usd,
-                    trailing_profit_lock_pct,
-                trailing_profit_lock_pct,
+                action="sell", size=position_size, leverage=leverage,
+                reason=f"custom strategy: price below {comparison} by {threshold_pct}%",
+                signal_strength=round(strength, 4),
+                take_profit_pct=take_profit_pct, stop_loss_pct=stop_loss_pct, market=market,
+                trailing_profit_trigger_usd=trailing_profit_trigger_usd,
+                trailing_profit_floor_usd=trailing_profit_floor_usd,
+                trailing_profit_lock_pct=trailing_profit_lock_pct,
             )
 
-        return Decision("hold", 0.0, 1.0, f"custom strategy: price not yet below {comparison} by {threshold_pct}%", 0.0, take_profit_pct, stop_loss_pct, market, trailing_profit_trigger_usd, trailing_profit_floor_usd, trailing_profit_lock_pct)
+        return Decision(
+            action="hold", size=0.0, leverage=1.0,
+            reason=f"custom strategy: price not yet below {comparison} by {threshold_pct}%",
+            take_profit_pct=take_profit_pct, stop_loss_pct=stop_loss_pct, market=market,
+            trailing_profit_trigger_usd=trailing_profit_trigger_usd,
+            trailing_profit_floor_usd=trailing_profit_floor_usd,
+            trailing_profit_lock_pct=trailing_profit_lock_pct,
+        )
 
     STRATEGIES[strategy_id] = custom_strategy
     _registered_strategy_catalog[strategy_id] = {
@@ -879,7 +897,10 @@ def build_signal_from_ticker(ticker: dict[str, Any], strategy_id: str | None = N
     decision = STRATEGIES[selected_strategy_id](ticker)
     decision = _apply_builtin_strategy_config(selected_strategy_id, decision)
     if decision.market is None:
-        decision = replace(decision, market="futures" if decision.action != "hold" and decision.leverage > 1 else "spot")
+        decision = replace(
+            decision,
+            market="futures" if decision.action == "sell" or decision.leverage > 1 else "spot",
+        )
     return decision_to_dict(decision)
 
 

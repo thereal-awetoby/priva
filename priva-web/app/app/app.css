@@ -210,15 +210,16 @@
 .perf-label{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 11px; color: var(--ink-faint); margin-bottom: 9px; }
 .perf-value{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 21px; }
 
-.equity-layout{ display:grid; grid-template-columns: 220px 1fr; gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin-bottom: 24px; }
+.equity-layout{ display:grid; grid-template-columns: 190px 1fr; gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin-bottom: 24px; }
 .balance-summary, .equity-panel{ background: var(--bg-sunken); padding: 18px 20px; }
-.equity-market-grid{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--rule); }
+.equity-market-grid{ display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--rule); }
 .market-equity-card{ min-width: 0; background: var(--bg-sunken); padding: 18px 20px; }
 .balance-value{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 24px; margin: 12px 0 8px; }
 .balance-change{ font-family: var(--font-ibm-plex-mono), monospace; font-size: 12px; }
 .equity-panel{ min-width: 0; }
 .equity-chart-head{ display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .equity-chart-head .panel-title{ margin-bottom: 10px; }
+.equity-chart-tools{ display: flex; align-items: center; gap: 8px; }
 .equity-timeframes{ display: flex; border: 1px solid var(--rule); }
 .equity-timeframes button{
   border: 0;
@@ -233,6 +234,20 @@
 .equity-timeframes button:last-child{ border-right: 0; }
 .equity-timeframes button:hover{ color: var(--ink); }
 .equity-timeframes button.active{ background: var(--accent); color: var(--accent-ink); }
+.equity-zoom{ display: flex; border: 1px solid var(--rule); }
+.equity-zoom button{
+  min-width: 28px;
+  border: 0;
+  border-right: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 11px;
+  padding: 5px 7px;
+}
+.equity-zoom button:last-child{ border-right: 0; }
+.equity-zoom button:hover{ color: var(--ink); background: var(--bg-raised); }
 .equity-chart{ display:block; height:200px; overflow:visible; }
 .equity-axis{ stroke: var(--rule); stroke-width: 1; }
 .equity-line{ fill:none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
@@ -240,7 +255,7 @@
 .equity-scroll{
   overflow-x: auto;
   overflow-y: auto;
-  max-height: 220px;
+  max-height: 280px;
 }
 .equity-scroll::-webkit-scrollbar{ height: 8px; width: 8px; }
 .equity-scroll::-webkit-scrollbar-thumb{ background: var(--rule); }

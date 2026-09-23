@@ -55,8 +55,9 @@ function executionLabel(entry: ActivityEntry): string {
 
 function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; market: "Futures" | "Spot"; valueKey: "futures_equity" | "spot_equity" }) {
   const [timeframe, setTimeframe] = useState<ChartTimeframe>("daily");
-  const width = 720;
-  const height = 220;
+  const [zoom, setZoom] = useState(1);
+  const width = 720 * zoom;
+  const height = 260;
   const padding = { top: 12, right: 12, bottom: 28, left: 60 };
   const plotW = width - padding.left - padding.right;
   const plotH = height - padding.top - padding.bottom;
@@ -120,17 +121,24 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
     <div className="equity-panel">
       <div className="equity-chart-head">
         <div className="panel-title">{market} equity curve</div>
-        <div className="equity-timeframes" role="group" aria-label={`${market} chart timeframe`}>
-          {(["hourly", "daily", "weekly", "monthly"] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              className={timeframe === option ? "active" : ""}
-              onClick={() => setTimeframe(option)}
-            >
-              {option === "hourly" ? "1H" : option === "daily" ? "1D" : option === "weekly" ? "7D" : "1M"}
-            </button>
-          ))}
+        <div className="equity-chart-tools">
+          <div className="equity-timeframes" role="group" aria-label={`${market} chart timeframe`}>
+            {(["hourly", "daily", "weekly", "monthly"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={timeframe === option ? "active" : ""}
+                onClick={() => setTimeframe(option)}
+              >
+                {option === "hourly" ? "1H" : option === "daily" ? "1D" : option === "weekly" ? "7D" : "1M"}
+              </button>
+            ))}
+          </div>
+          <div className="equity-zoom" role="group" aria-label={`${market} chart zoom`}>
+            <button type="button" onClick={() => setZoom((value) => Math.max(1, value - 0.5))} aria-label="Zoom out" title="Zoom out">−</button>
+            <button type="button" onClick={() => setZoom(1)} aria-label="Reset zoom" title="Reset zoom">{zoom}x</button>
+            <button type="button" onClick={() => setZoom((value) => Math.min(3, value + 0.5))} aria-label="Zoom in" title="Zoom in">+</button>
+          </div>
         </div>
       </div>
       {!hasMarketData || values.length < 2 ? (
@@ -140,7 +148,7 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
         <svg
           className="equity-chart"
           viewBox={`0 0 ${width} ${height}`}
-          style={{ width: "100%", height: `${height}px` }}
+          style={{ width: zoom === 1 ? "100%" : `${width}px`, height: `${height}px` }}
           role="img"
           aria-label="Balance over time"
         >

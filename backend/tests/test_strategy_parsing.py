@@ -101,6 +101,55 @@ def test_parse_structured_strategy_supports_market_selection():
     assert parsed["market"] == "spot"
 
 
+def test_custom_buy_and_sell_carry_trailing_profit_lock():
+    payload = {
+        "action": "buy",
+        "comparison": "open",
+        "threshold_pct": 1.0,
+        "trailing_profit_lock_pct": 30,
+    }
+    parsed = parse_structured_strategy(payload)
+    assert parsed["trailing_profit_lock_pct"] == 30.0
+
+    buy_id = "custom_buy_lock_regression"
+    register_custom_strategy(buy_id, parsed)
+    buy_signal = build_signal_from_ticker(
+        {"status": "live", "last_price": 102.0, "open_price": 100.0},
+        strategy_id=buy_id,
+    )
+    assert buy_signal["trailing_profit_lock_pct"] == 30.0
+
+    sell_id = "custom_sell_lock_regression"
+    sell_parsed = parse_structured_strategy({**payload, "action": "sell"})
+    register_custom_strategy(sell_id, sell_parsed)
+    sell_signal = build_signal_from_ticker(
+        {"status": "live", "last_price": 98.0, "open_price": 100.0},
+        strategy_id=sell_id,
+    )
+    assert sell_signal["trailing_profit_lock_pct"] == 30.0
+
+
+def test_momentum_breakout_respects_threshold_and_defaults_sells_to_futures():
+    from app.strategy import configure_builtin_strategy
+
+    configure_builtin_strategy("momentum_breakout", {"threshold_pct": 5})
+    try:
+        below_threshold = build_signal_from_ticker(
+            {"status": "live", "last_price": 102.0, "open_price": 100.0},
+            strategy_id="momentum_breakout",
+        )
+        assert below_threshold["action"] == "hold"
+
+        sell_signal = build_signal_from_ticker(
+            {"status": "live", "last_price": 94.0, "open_price": 100.0},
+            strategy_id="momentum_breakout",
+        )
+        assert sell_signal["action"] == "sell"
+        assert sell_signal["market"] == "futures"
+    finally:
+        configure_builtin_strategy("momentum_breakout", {"threshold_pct": 0})
+
+
 def test_parse_structured_strategy_rejects_invalid_market():
     with pytest.raises(ValueError, match="market"):
         parse_structured_strategy({
