@@ -1050,6 +1050,7 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
                     "symbol": cycle.get("symbol"),
                     "action": "close" if cycle.get("status") == "closed" else (cycle.get("decision") or {}).get("action"),
                     "status": cycle.get("status"),
+                    "message": (cycle.get("order_result") or cycle.get("order") or {}).get("message"),
                     "risk_check": cycle.get("risk_check"),
                     "intent_hash": (cycle.get("intent") or {}).get("intent_hash"),
                     "mode": cycle.get("mode", "autonomous"),

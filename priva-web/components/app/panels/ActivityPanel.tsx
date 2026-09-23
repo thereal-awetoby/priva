@@ -64,6 +64,7 @@ function entryDetails(entry: EventItem): string {
     return (entry.risk_check?.reasons ?? []).join(", ") || "Blocked by risk check";
   }
   if (entry.status === "skipped_existing_position") return "Position already open";
+  if (entry.status === "rejected") return entry.message || "Rejected by exchange";
   return "";
 }
 
