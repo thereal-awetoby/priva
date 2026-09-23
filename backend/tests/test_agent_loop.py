@@ -221,7 +221,7 @@ class FakeCycleLogger:
     def __init__(self, has_open_position=True):
         self.has_open_position_value = has_open_position
 
-    def has_open_position(self, symbol):
+    def has_open_position(self, symbol, market=None):
         return self.has_open_position_value
 
     def log_cycle(self, result):

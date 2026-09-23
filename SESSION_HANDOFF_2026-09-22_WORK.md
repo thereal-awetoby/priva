@@ -1,6 +1,64 @@
 # PRIVA SESSION HANDOFF
 Date: 2026-09-22
 
+## Latest Update: 2026-09-23
+
+### Current Production State
+
+- Render backend is live at `https://priva-499h.onrender.com`.
+- Authenticated `/user/agent-loop` confirmed `running: true` with no worker errors.
+- Supabase logging is configured and the latest persistence status is `logged`.
+- All four execution profiles are currently running:
+  - `autonomous:futures`
+  - `autonomous:spot`
+  - `strategy:futures`
+  - `strategy:spot`
+- Current symbols are `AAPLUSDT` and `TSLAUSDT`.
+- Current exit settings are take profit `5%` and stop loss `2%`.
+- `skipped_existing_position` means a worker detected an existing position and correctly avoided adding a conflicting trade.
+
+### Multi-Worker Implementation
+
+- User runtimes now support independent workers for each selected mode/market combination.
+- The dashboard Control Center supports selecting Spot, Futures, Autonomous, and Strategy independently.
+- Profile selection persists through `POST /user/execution-settings` as `execution_profiles`.
+- The runtime keeps separate risk-engine instances per worker while sharing the authenticated Bitget client and cycle logger.
+- Legacy single-market settings fall back to `autonomous:futures` or the previously selected strategy profile.
+- Profile changes from synchronous FastAPI endpoints are marshalled onto the runtime's owning asyncio event loop.
+
+### Deployment Fixes
+
+- Fixed startup failure caused by calling `normalize_profiles` on `UserRuntimeRegistry` instead of `UserRuntime`.
+- Fixed runtime reconfiguration failure: `RuntimeError: no running event loop`.
+- Fixed the related `UserRuntime._run_worker was never awaited` warning.
+- Render deployment subsequently reached `Application startup complete` and served authenticated dashboard requests successfully.
+
+### Required Database Migration
+
+- Run `backend/add_execution_profiles.sql` once in the Supabase SQL Editor for existing deployments.
+- The complete schema migration also includes the `execution_profiles` column in `backend/supabase_multi_user.sql`.
+
+### Current Validation
+
+- Focused agent-loop suite: 24 passed.
+- Spot position-gating and Supabase logger suite: 34 passed after the market-isolation fix below.
+- Python compilation and static diagnostics passed for the runtime and API changes.
+- Frontend ESLint passed after adding the multi-select controls.
+- No GitHub push or commit was made automatically.
+
+### Superseding UI Notes
+
+- `Import history` and `Reset session` were removed from the dashboard top bar as requested.
+- The current dashboard uses the Control Center market/mode selectors instead of a single Spot/Futures selector.
+
+### Spot Execution Follow-up: 2026-09-23
+
+- Root cause found for Spot workers reporting `skipped_existing_position`: the fallback Supabase query checked only symbol and status, so a submitted Futures cycle could be mistaken for an open Spot position.
+- Fixed `SupabaseCycleLogger.has_open_position()` to accept and filter by market.
+- Spot and Futures position gates now pass their selected market into the fallback query.
+- Focused validation passed: 34 tests.
+- Deploy the backend patch before expecting new Spot orders. After deployment, verify `/user/agent-loop` and look for a Spot worker cycle with `last_cycle_status: "submitted"` or a persisted activity record with `market: "spot"`.
+
 ## Session Purpose
 
 Diagnose the worker error, repair Supabase persistence, backfill Bitget history from September 17 through September 22, correct activity/P&L presentation, and prepare a clean P&L reset workflow.

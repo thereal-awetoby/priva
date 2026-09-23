@@ -171,7 +171,7 @@ class SupabaseCycleLogger:
             logger.warning("Supabase cycle read failed: %s", exc)
             return []
 
-    def has_open_position(self, symbol: str) -> bool:
+    def has_open_position(self, symbol: str, market: str | None = None) -> bool:
         if not self.configured:
             return False
 
@@ -182,6 +182,8 @@ class SupabaseCycleLogger:
                 "status": "eq.submitted",
                 "limit": 1,
             }
+            if market:
+                params["market"] = f"eq.{market.lower()}"
             if self.user_id:
                 params["user_id"] = f"eq.{self.user_id}"
             response = self.session.get(

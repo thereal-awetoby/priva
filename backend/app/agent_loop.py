@@ -425,7 +425,7 @@ async def run_cycle(
         has_existing_position = live_position_state is True or (
             live_position_state is None
             and cycle_logger is not None
-            and cycle_logger.has_open_position(symbol)
+            and cycle_logger.has_open_position(symbol, market=selected_market)
         )
         if has_existing_position:
             if live_position:

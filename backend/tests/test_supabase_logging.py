@@ -100,8 +100,9 @@ def test_supabase_logger_detects_open_position(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
     session = FakeSession([{"id": 1}])
 
-    assert SupabaseCycleLogger(session=session).has_open_position("AAPLUSDT") is True
+    assert SupabaseCycleLogger(session=session).has_open_position("AAPLUSDT", market="spot") is True
     assert session.calls[0][1]["params"]["symbol"] == "eq.AAPLUSDT"
+    assert session.calls[0][1]["params"]["market"] == "eq.spot"
 
 
 def test_supabase_logger_reads_active_strategy(monkeypatch):
