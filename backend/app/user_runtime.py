@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from app import agent_loop
@@ -23,10 +24,12 @@ class WorkerRuntime:
     market: str
     strategy_id: str | None
     risk_engine: RiskEngine
+    interval_seconds: int
     task: asyncio.Task | None = None
     last_error: str | None = None
     last_cycle_status: str | None = None
     last_persistence_status: str | None = None
+    last_cycle_at: str | None = None
 
 
 @dataclass
@@ -74,6 +77,7 @@ class UserRuntime:
                     worker.task.cancel()
         self.profiles = normalized
         self.workers = {}
+        interval_seconds = int(os.getenv("AGENT_LOOP_INTERVAL_SECONDS", "300"))
         for profile in normalized:
             mode, market = profile.split(":")
             worker = WorkerRuntime(
@@ -82,6 +86,7 @@ class UserRuntime:
                 market=market,
                 strategy_id=self.strategy_id if mode == "strategy" else None,
                 risk_engine=self._new_risk_engine(),
+                interval_seconds=interval_seconds,
             )
             worker.task = asyncio.create_task(self._run_worker(worker))
             self.workers[profile] = worker
@@ -100,7 +105,6 @@ class UserRuntime:
             self.event_loop.call_soon_threadsafe(self._apply_profiles_on_loop, profiles)
 
     async def _run_worker(self, worker: WorkerRuntime) -> None:
-        interval = int(os.getenv("AGENT_LOOP_INTERVAL_SECONDS", "300"))
         market_service = BitgetMarketDataService()
         while self.stop_event and not self.stop_event.is_set():
             try:
@@ -136,6 +140,7 @@ class UserRuntime:
                 worker.last_error = None
                 if isinstance(result, dict):
                     worker.last_cycle_status = str(result.get("status"))
+                    worker.last_cycle_at = datetime.now(timezone.utc).isoformat()
                     persistence = result.get("persistence")
                     if isinstance(persistence, dict):
                         worker.last_persistence_status = str(persistence.get("status"))
@@ -145,7 +150,7 @@ class UserRuntime:
                 worker.last_error = str(exc)
                 logger.exception("User runtime worker failed for %s (%s)", self.user_id, worker.profile)
             try:
-                await asyncio.wait_for(self.stop_event.wait(), timeout=interval)
+                await asyncio.wait_for(self.stop_event.wait(), timeout=worker.interval_seconds)
             except asyncio.TimeoutError:
                 pass
 
@@ -248,6 +253,11 @@ class UserRuntimeRegistry:
             "strategy_by_symbol": runtime.strategy_by_symbol if runtime else {},
             "market": (runtime.profiles[0].split(":", 1)[1] if runtime and runtime.profiles else None),
             "execution_profiles": runtime.profiles if runtime else [],
+            "cycle_interval_seconds": (
+                next(iter({worker.interval_seconds for worker in workers.values()}), None)
+                if workers
+                else None
+            ),
             "workers": {
                 profile: {
                     "mode": worker.mode,
@@ -255,6 +265,8 @@ class UserRuntimeRegistry:
                     "running": bool(worker.task and not worker.task.done()),
                     "last_error": worker.last_error,
                     "last_cycle_status": worker.last_cycle_status,
+                    "last_cycle_at": worker.last_cycle_at,
+                    "cycle_interval_seconds": worker.interval_seconds,
                 }
                 for profile, worker in workers.items()
             },

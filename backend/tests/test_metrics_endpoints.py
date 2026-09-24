@@ -421,6 +421,75 @@ def test_activity_log_labels_closed_cycle_as_close(monkeypatch):
     assert result["entries"][0]["action"] == "close"
 
 
+def test_activity_log_adds_readable_labels_categories_and_intent_hash(monkeypatch):
+    monkeypatch.setattr(
+        main.cycle_logger,
+        "fetch_cycles",
+        lambda **kwargs: [
+            {
+                "created_at": "2026-09-22T19:55:02Z",
+                "symbol": "AAPLUSDT",
+                "status": "risk_rejected",
+                "decision": {"action": "buy"},
+                "risk_check": {
+                    "allowed": False,
+                    "reasons": ["max_position_size:26000>25000", "max_leverage:6>5"],
+                },
+                "intent": {"intent_hash": "1234567890abcdef"},
+            },
+            {
+                "created_at": "2026-09-22T19:56:02Z",
+                "symbol": "AAPLUSDT",
+                "status": "logged",
+                "decision": {"action": "hold"},
+                "risk_check": {"allowed": False, "reasons": ["no_trade_signal"]},
+            },
+        ],
+    )
+
+    entries = main.activity_log()["entries"]
+    rejected, evaluation = entries
+
+    assert rejected["display_label"] == "Risk rejected · Max position size exceeded ($26,000.00 > $25,000.00); Max leverage exceeded (6x > 5x)"
+    assert rejected["display_detail"] == "Max position size exceeded ($26,000.00 > $25,000.00); Max leverage exceeded (6x > 5x)"
+    assert rejected["category"] == "event"
+    assert rejected["intent_hash"] == "1234567890abcdef"
+    assert rejected["intent_hash_short"] == "12345678…"
+    assert evaluation["display_label"] == "Evaluating · no signal"
+    assert evaluation["display_detail"] == "No trade signal"
+    assert evaluation["category"] == "evaluation"
+    assert "intent_hash" not in evaluation
+    assert "intent_hash_short" not in evaluation
+
+
+def test_status_reports_live_cycle_and_risk_usage(monkeypatch):
+    monkeypatch.setattr(
+        main.user_runtime_registry,
+        "status",
+        lambda user_id: {
+            "symbols": ["TSLAUSDT"],
+            "cycle_interval_seconds": 45,
+            "workers": {
+                "autonomous:spot": {
+                    "last_cycle_at": "2026-09-24T12:00:00+00:00",
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "risk_usage",
+        lambda user: {"usage_percent": {"daily_loss": 42.5}},
+    )
+
+    result = main.status()
+
+    assert result["watched_symbols"] == ["TSLAUSDT"]
+    assert result["last_cycle"] == "2026-09-24T12:00:00+00:00"
+    assert result["cycle_interval_seconds"] == 45
+    assert result["daily_loss_usage_pct"] == 42.5
+
+
 def test_agent_settings_can_switch_autonomous_market():
     original_market = main.agent_loop.MARKET_TYPE
     try:

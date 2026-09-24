@@ -842,14 +842,29 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/status")
-def status() -> dict[str, Any]:
+def status(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user_id = getattr(user, "id", "local-development")
+    runtime_status = user_runtime_registry.status(user_id)
+    worker_statuses = runtime_status.get("workers", {}).values()
+    last_cycle = max(
+        (worker.get("last_cycle_at") for worker in worker_statuses if worker.get("last_cycle_at")),
+        default=None,
+    )
+    interval_seconds = runtime_status.get("cycle_interval_seconds")
+    daily_loss_usage_pct = None
+    try:
+        daily_loss_usage_pct = risk_usage(user).get("usage_percent", {}).get("daily_loss")
+    except Exception:
+        logger.warning("Status daily loss usage unavailable", exc_info=True)
     return {
         "mode": "autonomous",
         "agent_state": "online",
         "paper_trading": True,
         "risk_engine": "armed",
-        "last_cycle": "2026-09-10T00:00:00Z",
-        "next_cycle": "2026-09-10T00:05:00Z",
+        "watched_symbols": runtime_status.get("symbols") or None,
+        "last_cycle": last_cycle,
+        "cycle_interval_seconds": interval_seconds,
+        "daily_loss_usage_pct": daily_loss_usage_pct,
     }
 
 
@@ -1192,6 +1207,99 @@ def update_risk_settings(payload: dict[str, Any] | None = None) -> dict[str, Any
         return {"status": "rejected", "message": str(exc)}
 
 
+def _format_activity_limit_reason(reason: str, risk_check: dict[str, Any]) -> str:
+    labels = {
+        "max_position_size": "Max position size exceeded",
+        "aggregate_position_limit": "Max aggregate position size exceeded",
+        "max_leverage": "Max leverage exceeded",
+    }
+    prefix, separator, values = reason.partition(":")
+    if prefix in labels and separator and ">" in values:
+        actual, limit = values.split(">", 1)
+        if prefix == "max_leverage":
+            return f"{labels[prefix]} ({actual}x > {limit}x)"
+        return f"{labels[prefix]} (${float(actual):,.2f} > ${float(limit):,.2f})"
+    if prefix == "max_daily_loss":
+        return "Daily loss limit reached"
+    if prefix in {"unsupported_symbol", "symbol_not_allowed"}:
+        return "Symbol not allowed"
+    return reason
+
+
+def _activity_detail(cycle: dict[str, Any]) -> str:
+    status = cycle.get("status")
+    risk_check = cycle.get("risk_check") or {}
+    if status == "risk_rejected":
+        reasons = risk_check.get("reasons") or []
+        return "; ".join(_format_activity_limit_reason(str(reason), risk_check) for reason in reasons) or "Risk rejected"
+    order = cycle.get("order_result") or cycle.get("order") or {}
+    reason = cycle.get("reason") or order.get("reason") or order.get("message")
+    if reason == "no_spot_position_to_close" and cycle.get("market") == "futures":
+        return "Futures position check used for futures order"
+    if status == "closed":
+        return str(cycle.get("exit_reason") or reason or "Position closed")
+    if reason == "no_trade_signal" or (cycle.get("decision") or {}).get("action") == "hold":
+        return "No trade signal"
+    if status == "skipped_existing_position":
+        return "Position already open"
+    return str(reason or "")
+
+
+def _activity_label(cycle: dict[str, Any], detail: str) -> str:
+    status = cycle.get("status")
+    action = (cycle.get("decision") or {}).get("action")
+    if detail == "Futures position check used for futures order":
+        return "Wrong market · futures position check"
+    if status == "closed":
+        return "Position closed" + (f" · {detail}" if cycle.get("exit_reason") else "")
+    if status == "risk_rejected":
+        return f"Risk rejected · {detail}"
+    if status == "skipped_existing_position":
+        return "Skipped · Position already open"
+    if action == "hold" or detail == "No trade signal":
+        return "Evaluating · no signal" if status == "logged" and action == "hold" else "No trade signal"
+    if status == "rejected":
+        return f"Rejected · {detail}" if detail else "Rejected by exchange"
+    if status == "blocked":
+        return f"Blocked · {detail}" if detail else "Blocked"
+    return str(action or status or "Event").replace("_", " ").title()
+
+
+def _activity_entry(cycle: dict[str, Any]) -> dict[str, Any]:
+    detail = _activity_detail(cycle)
+    intent_hash = (cycle.get("intent") or {}).get("intent_hash")
+    action = "close" if cycle.get("status") == "closed" else (cycle.get("decision") or {}).get("action")
+    is_evaluation = (
+        action == "hold"
+        or cycle.get("status") in {"logged", "skipped_existing_position"}
+    ) and not (
+        cycle.get("reason") == "no_spot_position_to_close" and cycle.get("market") == "futures"
+    )
+    order = cycle.get("order_result") or cycle.get("order") or {}
+    entry = {
+        "id": order.get("order_id") or f"cycle_{cycle.get('created_at', '')}",
+        "type": "trade" if order else "agent_cycle",
+        "symbol": cycle.get("symbol"),
+        "action": action,
+        "status": cycle.get("status"),
+        "message": order.get("message"),
+        "reason": cycle.get("reason") or order.get("reason"),
+        "code": order.get("code"),
+        "risk_check": cycle.get("risk_check"),
+        "mode": cycle.get("mode", "autonomous"),
+        "timestamp": cycle.get("created_at"),
+        "opened_at": _cycle_opened_timestamp(cycle) if cycle.get("status") == "submitted" and order else None,
+        "closed_at": _cycle_closed_timestamp(cycle) if cycle.get("status") == "closed" else None,
+        "display_label": _activity_label(cycle, detail),
+        "display_detail": detail,
+        "category": "evaluation" if is_evaluation else "event",
+    }
+    if intent_hash:
+        entry["intent_hash"] = intent_hash
+        entry["intent_hash_short"] = f"{intent_hash[:8]}…"
+    return entry
+
+
 @app.get("/activity-log")
 def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user = normalize_user(user)
@@ -1205,26 +1313,7 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
         if str(cycle.get("symbol", "")).upper() in agent_loop.SUPPORTED_SYMBOLS
     ]
     if cycles:
-        return {
-            "entries": [
-                {
-                    "id": ((cycle.get("order_result") or cycle.get("order") or {}).get("order_id") or f"cycle_{cycle.get('created_at', '')}"),
-                    "type": "trade" if (cycle.get("order_result") or cycle.get("order")) else "agent_cycle",
-                    "symbol": cycle.get("symbol"),
-                    "action": "close" if cycle.get("status") == "closed" else (cycle.get("decision") or {}).get("action"),
-                    "status": cycle.get("status"),
-                    "message": (cycle.get("order_result") or cycle.get("order") or {}).get("message"),
-                    "reason": cycle.get("reason") or (cycle.get("order_result") or cycle.get("order") or {}).get("reason"),
-                    "risk_check": cycle.get("risk_check"),
-                    "intent_hash": (cycle.get("intent") or {}).get("intent_hash"),
-                    "mode": cycle.get("mode", "autonomous"),
-                    "timestamp": cycle.get("created_at"),
-                    "opened_at": _cycle_opened_timestamp(cycle) if cycle.get("status") == "submitted" and (cycle.get("order_result") or cycle.get("order")) else None,
-                    "closed_at": _cycle_closed_timestamp(cycle) if cycle.get("status") == "closed" else None,
-                }
-                for cycle in cycles
-            ]
-        }
+        return {"entries": [_activity_entry(cycle) for cycle in cycles]}
 
     if supabase_auth.required:
         return {"entries": []}
@@ -1241,6 +1330,9 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
                 "mode": "autonomous",
                 "timestamp": "2026-09-10T00:00:20Z",
                 "opened_at": "2026-09-10T00:00:20Z",
+                "display_label": "Buy",
+                "display_detail": "",
+                "category": "event",
             },
             {
                 "id": "evt_002",
@@ -1250,6 +1342,9 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
                 "reason": "within max leverage",
                 "mode": "strategy",
                 "timestamp": "2026-09-10T00:02:10Z",
+                "display_label": "Risk approved",
+                "display_detail": "within max leverage",
+                "category": "event",
             },
             {
                 "id": "evt_003",
@@ -1258,6 +1353,9 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
                 "status": "encrypted",
                 "mode": "strategy",
                 "timestamp": "2026-09-10T00:03:00Z",
+                "display_label": "Intent recorded",
+                "display_detail": "",
+                "category": "event",
             },
         ]
     }
