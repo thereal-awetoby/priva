@@ -396,6 +396,24 @@ def test_agent_cycle_uses_strategy_decision_size_and_leverage(monkeypatch):
     assert execution.trades[0]["leverage"] == 2.0
 
 
+def test_agent_cycle_sets_risk_rejected_for_real_limit_reason():
+    execution = FakeExecutionClient()
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(max_position_size=100, max_leverage=5),
+            execution_client=execution,
+            market_type="futures",
+        )
+    )
+
+    assert result["status"] == "risk_rejected"
+    assert result["risk_check"]["allowed"] is False
+    assert result["risk_check"]["reasons"] == ["max_position_size:110.0>100"]
+    assert execution.trades == []
+
+
 def test_agent_cycle_uses_selected_spot_market():
     execution = FakeExecutionClient()
     result = asyncio.run(
