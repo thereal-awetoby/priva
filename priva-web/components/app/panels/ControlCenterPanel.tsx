@@ -3,6 +3,7 @@
 import { useRef, useState, useEffect } from "react";
 import { apiGet, apiPost } from "@/lib/api";
 import { timeAgo, cleanSymbol } from "@/lib/format";
+import PositionDetailModal from "@/components/app/PositionDetailModal";
 
 type Position = Record<string, any>;
 type ActivityEntry = Record<string, any>;
@@ -108,9 +109,9 @@ function executionLabel(entry: ActivityEntry): string {
   if (entry.status === "rejected") return "Rejected by exchange";
   if (entry.status === "risk_rejected") return "Rejected by risk check";
   return "Signal logged";
-}
+  }
 
-function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; market: "Futures" | "Spot"; valueKey: "futures_equity" | "spot_equity" }) {
+  function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; market: "Futures" | "Spot"; valueKey: "futures_equity" | "spot_equity" }) {
   const [timeframe, setTimeframe] = useState<ChartTimeframe>("hourly");
   const [zoom, setZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
@@ -348,6 +349,7 @@ export default function ControlCenterPanel() {
   const [error, setError] = useState<string | null>(null);
   const [killSwitchLoading, setKillSwitchLoading] = useState(false);
   const [activityMode, setActivityMode] = useState<"autonomous" | "strategy">("autonomous");
+  const [selectedPosition, setSelectedPosition] = useState<Record<string, any> | null>(null);
   const [markets, setMarkets] = useState<Array<"spot" | "futures">>(["futures"]);
   const [modes, setModes] = useState<Array<"autonomous" | "strategy">>(["autonomous"]);
   const [marketSaving, setMarketSaving] = useState(false);
@@ -629,13 +631,14 @@ export default function ControlCenterPanel() {
                 <th>Side</th>
                 <th>Qty</th>
                 <th>Notional</th>
-                <th>P&amp;L</th>
+                                <th>P&amp;L</th>
                 <th>Leverage</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
               {positions.map((p) => (
-                <tr key={p.position_id ?? p.id ?? `${p.symbol}-${p.side}`}>
+                <tr key={p.position_id ?? p.id ?? `${p.symbol}-${p.side}`} onClick={() => setSelectedPosition(p)} className="position-row">
                   <td>{cleanSymbol(p.symbol)}</td>
                   <td>
                     <span
@@ -649,8 +652,23 @@ export default function ControlCenterPanel() {
                   <td className={p.unrealized_pnl >= 0 ? "up" : "down"}>
                     {p.unrealized_pnl >= 0 ? "+" : ""}${p.unrealized_pnl?.toFixed(2)}
                   </td>
+
+
+
+
+
+
+
+
                   <td>{p.leverage}x</td>
-                </tr>
+                                    <td>
+                                      <span className="position-expand-arrow">
+                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                                          <path d="M5 3L9 7L5 11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                                        </svg>
+                                      </span>
+                                    </td>
+                                  </tr>
               ))}
             </tbody>
           </table>
@@ -692,9 +710,16 @@ export default function ControlCenterPanel() {
                 </span>
               </div>
             ))
-          )}
+                      )}
         </div>
       </div>
+
+      {selectedPosition && (
+        <PositionDetailModal
+          position={selectedPosition}
+          onClose={() => setSelectedPosition(null)}
+        />
+      )}
     </div>
   );
 }
