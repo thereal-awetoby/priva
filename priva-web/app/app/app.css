@@ -241,6 +241,21 @@
 .equity-point{ fill: var(--accent); }
 .equity-point-carried{ opacity: .55; }
 .equity-empty{ margin: 36px 0 0; }
+.equity-chart-shell{ position: relative; }
+.equity-jump-latest{
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
+  border: 1px solid var(--rule);
+  background: var(--bg-raised);
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 10px;
+  padding: 5px 8px;
+}
+.equity-jump-latest:hover{ color: var(--ink); }
 .equity-scroll{
   overflow-x: auto;
   overflow-y: auto;

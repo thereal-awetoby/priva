@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useLayoutEffect } from "react";
 import { apiGet, apiPost } from "@/lib/api";
 import { timeAgo, cleanSymbol } from "@/lib/format";
 import PositionDetailModal from "@/components/app/PositionDetailModal";
@@ -109,19 +109,27 @@ function executionLabel(entry: ActivityEntry): string {
   if (entry.status === "rejected") return "Rejected by exchange";
   if (entry.status === "risk_rejected") return "Rejected by risk check";
   return "Signal logged";
-  }
+}
 
-  function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; market: "Futures" | "Spot"; valueKey: "futures_equity" | "spot_equity" }) {
+function EquityCurve({
+  points,
+  market,
+  valueKey,
+}: {
+  points: EquityPoint[];
+  market: "Futures" | "Spot";
+  valueKey: "futures_equity" | "spot_equity";
+}) {
   const [timeframe, setTimeframe] = useState<ChartTimeframe>("hourly");
   const [zoom, setZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
+  const [isScrolledAway, setIsScrolledAway] = useState(false);
   const chartRef = useRef<HTMLDivElement>(null);
   const panRef = useRef({ startX: 0, startScrollLeft: 0 });
-  const width = 720;
+  const wasAtLatestRef = useRef(true);
+  const [containerWidth, setContainerWidth] = useState(720);
   const height = 260;
   const padding = { top: 12, right: 12, bottom: 28, left: 60 };
-  const plotW = width - padding.left - padding.right;
-  const plotH = height - padding.top - padding.bottom;
 
   // Keep the complete aggregated timeline for every resolution. Worker
   // snapshots can be market-specific, so a missing market field is a genuine
@@ -133,10 +141,19 @@ function executionLabel(entry: ActivityEntry): string {
   });
   const numericValues = values.filter((value): value is number => value != null && Number.isFinite(value));
   const hasMarketData = numericValues.length > 0;
+  const hasBuckets = chartPoints.length > 0;
+  // True only while the scrollable chart block is actually in the DOM. The
+  // observer / wheel effects below depend on it so they re-bind when the chart
+  // appears after an empty state (e.g. Spot chart receiving its first data).
+  const chartMounted = hasBuckets && hasMarketData;
   const carriedValues = chartPoints.map((point) => valueKey === "futures_equity"
     ? Boolean(point.futures_equity_carried)
     : Boolean(point.spot_equity_carried));
   const times = chartPoints.map((p) => p.timestamp ?? p.created_at ?? "");
+  const widthScale = Math.max(100, values.length * 2) / 100;
+  const svgWidth = containerWidth * widthScale * zoom;
+  const plotW = svgWidth - padding.left - padding.right;
+  const plotH = height - padding.top - padding.bottom;
 
   const min = numericValues.length ? Math.min(...numericValues) : 0;
   const max = numericValues.length ? Math.max(...numericValues) : 1;
@@ -163,12 +180,44 @@ function executionLabel(entry: ActivityEntry): string {
   });
 
   const yTicks = [min, min + range / 2, max];
-  const tickIndexes =
-    chartPoints.length <= 1
-      ? (chartPoints.length === 1 ? [0] : [])
-      : Array.from(
-          new Set([0, Math.floor((values.length - 1) / 2), values.length - 1])
-        );
+  const tickIntervalMs = {
+    minute: 5 * 60 * 1000,
+    hourly: 60 * 60 * 1000,
+    daily: 24 * 60 * 60 * 1000,
+    weekly: 7 * 24 * 60 * 60 * 1000,
+    monthly: 30 * 24 * 60 * 60 * 1000,
+  }[timeframe];
+  const timestampIndexes = times
+    .map((time, index) => ({ index, timestamp: new Date(time).getTime() }))
+    .filter(({ timestamp }) => Number.isFinite(timestamp));
+  const candidateTickIndexes: number[] = [];
+  let lastTickTimestamp = -Infinity;
+  timestampIndexes.forEach(({ index, timestamp }) => {
+    if (index === 0 || timestamp - lastTickTimestamp >= tickIntervalMs) {
+      candidateTickIndexes.push(index);
+      lastTickTimestamp = timestamp;
+    }
+  });
+  const estimatedLabelWidth = timeframe === "minute" || timeframe === "hourly" ? 110 : 75;
+  // The axis is index-based, so two time-based candidates can land only a
+  // pixel or two apart (e.g. either side of a gap in the data). Drop any
+  // candidate that would sit closer than one label width to the previous one.
+  const spacedCandidates: number[] = [];
+  let lastTickX = -Infinity;
+  candidateTickIndexes.forEach((tickIndex) => {
+    const x = xFor(tickIndex);
+    if (x - lastTickX >= estimatedLabelWidth) {
+      spacedCandidates.push(tickIndex);
+      lastTickX = x;
+    }
+  });
+  const maxTickLabels = Math.max(2, Math.floor(plotW / estimatedLabelWidth));
+  const tickCount = Math.min(maxTickLabels, spacedCandidates.length);
+  const tickIndexes = tickCount <= 1
+    ? spacedCandidates.slice(0, tickCount)
+    : Array.from({ length: tickCount }, (_, index) => (
+        spacedCandidates[Math.round(index * (spacedCandidates.length - 1) / (tickCount - 1))]
+      ));
 
   const formatTime = (iso: string) => {
     if (!iso) return "";
@@ -182,14 +231,43 @@ function executionLabel(entry: ActivityEntry): string {
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
 
-  // Reset zoom/pan whenever the underlying dataset changes shape (timeframe
-  // switch, or a different point count coming back from a refetch) so users
-  // don't end up zoomed into empty space.
-  useEffect(() => {
+  const updateScrollState = () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const distanceFromLatest = chart.scrollWidth - chart.clientWidth - chart.scrollLeft;
+    const atLatest = distanceFromLatest <= 6;
+    wasAtLatestRef.current = atLatest;
+    setIsScrolledAway(!atLatest);
+  };
+
+  const handleChartScroll = () => updateScrollState();
+
+  // Measure the scroll container. Re-binds whenever the chart block mounts or
+  // unmounts, so a chart that starts in an empty state still gets measured.
+  useLayoutEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const observer = new ResizeObserver(() => setContainerWidth(chart.clientWidth));
+    observer.observe(chart);
+    setContainerWidth(chart.clientWidth);
+    return () => observer.disconnect();
+  }, [chartMounted]);
+
+  // Reset zoom when the user changes resolution, and start following the
+  // newest data again in the new view.
+  useLayoutEffect(() => {
     setZoom(1);
-    if (chartRef.current) chartRef.current.scrollLeft = 0;
+    wasAtLatestRef.current = true;
+  }, [timeframe]);
+
+  // Keep the newest point visible after a data update only when the user was
+  // already following the latest edge. Manual historical browsing is preserved.
+  useLayoutEffect(() => {
+    const chart = chartRef.current;
+    if (chart && wasAtLatestRef.current) chart.scrollLeft = chart.scrollWidth;
+    updateScrollState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeframe, values.length]);
+  }, [timeframe, chartMounted, values.length, times[times.length - 1], containerWidth]);
 
   // Wheel zoom/pan is bound manually (not via onWheel) because React attaches
   // its root wheel listener as passive by default, which silently ignores
@@ -197,6 +275,7 @@ function executionLabel(entry: ActivityEntry): string {
   // zooming it. Ctrl/Cmd+wheel zooms (matches the OS/browser zoom gesture and
   // trackpad pinch), Shift+wheel pans horizontally, plain wheel is left alone
   // so the page can still scroll normally when the cursor passes over the chart.
+  // Re-binds when the chart block mounts or unmounts.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -227,7 +306,7 @@ function executionLabel(entry: ActivityEntry): string {
 
     chart.addEventListener("wheel", onWheel, { passive: false });
     return () => chart.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [chartMounted]);
 
   const handleChartPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -250,9 +329,25 @@ function executionLabel(entry: ActivityEntry): string {
     setIsPanning(false);
   };
 
+  // Double-click: back to 1x zoom and the newest data, regardless of where the
+  // user had scrolled to.
   const resetView = () => {
     setZoom(1);
-    if (chartRef.current) chartRef.current.scrollLeft = 0;
+    wasAtLatestRef.current = true;
+    requestAnimationFrame(() => {
+      const chart = chartRef.current;
+      if (!chart) return;
+      chart.scrollLeft = chart.scrollWidth;
+      updateScrollState();
+    });
+  };
+
+  const jumpToLatest = () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.scrollLeft = chart.scrollWidth;
+    wasAtLatestRef.current = true;
+    setIsScrolledAway(false);
   };
 
   return (
@@ -274,62 +369,100 @@ function executionLabel(entry: ActivityEntry): string {
           </div>
         </div>
       </div>
-      {!hasMarketData ? (
+      {!hasBuckets ? (
         <p className="panel-lead equity-empty">Waiting for the next agent cycle.</p>
+      ) : !hasMarketData ? (
+        <p className="panel-lead equity-empty">Data is available, but no {market.toLowerCase()} equity values exist in this range.</p>
       ) : (
-        <div
-          ref={chartRef}
-          className={`equity-scroll${isPanning ? " is-panning" : ""}`}
-          onPointerDown={handleChartPointerDown}
-          onPointerMove={handleChartPointerMove}
-          onPointerUp={stopChartPanning}
-          onPointerCancel={stopChartPanning}
-          onDoubleClick={resetView}
-          title="Ctrl/Cmd+scroll to zoom · Shift+scroll or drag to pan · double-click to reset"
-        >
+        <div className="equity-chart-shell">
+          {isScrolledAway ? (
+            <button type="button" className="equity-jump-latest" onClick={jumpToLatest}>
+              Jump to latest
+            </button>
+          ) : null}
+          <div
+            ref={chartRef}
+            className={`equity-scroll${isPanning ? " is-panning" : ""}`}
+            onScroll={handleChartScroll}
+            onPointerDown={handleChartPointerDown}
+            onPointerMove={handleChartPointerMove}
+            onPointerUp={stopChartPanning}
+            onPointerCancel={stopChartPanning}
+            onDoubleClick={resetView}
+            title="Ctrl/Cmd+scroll to zoom · Shift+scroll or drag to pan · double-click to reset"
+          >
+            <svg
+              className="equity-chart"
+              viewBox={`0 0 ${svgWidth} ${height}`}
+              style={{ width: `${svgWidth}px`, height: `${height}px` }}
+              role="img"
+              aria-label="Balance over time"
+            >
+              {yTicks.map((v, i) => (
+                <g key={i}>
+                  <line
+                    x1={padding.left}
+                    y1={yFor(v)}
+                    x2={svgWidth - padding.right}
+                    y2={yFor(v)}
+                    className="equity-gridline"
+                  />
+                </g>
+              ))}
+              {tickIndexes.map((i) => (
+                <text
+                  key={i}
+                  x={xFor(i)}
+                  y={height - padding.bottom + 18}
+                  className="equity-axis-label"
+                  textAnchor={i === 0 ? "start" : i === values.length - 1 ? "end" : "middle"}
+                >
+                  {formatTime(times[i])}
+                </text>
+              ))}
+              {values.map((value, index) => value == null ? null : (
+                <circle
+                  key={`point-${index}`}
+                  cx={xFor(index)}
+                  cy={yFor(value)}
+                  r="2.5"
+                  className={carriedValues[index] ? "equity-point equity-point-carried" : "equity-point"}
+                />
+              ))}
+              {realPaths.map((segment, index) => <path key={`real-${index}`} d={segment} className="equity-line" />)}
+              {carriedPaths.map((segment, index) => <path key={`carried-${index}`} d={segment} className="equity-line equity-line-carried" />)}
+            </svg>
+          </div>
+          {/* Fixed y-axis: lives outside the scroll container so the price
+              labels stay put while the chart scrolls underneath. Gridlines
+              remain inside the scrolling SVG. */}
           <svg
-            className="equity-chart"
-            viewBox={`0 0 ${width} ${height}`}
-            style={{ width: `${Math.max(100, values.length * 2) * zoom}%`, height: `${height}px` }}
-            role="img"
-            aria-label="Balance over time"
+            className="equity-yaxis"
+            width={padding.left}
+            height={height}
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              zIndex: 1,
+              display: "block",
+              background: "var(--bg-sunken)",
+              pointerEvents: "none",
+            }}
           >
             {yTicks.map((v, i) => (
-              <g key={i}>
-                <line
-                  x1={padding.left}
-                  y1={yFor(v)}
-                  x2={width - padding.right}
-                  y2={yFor(v)}
-                  className="equity-gridline"
-                />
-                <text x={padding.left - 8} y={yFor(v)} className="equity-axis-label" textAnchor="end" dominantBaseline="middle">
-                  ${v.toFixed(0)}
-                </text>
-              </g>
-            ))}
-            {tickIndexes.map((i) => (
               <text
                 key={i}
-                x={xFor(i)}
-                y={height - padding.bottom + 18}
+                x={padding.left - 8}
+                y={yFor(v)}
                 className="equity-axis-label"
-                textAnchor={i === 0 ? "start" : i === values.length - 1 ? "end" : "middle"}
+                textAnchor="end"
+                dominantBaseline="middle"
               >
-                {formatTime(times[i])}
+                ${v.toFixed(0)}
               </text>
             ))}
-            {values.map((value, index) => value == null ? null : (
-              <circle
-                key={`point-${index}`}
-                cx={xFor(index)}
-                cy={yFor(value)}
-                r="2.5"
-                className={carriedValues[index] ? "equity-point equity-point-carried" : "equity-point"}
-              />
-            ))}
-            {realPaths.map((segment, index) => <path key={`real-${index}`} d={segment} className="equity-line" />)}
-            {carriedPaths.map((segment, index) => <path key={`carried-${index}`} d={segment} className="equity-line equity-line-carried" />)}
           </svg>
         </div>
       )}
@@ -631,7 +764,7 @@ export default function ControlCenterPanel() {
                 <th>Side</th>
                 <th>Qty</th>
                 <th>Notional</th>
-                                <th>P&amp;L</th>
+                <th>P&amp;L</th>
                 <th>Leverage</th>
                 <th></th>
               </tr>
@@ -652,23 +785,15 @@ export default function ControlCenterPanel() {
                   <td className={p.unrealized_pnl >= 0 ? "up" : "down"}>
                     {p.unrealized_pnl >= 0 ? "+" : ""}${p.unrealized_pnl?.toFixed(2)}
                   </td>
-
-
-
-
-
-
-
-
                   <td>{p.leverage}x</td>
-                                    <td>
-                                      <span className="position-expand-arrow">
-                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                                          <path d="M5 3L9 7L5 11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-                                        </svg>
-                                      </span>
-                                    </td>
-                                  </tr>
+                  <td>
+                    <span className="position-expand-arrow">
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <path d="M5 3L9 7L5 11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </span>
+                  </td>
+                </tr>
               ))}
             </tbody>
           </table>
@@ -703,14 +828,16 @@ export default function ControlCenterPanel() {
           ) : (
             filteredActivity.map((entry) => (
               <div className="log-row" key={entry.id}>
-                <span className="log-time">{timeAgo(entry.timestamp)}</span>
+                <span className="log-time">
+                  {timeAgo(entry.status === "closed" ? entry.closed_at : entry.opened_at ?? entry.timestamp)}
+                </span>
                 <span>
                   {cleanSymbol(entry.symbol)} — {entry.action}
                   <span className="log-status"> ({executionLabel(entry)})</span>
                 </span>
               </div>
             ))
-                      )}
+          )}
         </div>
       </div>
 

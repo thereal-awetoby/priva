@@ -11,8 +11,22 @@ export default function PositionDetailModal({
   position: Position;
   onClose: () => void;
 }) {
-  const opened =
-    position.opened_at ?? position.timestamp ?? position.entry_time ?? null;
+  const formatTimestamp = (value: unknown) => {
+    if (!value) return "—";
+    const date = new Date(String(value));
+    return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+  };
+  const opened = position.opened_at ?? null;
+  const closed = position.closed_at ?? null;
+  const openedDate = opened ? new Date(String(opened)) : null;
+  const closedDate = closed ? new Date(String(closed)) : null;
+  const duration =
+    openedDate && closedDate && !Number.isNaN(openedDate.getTime()) && !Number.isNaN(closedDate.getTime())
+      ? Math.max(0, closedDate.getTime() - openedDate.getTime())
+      : null;
+  const durationLabel = duration == null
+    ? "—"
+    : `${Math.floor(duration / 3600000)}h ${Math.floor((duration % 3600000) / 60000)}m`;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -67,9 +81,23 @@ export default function PositionDetailModal({
           <div className="position-detail-item">
             <div className="position-detail-label">Opened</div>
             <div className="position-detail-value" style={{ fontSize: "12px" }}>
-              {opened ? new Date(opened).toLocaleString() : "Not available yet"}
+              {formatTimestamp(opened)}
             </div>
           </div>
+          {closed && (
+            <div className="position-detail-item">
+              <div className="position-detail-label">Closed</div>
+              <div className="position-detail-value" style={{ fontSize: "12px" }}>
+                {formatTimestamp(closed)}
+              </div>
+            </div>
+          )}
+          {closed && (
+            <div className="position-detail-item">
+              <div className="position-detail-label">Duration</div>
+              <div className="position-detail-value">{durationLabel}</div>
+            </div>
+          )}
         </div>
       </div>
     </div>

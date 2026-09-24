@@ -64,11 +64,13 @@ function entryDetails(entry: EventItem): string {
     return (entry.risk_check?.reasons ?? []).join(", ") || "Blocked by risk check";
   }
   if (entry.status === "skipped_existing_position") return "Position already open";
+  if (entry.status === "closed") return "Position closed";
   return "";
 }
 
 function executionLabel(entry: EventItem): string {
-  if (entry.status === "submitted" || entry.status === "closed") return "Executed";
+  if (entry.status === "closed") return "Position closed";
+  if (entry.status === "submitted") return "Position opened";
   if (entry.status === "skipped_existing_position") return "Skipped: position already open";
   if (entry.status === "rejected") return "Rejected by exchange";
   if (entry.status === "risk_rejected") return "Rejected by risk check";
@@ -359,7 +361,9 @@ export default function ActivityPanel() {
                   </p>
                 </div>
                 <div className="event-meta">
-                  <div className="event-time">{timeAgo(entry.timestamp)}</div>
+                  <div className="event-time">
+                    {timeAgo(entry.status === "closed" ? entry.closed_at : entry.opened_at ?? entry.timestamp)}
+                  </div>
                 </div>
               </div>
             );

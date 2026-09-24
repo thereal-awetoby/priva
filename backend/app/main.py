@@ -58,6 +58,109 @@ cycle_logger = SupabaseCycleLogger()
 _daily_balance_baselines: dict[str, tuple[str, float]] = {}
 _balance_history: list[dict[str, Any]] = []
 EFFECTIVE_BALANCE_HISTORY_START = datetime(2026, 9, 23, 13, 42, tzinfo=timezone.utc)
+POSITION_LEDGER_START = datetime(2026, 9, 23, tzinfo=timezone.utc)
+
+
+def _parse_position_timestamp(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        if isinstance(value, (int, float)) or str(value).isdigit():
+            numeric = float(value)
+            if numeric > 100_000_000_000:
+                numeric /= 1000
+            return datetime.fromtimestamp(numeric, timezone.utc)
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _cycle_order(cycle: dict[str, Any]) -> dict[str, Any]:
+    return cycle.get("order_result") or cycle.get("order") or {}
+
+
+def _exchange_request_time(order: dict[str, Any]) -> datetime | None:
+    exchange = order.get("exchange") or {}
+    return _parse_position_timestamp(
+        exchange.get("requestTime")
+        or (exchange.get("data") or {}).get("requestTime")
+    )
+
+
+def _ledger_cycles_for_positions(cycles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        cycle
+        for cycle in cycles
+        if (_parse_position_timestamp(cycle.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
+        >= POSITION_LEDGER_START
+    ]
+
+
+def _derive_open_timestamp(
+    position: dict[str, Any],
+    cycles: list[dict[str, Any]],
+) -> tuple[str | None, str | None]:
+    exchange_time = _parse_position_timestamp(
+        position.get("cTime") or position.get("openTime") or position.get("createTime")
+    )
+    if exchange_time is not None:
+        return exchange_time.isoformat(), "exchange"
+
+    target_symbol = str(position.get("symbol", "")).upper()
+    raw_side = str(position.get("holdSide") or position.get("side") or "").lower()
+    target_side = "buy" if raw_side in {"long", "buy"} else "sell"
+    target_qty = float(position.get("total", position.get("available", 0)) or 0)
+    if not target_symbol or target_qty <= 0:
+        return None, None
+
+    matching: list[dict[str, Any]] = []
+    total_qty = 0.0
+    for cycle in sorted(_ledger_cycles_for_positions(cycles), key=lambda item: item.get("created_at", ""), reverse=True):
+        if cycle.get("status") != "submitted":
+            continue
+        if str(cycle.get("symbol", "")).upper() != target_symbol or cycle.get("market", "futures") != "futures":
+            continue
+        order = _cycle_order(cycle)
+        if str(order.get("trade_side", "open")).lower() != "open":
+            continue
+        side = str(order.get("side") or (cycle.get("decision") or {}).get("action", "")).lower()
+        if side != target_side:
+            continue
+        quantity = float(order.get("qty", 0) or 0)
+        created_at = _parse_position_timestamp(cycle.get("created_at"))
+        if quantity <= 0 or created_at is None:
+            continue
+        matching.append({"created_at": created_at, "qty": quantity})
+        total_qty += quantity
+        if abs(total_qty - target_qty) <= 1e-9:
+            earliest = min(item["created_at"] for item in matching)
+            return earliest.isoformat(), "ledger"
+        if total_qty > target_qty + 1e-9:
+            return None, None
+    return None, None
+
+
+def _annotate_live_position(
+    position: dict[str, Any],
+    cycles: list[dict[str, Any]],
+) -> dict[str, Any]:
+    opened_at, opened_at_source = _derive_open_timestamp(position, cycles)
+    return {"opened_at": opened_at, "closed_at": None, "opened_at_source": opened_at_source}
+
+
+def _cycle_opened_timestamp(cycle: dict[str, Any]) -> str | None:
+    exchange_timestamp = _exchange_request_time(_cycle_order(cycle))
+    if exchange_timestamp is not None:
+        return exchange_timestamp.isoformat()
+    return cycle.get("created_at") if cycle.get("created_at") else None
+
+
+def _cycle_closed_timestamp(cycle: dict[str, Any]) -> str | None:
+    exchange_timestamp = _exchange_request_time(_cycle_order(cycle))
+    if exchange_timestamp is not None:
+        return exchange_timestamp.isoformat()
+    return cycle.get("created_at") if cycle.get("created_at") else None
 
 
 def execution_client_for(user: AuthenticatedUser) -> BitgetPaperExecutionClient:
@@ -735,6 +838,9 @@ def status() -> dict[str, Any]:
 def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user = normalize_user(user)
     user_logger = cycle_logger_for(user)
+    ledger_cycles = user_logger.fetch_cycles()
+    if not ledger_cycles and not supabase_auth.required:
+        ledger_cycles = agent_loop.recent_cycles()
     exchange_positions = execution_client_for(user).fetch_futures_positions()
     if exchange_positions["status"] == "ok":
         live_positions = []
@@ -757,8 +863,7 @@ def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]
             notional = abs(float(position.get("openCost", 0) or 0))
             if notional <= 0:
                 notional = entry_price * qty if entry_price > 0 else mark_price * qty
-            live_positions.append(
-                {
+            live_position = {
                     "symbol": position.get("symbol"),
                     "side": side,
                     "qty": qty,
@@ -770,10 +875,11 @@ def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]
                     "margin_mode": position.get("marginMode"),
                     "source": "bitget_paper",
                 }
-            )
+            live_position.update(_annotate_live_position(position, ledger_cycles))
+            live_positions.append(live_position)
         return {"positions": live_positions, "total_positions": len(live_positions)}
 
-    cycles = cycles_after_reset(user_logger.fetch_cycles(), user)
+    cycles = cycles_after_reset(ledger_cycles, user)
     if cycles:
         live_positions = calculate_unrealized_pnl(
             cycles,
@@ -783,6 +889,7 @@ def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]
             for position in live_positions:
                 position["leverage"] = 1.0
                 position["source"] = "paper"
+                position.update(_annotate_live_position(position, cycles))
             return {"positions": live_positions, "total_positions": len(live_positions)}
 
     position_map: dict[tuple[str, str], dict[str, Any]] = {}
@@ -808,6 +915,7 @@ def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]
         position["entry_price"] = position["notional_usd"] / position["qty"]
         position["mark_price"] = ticker.get("last_price", 0)
         position["order_ids"].append(exchange_data.get("orderId"))
+        position.update(_annotate_live_position(position, cycles))
     live_positions = list(position_map.values())
     if live_positions:
         return {"positions": live_positions, "total_positions": len(live_positions)}
@@ -1075,7 +1183,8 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
                     "intent_hash": (cycle.get("intent") or {}).get("intent_hash"),
                     "mode": cycle.get("mode", "autonomous"),
                     "timestamp": cycle.get("created_at"),
-                    "opened_at": cycle.get("created_at") if (cycle.get("order_result") or cycle.get("order")) else None,
+                    "opened_at": _cycle_opened_timestamp(cycle) if cycle.get("status") == "submitted" and (cycle.get("order_result") or cycle.get("order")) else None,
+                    "closed_at": _cycle_closed_timestamp(cycle) if cycle.get("status") == "closed" else None,
                 }
                 for cycle in cycles
             ]

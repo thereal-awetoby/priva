@@ -469,3 +469,156 @@ def test_activity_log_exposes_trade_open_time(monkeypatch):
     result = main.activity_log()
 
     assert result["entries"][0]["opened_at"] == opened_at
+
+
+def test_positions_derives_open_time_from_all_modes_and_preserves_open_state(monkeypatch):
+    class AccumulatedPositionClient:
+        def fetch_futures_positions(self):
+            return {
+                "status": "ok",
+                "positions": [{
+                    "symbol": "AAPLUSDT",
+                    "holdSide": "short",
+                    "total": "3",
+                    "openPriceAvg": "340",
+                    "markPrice": "338",
+                }],
+            }
+
+    monkeypatch.setattr(main, "paper_execution_client", AccumulatedPositionClient())
+    monkeypatch.setattr(
+        main.cycle_logger,
+        "fetch_cycles",
+        lambda **kwargs: [
+            {
+                "created_at": "2026-09-23T13:33:28.497903+00:00",
+                "symbol": "AAPLUSDT",
+                "market": "futures",
+                "mode": "strategy",
+                "status": "submitted",
+                "decision": {"action": "sell"},
+                "order_result": {"trade_side": "open", "side": "sell", "qty": 1},
+            },
+            {
+                "created_at": "2026-09-23T13:40:00+00:00",
+                "symbol": "AAPLUSDT",
+                "market": "futures",
+                "mode": "autonomous",
+                "status": "submitted",
+                "decision": {"action": "sell"},
+                "order_result": {"trade_side": "open", "side": "sell", "qty": 2},
+            },
+        ],
+    )
+
+    result = main.positions()
+
+    position = result["positions"][0]
+    assert position["opened_at"] == "2026-09-23T13:33:28.497903+00:00"
+    assert position["opened_at_source"] == "ledger"
+    assert position["closed_at"] is None
+
+
+def test_real_aapl_qty_29_fixture_walks_back_interleaved_modes():
+    user_id = "test-user"
+    timestamps_and_modes = [
+        ("2026-09-23T13:33:28.497903+00:00", "strategy"),
+        ("2026-09-23T13:35:22.560384+00:00", "autonomous"),
+        ("2026-09-23T13:35:22.561809+00:00", "strategy"),
+        ("2026-09-23T13:40:29.384671+00:00", "strategy"),
+        ("2026-09-23T13:40:30.105329+00:00", "autonomous"),
+        ("2026-09-23T13:42:23.828144+00:00", "autonomous"),
+        ("2026-09-23T13:42:23.830403+00:00", "strategy"),
+        ("2026-09-23T13:47:34.265479+00:00", "strategy"),
+        ("2026-09-23T13:47:34.889761+00:00", "autonomous"),
+        ("2026-09-23T13:48:11.645146+00:00", "autonomous"),
+        ("2026-09-23T13:48:11.647076+00:00", "strategy"),
+        ("2026-09-23T13:53:22.561022+00:00", "strategy"),
+        ("2026-09-23T13:53:25.605605+00:00", "autonomous"),
+        ("2026-09-23T13:58:29.211795+00:00", "strategy"),
+        ("2026-09-23T13:58:35.333208+00:00", "autonomous"),
+        ("2026-09-23T17:06:27.204921+00:00", "autonomous"),
+        ("2026-09-23T17:07:38.899201+00:00", "autonomous"),
+        ("2026-09-23T17:12:52.086824+00:00", "autonomous"),
+        ("2026-09-23T17:16:49.961145+00:00", "autonomous"),
+        ("2026-09-23T17:18:48.155158+00:00", "autonomous"),
+        ("2026-09-23T17:22:41.870481+00:00", "autonomous"),
+        ("2026-09-23T17:27:43.638659+00:00", "autonomous"),
+        ("2026-09-23T17:30:38.198127+00:00", "strategy"),
+        ("2026-09-23T17:31:29.509135+00:00", "strategy"),
+        ("2026-09-23T17:31:38.717360+00:00", "strategy"),
+        ("2026-09-23T17:36:42.076063+00:00", "strategy"),
+        ("2026-09-23T17:41:45.312737+00:00", "strategy"),
+        ("2026-09-23T18:38:50.219618+00:00", "strategy"),
+        ("2026-09-23T18:43:50.480805+00:00", "autonomous"),
+    ]
+    cycles = [
+        {
+            "created_at": created_at,
+            "user_id": user_id,
+            "symbol": "AAPLUSDT",
+            "market": "futures",
+            "mode": mode,
+            "status": "submitted",
+            "decision": {"action": "sell"},
+            "order_result": {
+                "trade_side": "open",
+                "side": "sell",
+                "qty": 1.0,
+            },
+        }
+        for created_at, mode in timestamps_and_modes
+    ]
+
+    timestamp, source = main._derive_open_timestamp(
+        {
+            "user_id": user_id,
+            "symbol": "AAPLUSDT",
+            "holdSide": "short",
+            "total": 29,
+        },
+        cycles,
+    )
+
+    assert len(cycles) == 29
+    assert timestamp == "2026-09-23T13:33:28.497903+00:00"
+    assert source == "ledger"
+
+
+def test_skipped_existing_position_does_not_enter_open_timestamp_chain():
+    timestamp, source = main._derive_open_timestamp(
+        {"symbol": "AAPLUSDT", "holdSide": "short", "total": "1"},
+        [{
+            "created_at": "2026-09-23T13:33:28Z",
+            "symbol": "AAPLUSDT",
+            "market": "futures",
+            "status": "skipped_existing_position",
+            "decision": {"action": "sell"},
+            "order_result": {"qty": 1, "side": "sell"},
+        }],
+    )
+
+    assert timestamp is None
+    assert source is None
+
+
+def test_activity_log_exposes_close_time_without_open_time(monkeypatch):
+    monkeypatch.setattr(
+        main.cycle_logger,
+        "fetch_cycles",
+        lambda **kwargs: [{
+            "created_at": "2026-09-23T13:33:25+00:00",
+            "symbol": "AAPLUSDT",
+            "status": "closed",
+            "decision": {"action": "close", "closed_position_side": "sell"},
+            "order_result": {
+                "closed_position_side": "sell",
+                "exchange": {"requestTime": "2026-09-23T13:33:26+00:00"},
+            },
+        }],
+    )
+
+    result = main.activity_log()
+
+    assert result["entries"][0]["opened_at"] is None
+    assert result["entries"][0]["closed_at"] == "2026-09-23T13:33:26+00:00"
