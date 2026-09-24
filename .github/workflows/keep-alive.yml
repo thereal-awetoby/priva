@@ -1,0 +1,13 @@
+name: Keep Render backend alive
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check backend health
+        run: curl --fail --silent --show-error https://priva-499h.onrender.com/health

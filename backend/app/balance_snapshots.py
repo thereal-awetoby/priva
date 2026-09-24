@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
+logger = logging.getLogger("priva.balance_snapshots")
 
-def fetch_combined_balance_snapshot(execution_client: Any, market_service: Any) -> dict[str, Any] | None:
+def fetch_combined_balance_snapshot(
+    execution_client: Any,
+    market_service: Any,
+    *,
+    user_id: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any] | None:
     futures = execution_client.fetch_futures_account_balance()
     spot = execution_client.fetch_spot_assets()
     if futures.get("status") == "not_configured" and spot.get("status") == "not_configured":
@@ -35,10 +43,28 @@ def fetch_combined_balance_snapshot(execution_client: Any, market_service: Any) 
 
     futures_equity = float(futures.get("equity", 0) or 0) if futures.get("status") == "ok" else 0.0
     combined_equity = round(futures_equity + spot_equity, 4) if futures.get("status") == "ok" else round(spot_equity, 4)
-    return {
+    snapshot = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "balance": combined_equity,
         "equity": combined_equity,
         "futures_equity": round(futures_equity, 4),
         "spot_equity": round(spot_equity, 4),
     }
+    if (
+        futures.get("status") != "ok"
+        or spot.get("status") != "ok"
+        or snapshot["futures_equity"] is None
+        or snapshot["spot_equity"] is None
+    ):
+        logger.warning(
+            "balance_snapshot write with degraded data: user=%s session=%s timestamp=%s "
+            "futures_status=%s spot_status=%s futures_equity=%s spot_equity=%s",
+            user_id,
+            session_id,
+            snapshot["timestamp"],
+            futures.get("status"),
+            spot.get("status"),
+            snapshot["futures_equity"],
+            snapshot["spot_equity"],
+        )
+    return snapshot

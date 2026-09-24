@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -33,6 +34,8 @@ from app import agent_loop
 from app.supabase_logging import SupabaseCycleLogger
 from app.auth import AuthenticatedUser, credential_vault, current_user, supabase_auth
 from app.user_runtime import user_runtime_registry
+
+logger = logging.getLogger("priva.main")
 
 app = FastAPI(
     title="Priva Backend",
@@ -477,6 +480,23 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
         "futures_equity": futures_equity,
         "spot_equity": spot_equity,
     }
+    if (
+        futures.get("status") != "ok"
+        or spot.get("status") != "ok"
+        or snapshot["futures_equity"] is None
+        or snapshot["spot_equity"] is None
+    ):
+        logger.warning(
+            "balance_snapshot write with degraded data: user=%s session=%s timestamp=%s "
+            "futures_status=%s spot_status=%s futures_equity=%s spot_equity=%s",
+            user.id,
+            user_logger.session_id,
+            snapshot["timestamp"],
+            futures.get("status"),
+            spot.get("status"),
+            snapshot["futures_equity"],
+            snapshot["spot_equity"],
+        )
     _balance_history.append(snapshot)
     del _balance_history[:-1000]
     user_logger.log_balance_snapshot(snapshot)
@@ -669,7 +689,12 @@ async def connect_bitget(payload: BitgetConnectionRequest, user: AuthenticatedUs
     else:
         return {"status": "rejected", "message": "PRIVA_CREDENTIAL_ENCRYPTION_KEY is not configured"}
     connected_client = execution_client_for(user)
-    connected_snapshot = fetch_combined_balance_snapshot(connected_client, market_service)
+    connected_snapshot = fetch_combined_balance_snapshot(
+        connected_client,
+        market_service,
+        user_id=user.id,
+        session_id=getattr(cycle_logger_for(user), "session_id", None),
+    )
     if connected_snapshot is not None:
         cycle_logger_for(user).log_balance_snapshot(connected_snapshot)
     runtime = user_runtime_registry.start(user.id, execution_client_for(user)) if supabase_auth.required else None
@@ -813,13 +838,7 @@ async def startup_event() -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {
-        "status": "ok",
-        "service": "priva-backend",
-        "paper_trading": True,
-        "kill_switch_active": False,
-        "timestamp": "2026-09-10T00:00:00Z",
-    }
+    return {"status": "ok"}
 
 
 @app.get("/status")
@@ -838,9 +857,21 @@ def status() -> dict[str, Any]:
 def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user = normalize_user(user)
     user_logger = cycle_logger_for(user)
-    ledger_cycles = user_logger.fetch_cycles()
-    if not ledger_cycles and not supabase_auth.required:
-        ledger_cycles = agent_loop.recent_cycles()
+    ledger_cycles: list[dict[str, Any]] | None = None
+
+    def annotate_live_position(position: dict[str, Any]) -> dict[str, Any]:
+        nonlocal ledger_cycles
+        exchange_time = _parse_position_timestamp(
+            position.get("cTime") or position.get("openTime") or position.get("createTime")
+        )
+        if exchange_time is not None:
+            return _annotate_live_position(position, [])
+        if ledger_cycles is None:
+            ledger_cycles = user_logger.fetch_cycles()
+            if not ledger_cycles and not supabase_auth.required:
+                ledger_cycles = agent_loop.recent_cycles()
+        return _annotate_live_position(position, ledger_cycles)
+
     exchange_positions = execution_client_for(user).fetch_futures_positions()
     if exchange_positions["status"] == "ok":
         live_positions = []
@@ -875,10 +906,14 @@ def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]
                     "margin_mode": position.get("marginMode"),
                     "source": "bitget_paper",
                 }
-            live_position.update(_annotate_live_position(position, ledger_cycles))
+            live_position.update(annotate_live_position(position))
             live_positions.append(live_position)
         return {"positions": live_positions, "total_positions": len(live_positions)}
 
+    if ledger_cycles is None:
+        ledger_cycles = user_logger.fetch_cycles()
+        if not ledger_cycles and not supabase_auth.required:
+            ledger_cycles = agent_loop.recent_cycles()
     cycles = cycles_after_reset(ledger_cycles, user)
     if cycles:
         live_positions = calculate_unrealized_pnl(

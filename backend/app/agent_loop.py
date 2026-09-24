@@ -324,7 +324,12 @@ async def run_cycle(
             log_snapshot = getattr(cycle_logger, "log_balance_snapshot", None)
             if callable(log_snapshot):
                 try:
-                    snapshot = fetch_combined_balance_snapshot(execution_client, market_service)
+                    snapshot = fetch_combined_balance_snapshot(
+                        execution_client,
+                        market_service,
+                        user_id=getattr(cycle_logger, "user_id", None),
+                        session_id=getattr(cycle_logger, "session_id", None),
+                    )
                     if snapshot is not None:
                         _recent_balance_snapshots.append(snapshot)
                         del _recent_balance_snapshots[:-1000]
