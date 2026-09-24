@@ -140,24 +140,29 @@
 }
 .env-tag::before{ content:''; width: 5px; height: 5px; background: var(--up); }
 
-.auth-debug{
+.worker-status{
   font-family: var(--font-ibm-plex-mono), monospace;
   font-size: 11px;
-  color: var(--ink-dim);
   border: 1px solid var(--rule);
   padding: 6px 11px;
   display: flex;
   align-items: center;
   gap: 7px;
+  white-space: nowrap;
 }
-.auth-debug-live::before,
-.auth-debug-stopped::before,
-.auth-debug-error::before{ content:''; width: 5px; height: 5px; display: inline-block; }
-.auth-debug-live::before{ background: var(--up); }
-.auth-debug-stopped::before,
-.auth-debug-error::before{ background: var(--down); }
-.auth-debug-stopped{ color: var(--down); }
-.auth-debug-error{ color: var(--down); }
+.worker-status-dot{
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+}
+.worker-status-loading{ color: var(--ink-faint); }
+.worker-status-loading .worker-status-dot{ background: var(--ink-faint); }
+.worker-status-live{ color: var(--up); border-color: color-mix(in srgb, var(--up) 45%, var(--rule)); }
+.worker-status-live .worker-status-dot{ background: var(--up); }
+.worker-status-stopped{ color: var(--down); border-color: color-mix(in srgb, var(--down) 45%, var(--rule)); }
+.worker-status-stopped .worker-status-dot{ background: var(--down); }
+.worker-status-error{ color: var(--down); border-color: color-mix(in srgb, var(--down) 45%, var(--rule)); }
+.worker-status-error .worker-status-dot{ background: var(--down); }
 
 .sign-out-btn{
   border: 1px solid var(--rule);
@@ -238,8 +243,6 @@
 .equity-axis{ stroke: var(--rule); stroke-width: 1; }
 .equity-line{ fill:none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .equity-line-carried{ stroke-dasharray: 5 4; opacity: .55; }
-.equity-point{ fill: var(--accent); }
-.equity-point-carried{ opacity: .55; }
 .equity-empty{ margin: 36px 0 0; }
 .equity-chart-shell{ position: relative; }
 .equity-jump-latest{
@@ -766,3 +769,4 @@ table.positions tr:last-child td{ border-bottom:none; }
   font-family: var(--font-ibm-plex-mono), monospace;
   font-size: 15px;
 }
+
