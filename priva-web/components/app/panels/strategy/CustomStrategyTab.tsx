@@ -72,7 +72,6 @@ function ActivationBanner({ result }: { result: ActivationResult }) {
 
 async function parseAndActivate(payload: Record<string, any>): Promise<ActivationResult> {
   const parseData = await apiPost<any>("/strategies/parse", payload);
-  console.log("PARSE RESPONSE:", parseData);
 
   const strategyId = parseData.strategy_id;
   if (!strategyId) {
@@ -83,7 +82,6 @@ async function parseAndActivate(payload: Record<string, any>): Promise<Activatio
     `/strategies/${strategyId}/activate`,
     { symbols: payload.symbols }
   );
-  console.log("ACTIVATE RESPONSE:", activateData);
   return { ...parseData, ...activateData };
 }
 

@@ -58,8 +58,7 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
     setActivating(true);
     setActivateResult(null);
     try {
-      const data = await apiPost<any>(`/strategies/${selectedId}/activate`, { symbols });
-      console.log("ACTIVATE RESPONSE:", data);
+      await apiPost<any>(`/strategies/${selectedId}/activate`, { symbols });
       setActivateResult("Symbols updated · Agent will use these on the next cycle");
     } catch (err: any) {
       setActivateResult(`Couldn't activate: ${err.message}`);

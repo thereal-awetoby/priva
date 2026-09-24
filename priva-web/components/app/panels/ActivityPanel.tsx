@@ -222,6 +222,23 @@ export default function ActivityPanel() {
   const [modeFilter, setModeFilter] = useState<"all" | "autonomous" | "strategy">("all");
   const [showEvaluations, setShowEvaluations] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
+  const [copyFailureId, setCopyFailureId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!copyFailureId) return;
+    const timeout = window.setTimeout(() => setCopyFailureId(null), 2500);
+    return () => window.clearTimeout(timeout);
+  }, [copyFailureId]);
+
+  const copyIntentHash = async (entry: EventItem) => {
+    try {
+      if (!navigator.clipboard) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(String(entry.intent_hash));
+      setCopyFailureId(null);
+    } catch {
+      setCopyFailureId(String(entry.id ?? `${entry.symbol}-${entry.timestamp}`));
+    }
+  };
 
   const loadActivity = (attempt = 0) => {
     apiGet<any>("/activity-log")
@@ -376,7 +393,7 @@ export default function ActivityPanel() {
             return (
               <div
                 className={`event-row${entry.status === "submitted" ? " event-row-open" : ""}${entry.status === "closed" ? " event-row-closed" : ""}`}
-                key={entry.id}
+                key={entry.id ?? `${entry.symbol}-${entry.timestamp}`}
               >
                 <div className="event-icon">{getEventIcon(entry)}</div>
                 <div className="event-body">
@@ -399,10 +416,13 @@ export default function ActivityPanel() {
                       type="button"
                       className="event-intent"
                       title={entry.intent_hash}
-                      onClick={() => navigator.clipboard?.writeText(entry.intent_hash)}
+                      onClick={() => copyIntentHash(entry)}
                     >
                       Intent hash · {entry.intent_hash_short}
                     </button>
+                  ) : null}
+                  {copyFailureId === String(entry.id ?? `${entry.symbol}-${entry.timestamp}`) ? (
+                    <span className="event-detail">Couldn&apos;t copy</span>
                   ) : null}
                 </div>
                 <div className="event-meta">

@@ -522,6 +522,12 @@ export default function ControlCenterPanel() {
     return () => clearInterval(clock);
   }, []);
 
+  useEffect(() => {
+    if (!killSwitchNotice) return;
+    const timeout = window.setTimeout(() => setKillSwitchNotice(null), 7000);
+    return () => window.clearTimeout(timeout);
+  }, [killSwitchNotice]);
+
   const handleKillSwitch = async () => {
     setKillSwitchLoading(true);
     try {
@@ -661,8 +667,8 @@ export default function ControlCenterPanel() {
         </div>
       </div>
       {killSwitchNotice ? <div className="panel-lead">{killSwitchNotice}</div> : null}
-      {statusData?.daily_loss_usage_pct != null && Number(statusData.daily_loss_usage_pct) > 70 ? (
-        <div className="panel-lead">Risk usage elevated · {Math.round(Number(statusData.daily_loss_usage_pct))}% of daily loss limit</div>
+      {dailyLossUsage > 70 ? (
+        <div className="panel-lead">Risk usage elevated · {Math.round(dailyLossUsage)}% of daily loss limit</div>
       ) : null}
 
       <div className="perf-row">
@@ -836,7 +842,7 @@ export default function ControlCenterPanel() {
                 : entry.opened_at ?? entry.timestamp;
               const activityTime = formatActivityTime(eventTimestamp);
               return (
-                <div className="log-row" key={entry.id}>
+                <div className="log-row" key={entry.id ?? `${entry.symbol}-${entry.timestamp}`}>
                   <time className="log-time" dateTime={eventTimestamp ?? undefined} title={activityTime.title}>
                     {activityTime.display}
                   </time>
