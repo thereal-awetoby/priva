@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.balance_snapshots import fetch_combined_balance_snapshot
+from app.symbols import SPOT_SYMBOL_MAP, spot_symbol
 
 from app.strategy import build_pairs_signal, build_signal_from_ticker, get_active_strategy_id
 
@@ -215,7 +216,7 @@ def _live_position(symbol: str, execution_client: Any, *, market: str = "futures
         if callable(fetch_assets):
             result = fetch_assets()
             if result.get("status") == "ok":
-                base_coin = symbol.upper().removesuffix("USDT")
+                base_coin = spot_symbol(symbol).removesuffix("USDT")
                 asset = next((item for item in result.get("assets", []) if str(item.get("coin", "")).upper() == base_coin), None)
                 quantity = float((asset or {}).get("available", (asset or {}).get("total", 0)) or 0)
                 logged = _logged_spot_entry(symbol, cycle_logger)
@@ -317,6 +318,13 @@ async def run_cycle(
     mode: str | None = None,
 ) -> dict[str, Any]:
     def persist(result: dict[str, Any]) -> dict[str, Any]:
+        configured_market = market_type or MARKET_TYPE
+        decision_market = (result.get("decision") or {}).get("market")
+        result_market = configured_market if configured_market != "autonomous" else decision_market
+        result.setdefault(
+            "market",
+            result_market if result_market in {"spot", "futures"} else configured_market,
+        )
         result.setdefault("created_at", cycle_start.isoformat())
         _record_cycle(result)
         if cycle_logger is not None:
@@ -345,6 +353,7 @@ async def run_cycle(
         result = {
             "status": "blocked",
             "symbol": normalized_symbol,
+            "market": market_type or MARKET_TYPE,
             "mode": mode or ("strategy" if strategy_id else "autonomous"),
             "decision": {"action": "hold", "symbol": normalized_symbol},
             "risk_check": {"allowed": False, "reasons": [f"unsupported_symbol:{normalized_symbol}"]},
@@ -450,6 +459,20 @@ async def run_cycle(
         selected_market = decision.get("market") if configured_market == "autonomous" else configured_market
         if selected_market not in {"spot", "futures"}:
             raise ValueError("agent decision must select spot or futures")
+        if selected_market == "spot" and normalized_symbol not in SPOT_SYMBOL_MAP:
+            if configured_market == "autonomous":
+                selected_market = "futures"
+            else:
+                result = {
+                    "status": "blocked",
+                    "symbol": symbol.upper(),
+                    "mode": cycle_mode,
+                    "decision": decision,
+                    "ticker": ticker,
+                    "reason": "spot_market_unavailable",
+                    "order": None,
+                }
+                return persist(result)
         trade = {
             "symbol": symbol.upper(),
             "side": decision["action"],
@@ -458,6 +481,23 @@ async def run_cycle(
             "leverage": float(decision.get("leverage", 1.0) or 1.0),
             "market": selected_market,
         }
+        if selected_market == "spot":
+            spot_ticker = await asyncio.to_thread(market_service.fetch_spot_ticker, symbol)
+            if spot_ticker.get("status") != "live":
+                result = {
+                    "status": "blocked",
+                    "symbol": symbol.upper(),
+                    "market": "spot",
+                    "mode": cycle_mode,
+                    "decision": decision,
+                    "ticker": spot_ticker,
+                    "risk_check": {"allowed": False, "reasons": ["spot_ticker_unavailable"]},
+                    "reason": "spot ticker unavailable; order not placed",
+                    "order": None,
+                }
+                return persist(result)
+            ticker = {**spot_ticker, "symbol": symbol.upper()}
+            trade["entry_price"] = float(spot_ticker.get("last_price", 0.0) or 0.0)
         live_position = _live_position(symbol, execution_client, market=selected_market, cycle_logger=cycle_logger)
         live_position_state = (
             True
@@ -597,6 +637,25 @@ async def run_cycle(
             }
             return persist(result)
 
+        margin_check = None
+        if selected_market == "futures" and str(trade.get("trade_side", "open")).lower() == "open":
+            check_margin = getattr(execution_client, "check_futures_margin", None)
+            if callable(check_margin):
+                margin_check = await asyncio.to_thread(check_margin, trade)
+                if margin_check.get("status") != "ok":
+                    result = {
+                        "status": "blocked",
+                        "symbol": symbol.upper(),
+                        "mode": cycle_mode,
+                        "decision": decision,
+                        "ticker": ticker,
+                        "risk_check": risk_result,
+                        "margin_check": margin_check,
+                        "reason": margin_check.get("reason", "margin_check_unavailable"),
+                        "order": None,
+                    }
+                    return persist(result)
+
         intent = build_encrypted_intent(symbol, decision, risk_result)
         order_result = await asyncio.to_thread(execution_client.place_market_order, trade)
         result = {
@@ -606,6 +665,7 @@ async def run_cycle(
             "decision": decision,
             "ticker": ticker,
             "risk_check": risk_result,
+            "margin_check": margin_check,
             "intent": intent,
             "order": order_result,
             "market": selected_market,
@@ -639,16 +699,18 @@ async def run_pair_cycle(
     cycle_start = datetime.now(timezone.utc)
     symbols = [first_symbol.upper(), second_symbol.upper()]
     if symbols not in (["AAPLUSDT", "TSLAUSDT"], ["TSLAUSDT", "AAPLUSDT"]):
-        return {"status": "blocked", "strategy_id": "pairs_trading", "symbols": symbols, "reason": "unsupported_pair"}
+        return {"status": "blocked", "strategy_id": "pairs_trading", "symbols": symbols, "market": market_type, "reason": "unsupported_pair"}
     if market_type not in {"spot", "futures"} or qty <= 0:
-        return {"status": "rejected", "strategy_id": "pairs_trading", "reason": "invalid_pair_configuration"}
+        return {"status": "rejected", "strategy_id": "pairs_trading", "market": market_type, "reason": "invalid_pair_configuration"}
+    if market_type == "spot":
+        return {"status": "blocked", "strategy_id": "pairs_trading", "symbols": symbols, "market": market_type, "reason": "spot_market_unavailable"}
 
     fetch_pair = getattr(market_service, "fetch_pair_daily_closes", None)
     if not callable(fetch_pair):
-        return {"status": "logged", "strategy_id": "pairs_trading", "symbols": symbols, "reason": "pair_candle_data_unavailable"}
+        return {"status": "logged", "strategy_id": "pairs_trading", "symbols": symbols, "market": market_type, "reason": "pair_candle_data_unavailable"}
     history = await asyncio.to_thread(fetch_pair, first_symbol, second_symbol)
     if history.get("status") != "live":
-        return {"status": "logged", "strategy_id": "pairs_trading", "symbols": symbols, "reason": history.get("error", "pair_candle_data_unavailable")}
+        return {"status": "logged", "strategy_id": "pairs_trading", "symbols": symbols, "market": market_type, "reason": history.get("error", "pair_candle_data_unavailable")}
 
     signal = build_pairs_signal(
         first_symbol,

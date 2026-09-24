@@ -26,6 +26,14 @@ class SupabaseCycleLogger:
         if not self.configured:
             return {"status": "not_configured"}
 
+        order_result = cycle.get("order_result") or cycle.get("order")
+        if cycle.get("reason") or cycle.get("margin_check"):
+            order_result = dict(order_result or {})
+            if cycle.get("reason"):
+                order_result["reason"] = cycle["reason"]
+            if cycle.get("margin_check"):
+                order_result["margin_check"] = cycle["margin_check"]
+
         record = {
             "session_id": self.session_id,
             "symbol": cycle.get("symbol", "UNKNOWN"),
@@ -36,7 +44,7 @@ class SupabaseCycleLogger:
             "ticker": cycle.get("ticker"),
             "risk_check": cycle.get("risk_check"),
             "intent": cycle.get("intent"),
-            "order_result": cycle.get("order"),
+            "order_result": order_result,
             "error": cycle.get("error"),
         }
         if cycle.get("created_at"):

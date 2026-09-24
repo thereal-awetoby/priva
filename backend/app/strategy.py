@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import asdict, dataclass, replace
@@ -10,6 +11,7 @@ from typing import Any, Literal
 import requests
 
 MAX_LEVERAGE = 3.0
+logger = logging.getLogger("priva.strategy")
 
 
 @dataclass(frozen=True)
@@ -39,15 +41,26 @@ def _adaptive_leverage(signal_strength: float) -> float:
 
 def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
     if ticker.get("status") != "live":
+        logger.info(
+            "strategy_debug symbol=%s strategy=momentum_breakout candles_fetched=0 lookback=0 "
+            "indicators=status:%s thresholds=threshold_pct:unknown condition=failed:market_feed",
+            ticker.get("symbol"), ticker.get("status"),
+        )
         return Decision("hold", 0.0, 1.0, "market feed unavailable; fallback mode active")
 
     last_price = float(ticker.get("last_price", 0.0) or 0.0)
     open_price = float(ticker.get("open_price", 0.0) or 0.0)
     if last_price <= 0 or open_price <= 0:
+        logger.info(
+            "strategy_debug symbol=%s strategy=momentum_breakout candles_fetched=0 lookback=0 "
+            "indicators=last_price:%s,open_price:%s thresholds=threshold_pct:unknown condition=failed:invalid_prices",
+            ticker.get("symbol"), last_price, open_price,
+        )
         return Decision("hold", 0.0, 1.0, "invalid market prices")
     config = _get_builtin_strategy_config("momentum_breakout")
     threshold_pct = float(config.get("threshold_pct", 1.0) or 1.0)
     threshold = threshold_pct / 100.0
+    move_pct = ((last_price - open_price) / open_price) * 100
     if last_price > open_price and (last_price - open_price) / open_price >= threshold:
         signal = "buy"
         move = (last_price - open_price) / open_price
@@ -59,6 +72,13 @@ def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
     else:
         signal = "hold"
         strength = 0.0
+    logger.info(
+        "strategy_debug symbol=%s strategy=momentum_breakout candles_fetched=0 lookback=0 "
+        "indicators=last_price:%s,open_price:%s,move_pct:%s thresholds=threshold_pct:%s "
+        "condition=%s",
+        ticker.get("symbol"), last_price, open_price, round(move_pct, 6), threshold_pct,
+        "buy" if signal == "buy" else "sell" if signal == "sell" else "failed:move_below_threshold",
+    )
     rounded_strength = round(strength, 4)
     leverage = _adaptive_leverage(rounded_strength) if signal != "hold" else 1.0
     return Decision(signal, 1.0 if signal != "hold" else 0.0, leverage, "simple price-vs-open momentum signal", rounded_strength)
@@ -66,11 +86,21 @@ def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
 
 def _mean_reversion_strategy(ticker: dict[str, Any]) -> Decision:
     if ticker.get("status") != "live":
+        logger.info(
+            "strategy_debug symbol=%s strategy=mean_reversion candles_fetched=0 lookback=0 "
+            "indicators=status:%s thresholds=threshold_pct:unknown condition=failed:market_feed",
+            ticker.get("symbol"), ticker.get("status"),
+        )
         return Decision("hold", 0.0, 1.0, "market feed unavailable; fallback mode active")
 
     last_price = float(ticker.get("last_price", 0.0) or 0.0)
     open_price = float(ticker.get("open_price", 0.0) or 0.0)
     if last_price <= 0 or open_price <= 0:
+        logger.info(
+            "strategy_debug symbol=%s strategy=mean_reversion candles_fetched=0 lookback=0 "
+            "indicators=last_price:%s,open_price:%s thresholds=threshold_pct:unknown condition=failed:invalid_prices",
+            ticker.get("symbol"), last_price, open_price,
+        )
         return Decision("hold", 0.0, 1.0, "invalid market prices")
 
     config = _get_builtin_strategy_config("mean_reversion")
@@ -78,6 +108,13 @@ def _mean_reversion_strategy(ticker: dict[str, Any]) -> Decision:
     threshold = threshold_pct / 100.0
 
     deviation = (last_price - open_price) / open_price
+    logger.info(
+        "strategy_debug symbol=%s strategy=mean_reversion candles_fetched=0 lookback=0 "
+        "indicators=last_price:%s,open_price:%s,deviation_pct:%s thresholds=threshold_pct:%s "
+        "condition=%s",
+        ticker.get("symbol"), last_price, open_price, round(deviation * 100, 6), threshold_pct,
+        "sell" if deviation >= threshold else "buy" if deviation <= -threshold else "failed:within_neutral_band",
+    )
     if deviation >= threshold:
         strength = round(min(1.0, deviation / max(threshold, 0.01)), 4)
         leverage_signal = min(1.0, deviation / max(threshold * 4, 0.01))
@@ -126,6 +163,13 @@ def build_pairs_signal(
 ) -> dict[str, Any]:
     """Build a market-neutral signal from the log-price spread of two symbols."""
     paired = [(float(first), float(second)) for first, second in zip(first_closes, second_closes) if first > 0 and second > 0]
+    logger.info(
+        "strategy_debug symbol=%s/%s strategy=pairs_trading candles_fetched=%s/%s lookback=3 "
+        "indicators=aligned_closes:%s thresholds=entry_zscore:%s,exit_zscore:%s condition=%s",
+        first_symbol.upper(), second_symbol.upper(), len(first_closes), len(second_closes), len(paired),
+        entry_zscore, exit_zscore,
+        "failed:insufficient_aligned_closes" if len(paired) < 3 else "pending_spread_calculation",
+    )
     if len(paired) < 3:
         return {"action": "hold", "status": "logged", "reason": "pairs strategy needs at least three aligned closes", "legs": []}
 
@@ -135,6 +179,12 @@ def build_pairs_signal(
     mean = _safe_mean(history)
     std = _safe_std(history)
     if std <= 0:
+        logger.info(
+            "strategy_debug symbol=%s/%s strategy=pairs_trading candles_fetched=%s/%s lookback=3 "
+            "indicators=current_spread:%s,spread_mean:%s,spread_std:%s,zscore:0 thresholds=entry_zscore:%s,exit_zscore:%s condition=failed:no_variance",
+            first_symbol.upper(), second_symbol.upper(), len(first_closes), len(second_closes),
+            round(current_spread, 8), round(mean, 8), round(std, 8), entry_zscore, exit_zscore,
+        )
         return {"action": "hold", "status": "logged", "reason": "pairs spread has no measurable variance", "legs": [], "spread": current_spread, "zscore": 0.0}
 
     zscore = (current_spread - mean) / std
@@ -153,6 +203,13 @@ def build_pairs_signal(
     else:
         action = "hold"
         reason = "pairs spread is between entry and exit thresholds"
+    logger.info(
+        "strategy_debug symbol=%s/%s strategy=pairs_trading candles_fetched=%s/%s lookback=3 "
+        "indicators=current_spread:%s,spread_mean:%s,spread_std:%s,zscore:%s thresholds=entry_zscore:%s,exit_zscore:%s condition=%s",
+        first_symbol.upper(), second_symbol.upper(), len(first_closes), len(second_closes),
+        round(current_spread, 8), round(mean, 8), round(std, 8), round(zscore, 8),
+        entry_zscore, exit_zscore, action if action != "hold" else "failed:between_thresholds",
+    )
 
     return {
         "action": action,

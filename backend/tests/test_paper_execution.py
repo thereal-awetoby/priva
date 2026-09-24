@@ -2,7 +2,7 @@ import json
 
 import requests
 
-from app.paper_execution import BitgetPaperExecutionClient
+from app.paper_execution import BitgetPaperExecutionClient, describe_rejection
 
 
 class FakeResponse:
@@ -56,6 +56,93 @@ class FillHistorySession(FakeSession):
         )
 
 
+class MarginClient(BitgetPaperExecutionClient):
+    def __init__(self, balance):
+        super().__init__(session=FakeSession())
+        self.balance = balance
+
+    def fetch_futures_account_balance(self, symbol="AAPLUSDT"):
+        return self.balance
+
+
+def test_describe_rejection_maps_known_codes_and_falls_back():
+    assert describe_rejection("40762", "exchange text") == "insufficient margin"
+    assert describe_rejection("40034", "exchange text") == "symbol not available on this market"
+    assert describe_rejection("22000", "order size is too small") == "below minimum order size"
+    assert describe_rejection("22001", "invalid decimal precision") == "invalid order precision"
+    assert describe_rejection("99999", "exchange text") == "exchange text"
+    assert describe_rejection(None, None) == "exchange rejected order"
+
+
+def test_futures_margin_preflight_allows_enough_margin():
+    result = MarginClient({"status": "ok", "available": 100.0}).check_futures_margin(
+        {"symbol": "AAPLUSDT", "qty": 1, "entry_price": 100, "leverage": 2}
+    )
+
+    assert result["status"] == "ok"
+    assert result["required_margin"] == 51.0
+
+
+def test_futures_margin_preflight_blocks_insufficient_margin():
+    result = MarginClient({"status": "ok", "available": 49.0}).check_futures_margin(
+        {"symbol": "AAPLUSDT", "qty": 1, "entry_price": 100, "leverage": 2}
+    )
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "insufficient_margin"
+
+
+def test_futures_margin_preflight_blocks_balance_fetch_failure():
+    result = MarginClient({"status": "execution_error", "message": "timeout"}).check_futures_margin(
+        {"symbol": "AAPLUSDT", "qty": 1, "entry_price": 100, "leverage": 2}
+    )
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "margin_check_unavailable"
+    assert result["message"] == "timeout"
+
+
+def test_spot_available_symbol_still_submits_spot_order(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    session = FakeSession()
+    result = BitgetPaperExecutionClient(session=session).place_market_order(
+        {"symbol": "BTCUSDT", "side": "buy", "qty": 0.01, "entry_price": 100000, "market": "spot"}
+    )
+
+    assert result["status"] == "submitted"
+    assert session.calls[0][0].endswith("/api/v2/spot/trade/place-order")
+
+
+def test_tokenized_spot_order_maps_logical_symbol(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    session = FakeSession()
+    BitgetPaperExecutionClient(session=session).place_market_order(
+        {"symbol": "TSLAUSDT", "side": "buy", "qty": 1, "entry_price": 300, "market": "spot"}
+    )
+
+    body = json.loads(session.calls[0][1]["data"])
+    assert body["symbol"] == "RTSLAUSDT"
+
+
+def test_spot_order_result_preserves_market(monkeypatch):
+    monkeypatch.setenv("BITGET_API_KEY", "key")
+    monkeypatch.setenv("BITGET_API_SECRET", "secret")
+    monkeypatch.setenv("BITGET_API_PASSPHRASE", "passphrase")
+
+    result = BitgetPaperExecutionClient(session=FakeSession()).place_market_order(
+        {"symbol": "TSLAUSDT", "side": "buy", "qty": 1, "entry_price": 300, "market": "spot"}
+    )
+
+    assert result["status"] == "submitted"
+    assert result["market"] == "spot"
+
+
 def test_paper_client_omits_sent_body_on_http_rejection(monkeypatch):
     monkeypatch.setenv("BITGET_API_KEY", "key")
     monkeypatch.setenv("BITGET_API_SECRET", "secret")
@@ -78,6 +165,7 @@ def test_paper_client_omits_sent_body_on_http_rejection(monkeypatch):
     )
 
     assert result["status"] == "rejected"
+    assert result["market"] == "futures"
     assert result["message"] == "No position to close"
     assert "debug_sent_body" not in result
 
@@ -172,6 +260,7 @@ def test_paper_client_submits_paper_order(monkeypatch):
     body = json.loads(order_kwargs["data"])
     assert result == {
         "status": "submitted",
+        "market": "futures",
         "trade_side": "open",
         "side": "buy",
         "qty": 5.0,

@@ -58,6 +58,26 @@ def test_supabase_logger_inserts_cycle(monkeypatch):
     assert kwargs["json"]["session_id"]
 
 
+def test_supabase_logger_persists_block_reason_and_margin_check(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+    session = FakeSession()
+
+    SupabaseCycleLogger(session=session).log_cycle(
+        {
+            "symbol": "AAPLUSDT",
+            "status": "blocked",
+            "reason": "insufficient_margin",
+            "margin_check": {"status": "blocked", "required_margin": 102.0},
+        }
+    )
+
+    assert session.calls[0][1]["json"]["order_result"] == {
+        "reason": "insufficient_margin",
+        "margin_check": {"status": "blocked", "required_margin": 102.0},
+    }
+
+
 def test_supabase_logger_reads_cycles(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")

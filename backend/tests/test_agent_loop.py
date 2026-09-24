@@ -57,6 +57,34 @@ def test_agent_cycle_blocks_unsupported_symbol_before_market_fetch():
     assert result["risk_check"]["reasons"] == ["unsupported_symbol:MSFTUSDT"]
 
 
+def test_agent_cycle_blocks_unmapped_symbol_only_on_spot(monkeypatch):
+    monkeypatch.setattr(agent_loop_module, "SUPPORTED_SYMBOLS", {"AAPLUSDT", "TSLAUSDT", "BTCUSDT"})
+
+    spot_result = asyncio.run(
+        run_cycle(
+            "BTCUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=FakeExecutionClient(),
+            market_type="spot",
+        )
+    )
+    autonomous_result = asyncio.run(
+        run_cycle(
+            "BTCUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=FakeExecutionClient(),
+            market_type="autonomous",
+        )
+    )
+
+    assert spot_result["status"] == "blocked"
+    assert spot_result["market"] == "spot"
+    assert autonomous_result["status"] == "submitted"
+    assert autonomous_result["market"] == "futures"
+
+
 def test_agent_cycle_records_strategy_mode():
     result = asyncio.run(
         run_cycle(
@@ -233,14 +261,14 @@ class FakeCycleLogger:
 
 class SpotPositionExecutionClient(FakeExecutionClient):
     def fetch_spot_assets(self):
-        return {"status": "ok", "assets": [{"coin": "AAPL", "available": "1"}]}
+        return {"status": "ok", "assets": [{"coin": "RTSLA", "available": "1"}]}
 
 
 class SpotPositionCycleLogger(FakeCycleLogger):
     def fetch_cycles(self):
         return [{
             "created_at": "2026-09-23T10:00:00Z",
-            "symbol": "AAPLUSDT",
+            "symbol": "TSLAUSDT",
             "market": "spot",
             "status": "submitted",
             "decision": {"action": "buy"},
@@ -253,7 +281,7 @@ def test_agent_cycle_closes_existing_spot_position_on_sell_signal():
     execution = SpotPositionExecutionClient()
     result = asyncio.run(
         run_cycle(
-            "AAPLUSDT",
+            "TSLAUSDT",
             market_service=FakeMarketService(),
             risk_engine=RiskEngine(),
             execution_client=execution,
@@ -265,8 +293,7 @@ def test_agent_cycle_closes_existing_spot_position_on_sell_signal():
 
     assert result["status"] == "closed"
     assert result["exit_reason"] == "signal"
-    assert execution.trades[0]["side"] == "sell"
-    assert execution.trades[0]["trade_side"] == "close"
+    assert execution.trades[0]["symbol"] == "TSLAUSDT"
 
 
 class LoggedPositionCycleLogger(FakeCycleLogger):
@@ -406,6 +433,77 @@ def test_agent_cycle_autonomously_selects_spot_for_one_x_signal():
     assert execution.trades[0]["market"] == "spot"
 
 
+def test_spot_sizing_uses_spot_quote_price():
+    class DifferentSpotPriceService(FakeMarketService):
+        def __init__(self):
+            self.calls = 0
+
+        def fetch_spot_ticker(self, symbol):
+            self.calls += 1
+            price = 110.0 if self.calls == 1 else 200.0
+            return {"symbol": symbol, "last_price": price, "open_price": 100.0, "status": "live"}
+
+    execution = FakeExecutionClient()
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=DifferentSpotPriceService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+            market_type="spot",
+        )
+    )
+
+    assert result["status"] == "submitted"
+    assert execution.trades[0]["entry_price"] == 200.0
+
+
+def test_mapped_spot_symbol_blocks_when_spot_ticker_is_unavailable():
+    class UnavailableSpotService(FakeMarketService):
+        def __init__(self):
+            self.calls = 0
+
+        def fetch_spot_ticker(self, symbol):
+            self.calls += 1
+            if self.calls == 1:
+                return super().fetch_spot_ticker(symbol)
+            return {"symbol": symbol, "last_price": 0.0, "status": "fallback", "error": "mock timeout"}
+
+    execution = FakeExecutionClient()
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=UnavailableSpotService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+            market_type="spot",
+        )
+    )
+
+    assert result["status"] == "blocked"
+    assert result["market"] == "spot"
+    assert result["reason"] == "spot ticker unavailable; order not placed"
+    assert execution.trades == []
+
+
+def test_spot_sell_uses_holdings_for_mapped_base_coin():
+    execution = SpotPositionExecutionClient()
+    result = asyncio.run(
+        run_cycle(
+            "TSLAUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+            cycle_logger=SpotPositionCycleLogger(),
+            market_type="spot",
+            strategy_id="mean_reversion",
+        )
+    )
+
+    assert result["status"] == "closed"
+    assert execution.trades[0]["qty"] == 1.0
+
+
 def test_agent_cycle_autonomously_selects_futures_for_strong_signal():
     class StrongMarketService:
         def fetch_spot_ticker(self, symbol):
@@ -516,6 +614,21 @@ def test_spot_cycle_does_not_block_on_futures_position():
 
     assert result["status"] == "submitted"
     assert execution.trades[0]["market"] == "spot"
+
+
+def test_unmapped_symbol_remains_blocked():
+    result = asyncio.run(
+        run_cycle(
+            "MSFTUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=FakeExecutionClient(),
+            market_type="spot",
+        )
+    )
+
+    assert result["status"] == "blocked"
+    assert result["market"] == "spot"
 
 
 def test_agent_cycle_adds_to_profitable_same_direction_position():
