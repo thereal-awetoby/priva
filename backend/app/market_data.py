@@ -6,6 +6,8 @@ from typing import Any
 
 import requests
 
+from app.symbols import logical_symbol, spot_symbol
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +22,8 @@ class BitgetMarketDataService:
     def fetch_spot_ticker(self, symbol: str) -> dict[str, Any]:
         url = f"{self.BASE_URL}/spot/market/tickers"
         params = {"category": "SPOT"}
+        logical = str(symbol).upper()
+        exchange_symbol = spot_symbol(logical)
 
         try:
             response = requests.get(url, params=params, timeout=15)
@@ -33,20 +37,21 @@ class BitgetMarketDataService:
 
             data = payload.get("data") or {}
             if isinstance(data, list):
-                requested_symbol = symbol.upper()
+                requested_symbol = exchange_symbol
                 data = next(
                     (item for item in data if str(item.get("symbol", "")).upper() == requested_symbol),
                     {},
                 )
             if not data:
-                return self.fetch_futures_ticker(symbol)
+                return self.build_fallback_ticker(logical, "spot_symbol_unavailable")
 
             normalized = self.normalize_ticker_payload(data)
+            normalized["symbol"] = logical_symbol(normalized.get("symbol", logical))
             self.last_snapshot = normalized
             return normalized
         except requests.RequestException as exc:
             logger.warning("Bitget public market fetch failed for %s: %s", symbol, exc)
-            fallback = self.build_fallback_ticker(symbol, str(exc))
+            fallback = self.build_fallback_ticker(logical, str(exc))
             self.last_snapshot = fallback
             return fallback
 

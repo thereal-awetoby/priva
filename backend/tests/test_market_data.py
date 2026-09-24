@@ -112,3 +112,25 @@ def test_fetch_pair_daily_closes(monkeypatch):
     assert result["status"] == "live"
     assert result["first"]["closes"] == [101.0, 102.0]
     assert result["second"]["closes"] == [201.0, 202.0]
+
+
+def test_fetch_spot_ticker_maps_logical_symbol_to_exchange_symbol(monkeypatch):
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"code": "00000", "data": [{"symbol": "RAAPLUSDT", "last": "201", "open": "200", "ts": "1726000000000"}]}
+
+    def fake_get(url, params, **kwargs):
+        calls.append(params)
+        return Response()
+
+    monkeypatch.setattr("app.market_data.requests.get", fake_get)
+    result = BitgetMarketDataService().fetch_spot_ticker("AAPLUSDT")
+
+    assert calls[0] == {"category": "SPOT"}
+    assert result["symbol"] == "AAPLUSDT"
+    assert result["last_price"] == 201.0
