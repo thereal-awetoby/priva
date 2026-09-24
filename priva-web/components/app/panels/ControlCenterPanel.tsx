@@ -104,9 +104,24 @@ function aggregateByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe):
   });
 }
 
+function activityReasonLabel(reason: unknown): string | null {
+  const labels: Record<string, string> = {
+    insufficient_margin: "Blocked · insufficient margin",
+    margin_check_unavailable: "Blocked · margin check unavailable",
+    "insufficient margin": "Blocked · insufficient margin",
+    "below minimum order size": "Rejected · below minimum order size",
+    "invalid order precision": "Rejected · invalid order precision",
+    "symbol not available on this market": "Symbol not available on this market",
+  };
+  if (!reason) return null;
+  return labels[String(reason)] ?? String(reason);
+}
+
 function executionLabel(entry: ActivityEntry): string {
   if (entry.status === "submitted" || entry.status === "closed") return "Executed";
   if (entry.status === "skipped_existing_position") return "Skipped: position already open";
+  const reasonLabel = activityReasonLabel(entry.reason);
+  if (reasonLabel) return reasonLabel;
   if (entry.status === "rejected") return "Rejected by exchange";
   if (entry.status === "risk_rejected") return "Rejected by risk check";
   return "Signal logged";
@@ -198,42 +213,24 @@ function EquityCurve({
     previousPoint = { index, value };
   });
 
-  const yTicks = [min, min + range / 2, max];
-  const tickIntervalMs = {
-    minute: 5 * 60 * 1000,
-    hourly: 60 * 60 * 1000,
-    daily: 24 * 60 * 60 * 1000,
-    weekly: 7 * 24 * 60 * 60 * 1000,
-    monthly: 30 * 24 * 60 * 60 * 1000,
-  }[timeframe];
-  const candidateTickIndexes: number[] = [];
-  let lastTickTimestamp = -Infinity;
-  timeMs.forEach((timestamp, index) => {
-    if (!Number.isFinite(timestamp)) return;
-    if (index === 0 || timestamp - lastTickTimestamp >= tickIntervalMs) {
-      candidateTickIndexes.push(index);
-      lastTickTimestamp = timestamp;
-    }
-  });
-  const estimatedLabelWidth = timeframe === "minute" || timeframe === "hourly" ? 110 : 75;
-  // Drop any tick candidate that would sit closer than one label width to the
-  // previous one, so labels never overlap.
-  const spacedCandidates: number[] = [];
-  let lastTickX = -Infinity;
-  candidateTickIndexes.forEach((tickIndex) => {
-    const x = xFor(tickIndex);
-    if (x - lastTickX >= estimatedLabelWidth) {
-      spacedCandidates.push(tickIndex);
-      lastTickX = x;
-    }
-  });
+  const yTicks = [min, max];
+  const estimatedLabelWidth = timeframe === "minute" || timeframe === "hourly" ? 150 : 105;
   const maxTickLabels = Math.max(2, Math.floor(plotW / estimatedLabelWidth));
-  const tickCount = Math.min(maxTickLabels, spacedCandidates.length);
-  const tickIndexes = tickCount <= 1
-    ? spacedCandidates.slice(0, tickCount)
+  const finiteTimeIndexes = timeMs
+    .map((timestamp, index) => ({ timestamp, index }))
+    .filter(({ timestamp }) => Number.isFinite(timestamp));
+  const tickCount = Math.min(maxTickLabels, finiteTimeIndexes.length);
+  const resolvedTickIndexes = tickCount <= 1
+    ? finiteTimeIndexes.slice(0, tickCount).map(({ index }) => index)
     : Array.from({ length: tickCount }, (_, index) => (
-        spacedCandidates[Math.round(index * (spacedCandidates.length - 1) / (tickCount - 1))]
+        finiteTimeIndexes.reduce((nearest, candidate) => {
+          const targetTime = firstT + (lastT - firstT) * index / (tickCount - 1);
+          return Math.abs(candidate.timestamp - targetTime) < Math.abs(nearest.timestamp - targetTime)
+            ? candidate
+            : nearest;
+        }).index
       ));
+  const tickIndexes = Array.from(new Set(resolvedTickIndexes));
 
   const formatTime = (iso: string) => {
     if (!iso) return "";
