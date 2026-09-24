@@ -13,6 +13,8 @@ type EquityPoint = {
   equity?: number;
   futures_equity?: number | null;
   spot_equity?: number | null;
+  futures_equity_carried?: boolean;
+  spot_equity_carried?: boolean;
 };
 
 type ChartTimeframe = "minute" | "hourly" | "daily" | "weekly" | "monthly";
@@ -23,7 +25,12 @@ function aggregateByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe):
     .filter(({ time }) => Number.isFinite(time));
   if (!validPoints.length) return [];
 
-  const buckets = new Map<string, EquityPoint>();
+  const buckets = new Map<string, {
+    point: EquityPoint;
+    latestTime: number;
+    latestFuturesTime: number;
+    latestSpotTime: number;
+  }>();
 
   for (const { point, time } of validPoints) {
     const date = new Date(time);
@@ -43,15 +50,55 @@ function aggregateByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe):
       bucketKey = `${date.getFullYear()}-${date.getMonth()}`;
     }
     const existing = buckets.get(bucketKey);
-    if (!existing || time > new Date(existing.timestamp ?? existing.created_at ?? 0).getTime()) {
-      buckets.set(bucketKey, point);
+    if (!existing) {
+      buckets.set(bucketKey, {
+        point: { ...point },
+        latestTime: time,
+        latestFuturesTime: point.futures_equity != null ? time : -Infinity,
+        latestSpotTime: point.spot_equity != null ? time : -Infinity,
+      });
+      continue;
+    }
+    if (time > existing.latestTime) {
+      existing.latestTime = time;
+      existing.point.timestamp = point.timestamp ?? point.created_at;
+      existing.point.created_at = point.created_at;
+      existing.point.balance = point.balance;
+      existing.point.equity = point.equity;
+    }
+    if (point.futures_equity != null && time >= existing.latestFuturesTime) {
+      existing.latestFuturesTime = time;
+      existing.point.futures_equity = point.futures_equity;
+    }
+    if (point.spot_equity != null && time >= existing.latestSpotTime) {
+      existing.latestSpotTime = time;
+      existing.point.spot_equity = point.spot_equity;
     }
   }
 
-  return Array.from(buckets.values()).sort((a, b) => {
+  const bucketPoints = Array.from(buckets.values()).map(({ point }) => point).sort((a, b) => {
     const aTime = new Date(a.timestamp ?? a.created_at ?? 0).getTime();
     const bTime = new Date(b.timestamp ?? b.created_at ?? 0).getTime();
     return aTime - bTime;
+  });
+
+  let lastFuturesEquity: number | undefined;
+  let lastSpotEquity: number | undefined;
+  return bucketPoints.map((point) => {
+    const nextPoint = { ...point, futures_equity_carried: false, spot_equity_carried: false };
+    if (nextPoint.futures_equity != null) {
+      lastFuturesEquity = Number(nextPoint.futures_equity);
+    } else if (lastFuturesEquity != null) {
+      nextPoint.futures_equity = lastFuturesEquity;
+      nextPoint.futures_equity_carried = true;
+    }
+    if (nextPoint.spot_equity != null) {
+      lastSpotEquity = Number(nextPoint.spot_equity);
+    } else if (lastSpotEquity != null) {
+      nextPoint.spot_equity = lastSpotEquity;
+      nextPoint.spot_equity_carried = true;
+    }
+    return nextPoint;
   });
 }
 
@@ -75,20 +122,19 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
   const plotW = width - padding.left - padding.right;
   const plotH = height - padding.top - padding.bottom;
 
-  // Keep the complete aggregated timeline for every resolution. A snapshot
-  // can lack a market-specific field while the account is migrating from
-  // legacy combined-balance records, so missing market values become gaps
-  // rather than changing the chart's visible date range.
+  // Keep the complete aggregated timeline for every resolution. Worker
+  // snapshots can be market-specific, so a missing market field is a genuine
+  // gap and must not be replaced with the generic balance value.
   const chartPoints = aggregateByTimeframe(points, timeframe);
   const values = chartPoints.map((point): number | null => {
     if (point[valueKey] != null) return Number(point[valueKey]);
-    if (valueKey === "futures_equity" && (point.balance != null || point.equity != null)) {
-      return Number(point.balance ?? point.equity);
-    }
     return null;
   });
   const numericValues = values.filter((value): value is number => value != null && Number.isFinite(value));
   const hasMarketData = numericValues.length > 0;
+  const carriedValues = chartPoints.map((point) => valueKey === "futures_equity"
+    ? Boolean(point.futures_equity_carried)
+    : Boolean(point.spot_equity_carried));
   const times = chartPoints.map((p) => p.timestamp ?? p.created_at ?? "");
 
   const min = numericValues.length ? Math.min(...numericValues) : 0;
@@ -100,15 +146,19 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
   const yFor = (v: number) =>
     padding.top + plotH - ((v - min) / range) * plotH;
 
-  let path = "";
-  let hasPreviousValue = false;
+  const realPaths: string[] = [];
+  const carriedPaths: string[] = [];
+  let previousPoint: { index: number; value: number } | null = null;
   values.forEach((value, index) => {
     if (value == null) {
-      hasPreviousValue = false;
+      previousPoint = null;
       return;
     }
-    path += `${hasPreviousValue ? "L" : "M"} ${xFor(index).toFixed(1)} ${yFor(value).toFixed(1)} `;
-    hasPreviousValue = true;
+    if (previousPoint && previousPoint.index === index - 1) {
+      const segment = `M ${xFor(previousPoint.index).toFixed(1)} ${yFor(previousPoint.value).toFixed(1)} L ${xFor(index).toFixed(1)} ${yFor(value).toFixed(1)}`;
+      (carriedValues[index] ? carriedPaths : realPaths).push(segment);
+    }
+    previousPoint = { index, value };
   });
 
   const yTicks = [min, min + range / 2, max];
@@ -274,10 +324,11 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
                 cx={xFor(index)}
                 cy={yFor(value)}
                 r="2.5"
-                className="equity-point"
+                className={carriedValues[index] ? "equity-point equity-point-carried" : "equity-point"}
               />
             ))}
-            <path d={path} className="equity-line" />
+            {realPaths.map((segment, index) => <path key={`real-${index}`} d={segment} className="equity-line" />)}
+            {carriedPaths.map((segment, index) => <path key={`carried-${index}`} d={segment} className="equity-line equity-line-carried" />)}
           </svg>
         </div>
       )}

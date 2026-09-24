@@ -1,4 +1,9 @@
+import asyncio
+
 from app import main
+from app.agent_loop import run_cycle
+from app.auth import AuthenticatedUser
+from app.balance_snapshots import fetch_combined_balance_snapshot
 
 
 class EmptyExecutionClient:
@@ -51,6 +56,146 @@ class CombinedBalanceExecutionClient(BalanceExecutionClient):
 class BalanceMarketService:
     def fetch_spot_ticker(self, symbol):
         return {"status": "live", "last_price": 100.0}
+
+
+class SnapshotMarketService(BalanceMarketService):
+    def fetch_spot_ticker(self, symbol):
+        return {"status": "live", "last_price": 110.0, "open_price": 100.0}
+
+
+class SnapshotExecutionClient:
+    def __init__(self, configured=True):
+        self.configured = configured
+        self.trades = []
+        self.session = None
+
+    def fetch_futures_account_balance(self):
+        if not self.configured:
+            return {"status": "not_configured"}
+        return {"status": "ok", "equity": 1200.0}
+
+    def fetch_spot_assets(self):
+        if not self.configured:
+            return {"status": "not_configured"}
+        return {"status": "ok", "assets": [{"coin": "USDT", "available": "300"}]}
+
+    def place_market_order(self, trade):
+        self.trades.append(trade)
+        return {"status": "submitted", "order_id": "test-order"}
+
+    def configure_credentials(self, *values):
+        return None
+
+
+class SnapshotLogger:
+    def __init__(self):
+        self.snapshots = []
+
+    def log_cycle(self, result):
+        return {"status": "logged"}
+
+    def log_balance_snapshot(self, snapshot):
+        self.snapshots.append(snapshot)
+        return {"status": "logged"}
+
+    def has_open_position(self, symbol, market=None):
+        return False
+
+
+def test_combined_balance_snapshot_contains_both_markets():
+    snapshot = fetch_combined_balance_snapshot(
+        CombinedBalanceExecutionClient(1000.0),
+        BalanceMarketService(),
+    )
+
+    assert snapshot["futures_equity"] == 1000.0
+    assert snapshot["spot_equity"] == 700.0
+    assert snapshot["balance"] == 1700.0
+
+
+def test_agent_cycle_persists_combined_snapshot_end_to_end():
+    logger = SnapshotLogger()
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=SnapshotMarketService(),
+            risk_engine=main.risk_engine,
+            execution_client=SnapshotExecutionClient(),
+            cycle_logger=logger,
+        )
+    )
+
+    assert result["status"] == "submitted"
+    assert len(logger.snapshots) == 1
+    assert logger.snapshots[0]["futures_equity"] == 1200.0
+    assert logger.snapshots[0]["spot_equity"] == 300.0
+
+
+def test_agent_cycle_does_not_persist_unconfigured_snapshot():
+    logger = SnapshotLogger()
+    asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=BalanceMarketService(),
+            risk_engine=main.risk_engine,
+            execution_client=SnapshotExecutionClient(configured=False),
+            cycle_logger=logger,
+        )
+    )
+
+    assert logger.snapshots == []
+
+
+def test_connection_handler_persists_combined_snapshot(monkeypatch):
+    logger = SnapshotLogger()
+    execution = SnapshotExecutionClient()
+
+    class Candidate(SnapshotExecutionClient):
+        def fetch_account_mode(self, symbol):
+            return {"status": "ok", "position_mode": "hedge"}
+
+    monkeypatch.setattr(main, "BitgetPaperExecutionClient", lambda session=None: Candidate())
+    monkeypatch.setattr(main, "execution_client_for", lambda user: execution)
+    monkeypatch.setattr(main, "cycle_logger_for", lambda user: logger)
+    monkeypatch.setattr(main, "paper_execution_client", execution)
+    monkeypatch.setattr(main.supabase_auth, "required", False)
+
+    result = asyncio.run(
+        main.connect_bitget(
+            main.BitgetConnectionRequest(api_key="key", api_secret="secret", passphrase="pass"),
+            AuthenticatedUser("local-development"),
+        )
+    )
+
+    assert result["status"] == "connected"
+    assert len(logger.snapshots) == 1
+    assert logger.snapshots[0]["futures_equity"] == 1200.0
+    assert logger.snapshots[0]["spot_equity"] == 300.0
+
+
+def test_connection_handler_does_not_persist_unconfigured_snapshot(monkeypatch):
+    logger = SnapshotLogger()
+    execution = SnapshotExecutionClient(configured=False)
+
+    class Candidate(SnapshotExecutionClient):
+        def fetch_account_mode(self, symbol):
+            return {"status": "ok", "position_mode": "hedge"}
+
+    monkeypatch.setattr(main, "BitgetPaperExecutionClient", lambda session=None: Candidate())
+    monkeypatch.setattr(main, "execution_client_for", lambda user: execution)
+    monkeypatch.setattr(main, "cycle_logger_for", lambda user: logger)
+    monkeypatch.setattr(main, "paper_execution_client", execution)
+    monkeypatch.setattr(main.supabase_auth, "required", False)
+
+    result = asyncio.run(
+        main.connect_bitget(
+            main.BitgetConnectionRequest(api_key="key", api_secret="secret", passphrase="pass"),
+            AuthenticatedUser("local-development"),
+        )
+    )
+
+    assert result["status"] == "connected"
+    assert logger.snapshots == []
 
 
 def test_pnl_uses_live_positions_and_zero_realized_without_cycles(monkeypatch):

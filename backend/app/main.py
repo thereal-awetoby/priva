@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.market_data import BitgetMarketDataService
+from app.balance_snapshots import fetch_combined_balance_snapshot
 from app.paper_execution import BitgetPaperExecutionClient
 from app.performance import calculate_unrealized_pnl
 from app.risk_engine import RiskEngine
@@ -565,15 +566,9 @@ async def connect_bitget(payload: BitgetConnectionRequest, user: AuthenticatedUs
     else:
         return {"status": "rejected", "message": "PRIVA_CREDENTIAL_ENCRYPTION_KEY is not configured"}
     connected_client = execution_client_for(user)
-    connected_balance = connected_client.fetch_futures_account_balance()
-    if connected_balance.get("status") == "ok":
-        cycle_logger_for(user).log_balance_snapshot(
-            {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "balance": float(connected_balance.get("equity", 0) or 0),
-                "equity": float(connected_balance.get("equity", 0) or 0),
-            }
-        )
+    connected_snapshot = fetch_combined_balance_snapshot(connected_client, market_service)
+    if connected_snapshot is not None:
+        cycle_logger_for(user).log_balance_snapshot(connected_snapshot)
     runtime = user_runtime_registry.start(user.id, execution_client_for(user)) if supabase_auth.required else None
     return {
         "status": "connected",

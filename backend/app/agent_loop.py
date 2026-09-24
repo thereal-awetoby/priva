@@ -9,6 +9,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from app.balance_snapshots import fetch_combined_balance_snapshot
+
 from app.strategy import build_pairs_signal, build_signal_from_ticker, get_active_strategy_id
 
 logger = logging.getLogger("priva.agent_loop")
@@ -319,56 +321,14 @@ async def run_cycle(
         _record_cycle(result)
         if cycle_logger is not None:
             result["persistence"] = cycle_logger.log_cycle(result)
-            fetch_balance = getattr(execution_client, "fetch_futures_account_balance", None)
             log_snapshot = getattr(cycle_logger, "log_balance_snapshot", None)
-            if callable(fetch_balance):
+            if callable(log_snapshot):
                 try:
-                    balance = fetch_balance()
-                    if balance.get("status") == "ok":
-                        snapshot = {
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "balance": float(balance.get("equity", 0) or 0),
-                            "equity": float(balance.get("equity", 0) or 0),
-                        }
-                        if market_type == "futures":
-                            snapshot["futures_equity"] = float(balance.get("equity", 0) or 0)
-                        elif market_type == "spot":
-                            fetch_assets = getattr(execution_client, "fetch_spot_assets", None)
-                            if callable(fetch_assets):
-                                spot = fetch_assets()
-                                if spot.get("status") == "ok":
-                                    assets = spot.get("assets", [])
-                                    usdt_asset = next(
-                                        (asset for asset in assets if str(asset.get("coin", "")).upper() == "USDT"),
-                                        {},
-                                    )
-                                    spot_equity = float(
-                                        usdt_asset.get(
-                                            "usdtBalance",
-                                            usdt_asset.get(
-                                                "balance",
-                                                usdt_asset.get("available", usdt_asset.get("availableBalance", 0)),
-                                            ),
-                                        )
-                                        or 0
-                                    )
-                                    for asset in assets:
-                                        coin = str(asset.get("coin", "")).upper()
-                                        if not coin or coin == "USDT":
-                                            continue
-                                        quantity = float(asset.get("total", asset.get("available", asset.get("balance", 0))) or 0)
-                                        if quantity <= 0:
-                                            continue
-                                        ticker = market_service.fetch_spot_ticker(f"{coin}USDT")
-                                        if ticker.get("status") == "live":
-                                            spot_equity += quantity * float(ticker.get("last_price", 0) or 0)
-                                    snapshot["balance"] = round(spot_equity, 4)
-                                    snapshot["equity"] = round(spot_equity, 4)
-                                    snapshot["spot_equity"] = round(spot_equity, 4)
+                    snapshot = fetch_combined_balance_snapshot(execution_client, market_service)
+                    if snapshot is not None:
                         _recent_balance_snapshots.append(snapshot)
                         del _recent_balance_snapshots[:-1000]
-                        if callable(log_snapshot):
-                            log_snapshot(snapshot)
+                        log_snapshot(snapshot)
                 except Exception as exc:
                     logger.warning("Balance snapshot failed: %s", exc)
         return result
