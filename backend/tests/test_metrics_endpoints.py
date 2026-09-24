@@ -462,6 +462,30 @@ def test_activity_log_adds_readable_labels_categories_and_intent_hash(monkeypatc
     assert "intent_hash_short" not in evaluation
 
 
+def test_activity_log_surfaces_intent_hash_on_submitted_event(monkeypatch):
+    monkeypatch.setattr(
+        main.cycle_logger,
+        "fetch_cycles",
+        lambda **kwargs: [
+            {
+                "created_at": "2026-09-24T12:00:00Z",
+                "symbol": "AAPLUSDT",
+                "status": "submitted",
+                "decision": {"action": "buy"},
+                "order_result": {"order_id": "order-1"},
+                "intent": {"intent_hash": "a1b2c3d4e5f60718"},
+            }
+        ],
+    )
+
+    entry = main.activity_log()["entries"][0]
+
+    assert entry["display_label"] == "Buy"
+    assert entry["display_detail"] == "Encrypted intent submitted · a1b2c3d4…"
+    assert entry["intent_hash"] == "a1b2c3d4e5f60718"
+    assert entry["intent_hash_short"] == "a1b2c3d4…"
+
+
 def test_activity_log_humanizes_blocked_reasons_and_skips_nothing_to_sell(monkeypatch):
     monkeypatch.setattr(
         main.cycle_logger,

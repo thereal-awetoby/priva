@@ -1294,6 +1294,7 @@ def _activity_label(cycle: dict[str, Any], detail: str) -> str:
 def _activity_entry(cycle: dict[str, Any]) -> dict[str, Any]:
     detail = _activity_detail(cycle)
     intent_hash = (cycle.get("intent") or {}).get("intent_hash")
+    intent_hash_short = f"{intent_hash[:8]}…" if intent_hash else None
     action = "close" if cycle.get("status") == "closed" else (cycle.get("decision") or {}).get("action")
     is_evaluation = (
         action == "hold"
@@ -1302,6 +1303,9 @@ def _activity_entry(cycle: dict[str, Any]) -> dict[str, Any]:
         cycle.get("reason") == "no_spot_position_to_close"
     )
     order = cycle.get("order_result") or cycle.get("order") or {}
+    if cycle.get("status") == "submitted" and order and intent_hash_short:
+        detail = f"{detail} · " if detail else ""
+        detail += f"Encrypted intent submitted · {intent_hash_short}"
     entry = {
         "id": order.get("order_id") or f"cycle_{cycle.get('created_at', '')}",
         "type": "trade" if order else "agent_cycle",
@@ -1322,7 +1326,7 @@ def _activity_entry(cycle: dict[str, Any]) -> dict[str, Any]:
     }
     if intent_hash:
         entry["intent_hash"] = intent_hash
-        entry["intent_hash_short"] = f"{intent_hash[:8]}…"
+        entry["intent_hash_short"] = intent_hash_short
     return entry
 
 
