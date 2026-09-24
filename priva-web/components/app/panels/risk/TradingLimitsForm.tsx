@@ -18,7 +18,6 @@ export default function TradingLimitsForm() {
   useEffect(() => {
     apiGet<any>("/risk-settings")
       .then((data) => {
-        console.log("RISK SETTINGS RESPONSE:", data);
         if (data.max_position_size != null) setMaxPositionSize(String(data.max_position_size));
         if (data.max_daily_loss != null) setMaxDailyLoss(String(data.max_daily_loss));
         if (data.max_leverage != null) setMaxLeverage(String(data.max_leverage));
@@ -26,7 +25,6 @@ export default function TradingLimitsForm() {
         setLoading(false);
       })
       .catch((err) => {
-        console.log("Using default limits — couldn't fetch:", err.message);
         setLoading(false);
       });
   }, []);
