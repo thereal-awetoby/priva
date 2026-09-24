@@ -714,3 +714,32 @@ table.positions tr:last-child td{ border-bottom:none; }
 .connection-actions .btn{
   flex: 1;
 }
+
+/* ---------- Position row + detail modal ---------- */
+
+.position-row{ cursor: pointer; }
+.position-row:hover{ background: var(--bg-raised); }
+.position-expand-arrow{
+  color: var(--ink-faint);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.position-detail-grid{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 6px;
+}
+.position-detail-item{ border-bottom: 1px solid var(--rule-soft); padding-bottom: 10px; }
+.position-detail-label{
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  margin-bottom: 5px;
+}
+.position-detail-value{
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 15px;
+}
