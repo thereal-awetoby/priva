@@ -114,7 +114,7 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
   const yTicks = [min, min + range / 2, max];
   const tickIndexes =
     chartPoints.length <= 1
-      ? []
+      ? (chartPoints.length === 1 ? [0] : [])
       : Array.from(
           new Set([0, Math.floor((values.length - 1) / 2), values.length - 1])
         );
@@ -223,7 +223,7 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
           </div>
         </div>
       </div>
-      {!hasMarketData || numericValues.length < 2 ? (
+      {!hasMarketData ? (
         <p className="panel-lead equity-empty">Waiting for the next agent cycle.</p>
       ) : (
         <div
@@ -267,6 +267,15 @@ function EquityCurve({ points, market, valueKey }: { points: EquityPoint[]; mark
               >
                 {formatTime(times[i])}
               </text>
+            ))}
+            {values.map((value, index) => value == null ? null : (
+              <circle
+                key={`point-${index}`}
+                cx={xFor(index)}
+                cy={yFor(value)}
+                r="2.5"
+                className="equity-point"
+              />
             ))}
             <path d={path} className="equity-line" />
           </svg>

@@ -237,6 +237,7 @@
 .equity-chart{ display:block; height:200px; overflow:visible; }
 .equity-axis{ stroke: var(--rule); stroke-width: 1; }
 .equity-line{ fill:none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.equity-point{ fill: var(--accent); }
 .equity-empty{ margin: 36px 0 0; }
 .equity-scroll{
   overflow-x: auto;
