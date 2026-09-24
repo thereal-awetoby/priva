@@ -770,3 +770,10 @@ table.positions tr:last-child td{ border-bottom:none; }
   font-size: 15px;
 }
 
+.activity-filter-stack .mode-switch {
+  display: flex;
+}
+.activity-filter-stack .mode-switch button {
+  flex: 1 1 auto;
+  text-align: center;
+}

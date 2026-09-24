@@ -292,7 +292,7 @@ export default function ActivityPanel() {
       </p>
 
       <div className="activity-controls">
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+      <div className="activity-filter-stack" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
           <div className="mode-switch">
             <button
               className={modeFilter === "all" ? "active" : ""}

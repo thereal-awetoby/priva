@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useEffect, useLayoutEffect } from "react";
+import { useRef, useState, useEffect, useLayoutEffect, useId } from "react";
 import { apiGet, apiPost } from "@/lib/api";
 import { formatActivityTime, timeAgo, cleanSymbol } from "@/lib/format";
 import PositionDetailModal from "@/components/app/PositionDetailModal";
@@ -19,6 +19,7 @@ type EquityPoint = {
 };
 
 type ChartTimeframe = "minute" | "hourly" | "daily" | "weekly" | "monthly";
+type HoverInfo = { value: number; time: string } | null;
 
 function aggregateByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe): EquityPoint[] {
   const validPoints = points
@@ -111,22 +112,28 @@ function executionLabel(entry: ActivityEntry): string {
   return "Signal logged";
 }
 
+// Date + time label used for the hover readout (chart tooltip and card header).
+function formatHoverTime(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })} ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+}
+
 function EquityCurve({
   points,
   market,
   valueKey,
+  onHover,
 }: {
   points: EquityPoint[];
   market: "Futures" | "Spot";
   valueKey: "futures_equity" | "spot_equity";
+  onHover?: (info: HoverInfo) => void;
 }) {
+  const uid = useId().replace(/:/g, "");
   const [timeframe, setTimeframe] = useState<ChartTimeframe>("hourly");
-  const [zoom, setZoom] = useState(1);
-  const [isPanning, setIsPanning] = useState(false);
-  const [isScrolledAway, setIsScrolledAway] = useState(false);
-  const chartRef = useRef<HTMLDivElement>(null);
-  const panRef = useRef({ startX: 0, startScrollLeft: 0 });
-  const wasAtLatestRef = useRef(true);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(720);
   const height = 260;
   const padding = { top: 12, right: 12, bottom: 28, left: 60 };
@@ -142,16 +149,27 @@ function EquityCurve({
   const numericValues = values.filter((value): value is number => value != null && Number.isFinite(value));
   const hasMarketData = numericValues.length > 0;
   const hasBuckets = chartPoints.length > 0;
-  // True only while the scrollable chart block is actually in the DOM. The
-  // observer / wheel effects below depend on it so they re-bind when the chart
-  // appears after an empty state (e.g. Spot chart receiving its first data).
+  // True only while the chart block is actually in the DOM. The resize
+  // observer below depends on it so it re-binds when the chart appears after
+  // an empty state (e.g. Spot chart receiving its first data).
   const chartMounted = hasBuckets && hasMarketData;
   const carriedValues = chartPoints.map((point) => valueKey === "futures_equity"
     ? Boolean(point.futures_equity_carried)
     : Boolean(point.spot_equity_carried));
   const times = chartPoints.map((p) => p.timestamp ?? p.created_at ?? "");
-  const widthScale = Math.max(100, values.length * 2) / 100;
-  const svgWidth = containerWidth * widthScale * zoom;
+  const timeMs = times.map((t) => new Date(t).getTime());
+
+  // Real time axis: points are positioned by when they happened, not by their
+  // position in the list, so a long gap in the data is drawn as a long gap.
+  const firstT = timeMs[0] ?? 0;
+  const lastT = timeMs[timeMs.length - 1] ?? 1;
+  const spanT = lastT - firstT || 1;
+  const gapSizes = timeMs.slice(1).map((t, i) => t - timeMs[i]).filter((g) => g > 0).sort((a, b) => a - b);
+  const medianGap = gapSizes.length ? gapSizes[Math.floor(gapSizes.length / 2)] : 0;
+  const gapThresholdMs = medianGap * 4;
+
+  // The chart always fits its card: no zoom, no horizontal scrolling.
+  const svgWidth = containerWidth;
   const plotW = svgWidth - padding.left - padding.right;
   const plotH = height - padding.top - padding.bottom;
 
@@ -159,13 +177,12 @@ function EquityCurve({
   const max = numericValues.length ? Math.max(...numericValues) : 1;
   const range = max - min || 1;
 
-  const xFor = (i: number) =>
-    padding.left + (i / Math.max(chartPoints.length - 1, 1)) * plotW;
-  const yFor = (v: number) =>
-    padding.top + plotH - ((v - min) / range) * plotH;
+  const xFor = (i: number) => padding.left + ((timeMs[i] - firstT) / spanT) * plotW;
+  const yFor = (v: number) => padding.top + plotH - ((v - min) / range) * plotH;
 
   const realPaths: string[] = [];
   const carriedPaths: string[] = [];
+  const gapPaths: string[] = [];
   let previousPoint: { index: number; value: number } | null = null;
   values.forEach((value, index) => {
     if (value == null) {
@@ -174,7 +191,9 @@ function EquityCurve({
     }
     if (previousPoint && previousPoint.index === index - 1) {
       const segment = `M ${xFor(previousPoint.index).toFixed(1)} ${yFor(previousPoint.value).toFixed(1)} L ${xFor(index).toFixed(1)} ${yFor(value).toFixed(1)}`;
-      (carriedValues[index] ? carriedPaths : realPaths).push(segment);
+      const isGap = medianGap > 0 && timeMs[index] - timeMs[previousPoint.index] > gapThresholdMs;
+      if (isGap) gapPaths.push(segment);
+      else (carriedValues[index] ? carriedPaths : realPaths).push(segment);
     }
     previousPoint = { index, value };
   });
@@ -187,21 +206,18 @@ function EquityCurve({
     weekly: 7 * 24 * 60 * 60 * 1000,
     monthly: 30 * 24 * 60 * 60 * 1000,
   }[timeframe];
-  const timestampIndexes = times
-    .map((time, index) => ({ index, timestamp: new Date(time).getTime() }))
-    .filter(({ timestamp }) => Number.isFinite(timestamp));
   const candidateTickIndexes: number[] = [];
   let lastTickTimestamp = -Infinity;
-  timestampIndexes.forEach(({ index, timestamp }) => {
+  timeMs.forEach((timestamp, index) => {
+    if (!Number.isFinite(timestamp)) return;
     if (index === 0 || timestamp - lastTickTimestamp >= tickIntervalMs) {
       candidateTickIndexes.push(index);
       lastTickTimestamp = timestamp;
     }
   });
   const estimatedLabelWidth = timeframe === "minute" || timeframe === "hourly" ? 110 : 75;
-  // The axis is index-based, so two time-based candidates can land only a
-  // pixel or two apart (e.g. either side of a gap in the data). Drop any
-  // candidate that would sit closer than one label width to the previous one.
+  // Drop any tick candidate that would sit closer than one label width to the
+  // previous one, so labels never overlap.
   const spacedCandidates: number[] = [];
   let lastTickX = -Infinity;
   candidateTickIndexes.forEach((tickIndex) => {
@@ -231,124 +247,64 @@ function EquityCurve({
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
 
-  const updateScrollState = () => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    const distanceFromLatest = chart.scrollWidth - chart.clientWidth - chart.scrollLeft;
-    const atLatest = distanceFromLatest <= 6;
-    wasAtLatestRef.current = atLatest;
-    setIsScrolledAway(!atLatest);
-  };
-
-  const handleChartScroll = () => updateScrollState();
-
-  // Measure the scroll container. Re-binds whenever the chart block mounts or
+  // Measure the chart shell. Re-binds whenever the chart block mounts or
   // unmounts, so a chart that starts in an empty state still gets measured.
   useLayoutEffect(() => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    const observer = new ResizeObserver(() => setContainerWidth(chart.clientWidth));
-    observer.observe(chart);
-    setContainerWidth(chart.clientWidth);
+    const shell = shellRef.current;
+    if (!shell) return;
+    const observer = new ResizeObserver(() => setContainerWidth(shell.clientWidth));
+    observer.observe(shell);
+    setContainerWidth(shell.clientWidth);
     return () => observer.disconnect();
   }, [chartMounted]);
 
-  // Reset zoom when the user changes resolution, and start following the
-  // newest data again in the new view.
-  useLayoutEffect(() => {
-    setZoom(1);
-    wasAtLatestRef.current = true;
-  }, [timeframe]);
+  // Single place that updates the hovered point and tells the parent card, so
+  // the big balance number above the chart can follow the cursor.
+  const updateHover = (index: number | null) => {
+    setHoverIndex(index);
+    if (!onHover) return;
+    const value = index != null ? values[index] : null;
+    if (index == null || value == null) onHover(null);
+    else onHover({ value, time: times[index] });
+  };
 
-  // Keep the newest point visible after a data update only when the user was
-  // already following the latest edge. Manual historical browsing is preserved.
-  useLayoutEffect(() => {
-    const chart = chartRef.current;
-    if (chart && wasAtLatestRef.current) chart.scrollLeft = chart.scrollWidth;
-    updateScrollState();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeframe, chartMounted, values.length, times[times.length - 1], containerWidth]);
-
-  // Wheel zoom/pan is bound manually (not via onWheel) because React attaches
-  // its root wheel listener as passive by default, which silently ignores
-  // preventDefault() and lets the page scroll underneath the chart instead of
-  // zooming it. Ctrl/Cmd+wheel zooms (matches the OS/browser zoom gesture and
-  // trackpad pinch), Shift+wheel pans horizontally, plain wheel is left alone
-  // so the page can still scroll normally when the cursor passes over the chart.
-  // Re-binds when the chart block mounts or unmounts.
-  useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart) return;
-
-    const onWheel = (event: WheelEvent) => {
-      if (event.shiftKey) {
-        event.preventDefault();
-        chart.scrollLeft += event.deltaY;
-        return;
+  // Cursor tracking: snap to the data point closest to the cursor's x.
+  const handlePointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const cursorX = event.clientX - rect.left;
+    let bestIndex: number | null = null;
+    let bestDistance = Infinity;
+    for (let i = 0; i < values.length; i++) {
+      if (values[i] == null) continue;
+      const distance = Math.abs(xFor(i) - cursorX);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
       }
-
-      if (!(event.ctrlKey || event.metaKey)) return; // let the page scroll normally
-
-      event.preventDefault();
-      const pointerX = event.clientX - chart.getBoundingClientRect().left;
-
-      setZoom((oldScale) => {
-        const nextScale = Math.min(4, Math.max(1, oldScale * Math.exp(-event.deltaY * 0.002)));
-        if (nextScale === oldScale) return oldScale;
-
-        const contentX = chart.scrollLeft + pointerX;
-        requestAnimationFrame(() => {
-          chart.scrollLeft = contentX * (nextScale / oldScale) - pointerX;
-        });
-        return nextScale;
-      });
-    };
-
-    chart.addEventListener("wheel", onWheel, { passive: false });
-    return () => chart.removeEventListener("wheel", onWheel);
-  }, [chartMounted]);
-
-  const handleChartPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    const chart = chartRef.current;
-    if (!chart) return;
-    panRef.current = { startX: event.clientX, startScrollLeft: chart.scrollLeft };
-    chart.setPointerCapture(event.pointerId);
-    setIsPanning(true);
+    }
+    updateHover(bestIndex);
   };
+  const clearHover = () => updateHover(null);
 
-  const handleChartPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    const chart = chartRef.current;
-    if (!chart || !isPanning) return;
-    chart.scrollLeft = panRef.current.startScrollLeft - (event.clientX - panRef.current.startX);
-  };
+  // Make sure the parent never keeps showing a stale hover if this chart unmounts.
+  useEffect(() => {
+    return () => onHover?.(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const stopChartPanning = (event: React.PointerEvent<HTMLDivElement>) => {
-    const chart = chartRef.current;
-    if (chart?.hasPointerCapture(event.pointerId)) chart.releasePointerCapture(event.pointerId);
-    setIsPanning(false);
-  };
+  const hoverValue = hoverIndex != null ? values[hoverIndex] : null;
+  const hoverX = hoverIndex != null && hoverValue != null ? xFor(hoverIndex) : null;
+  const hoverY = hoverValue != null ? yFor(hoverValue) : null;
 
-  // Double-click: back to 1x zoom and the newest data, regardless of where the
-  // user had scrolled to.
-  const resetView = () => {
-    setZoom(1);
-    wasAtLatestRef.current = true;
-    requestAnimationFrame(() => {
-      const chart = chartRef.current;
-      if (!chart) return;
-      chart.scrollLeft = chart.scrollWidth;
-      updateScrollState();
-    });
-  };
-
-  const jumpToLatest = () => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    chart.scrollLeft = chart.scrollWidth;
-    wasAtLatestRef.current = true;
-    setIsScrolledAway(false);
-  };
+  const lines = (
+    <>
+      {realPaths.map((segment, index) => <path key={`real-${index}`} d={segment} className="equity-line" />)}
+      {carriedPaths.map((segment, index) => <path key={`carried-${index}`} d={segment} className="equity-line equity-line-carried" />)}
+      {gapPaths.map((segment, index) => (
+        <path key={`gap-${index}`} d={segment} className="equity-line" strokeDasharray="4 4" opacity={0.5} />
+      ))}
+    </>
+  );
 
   return (
     <div className="equity-panel">
@@ -361,7 +317,10 @@ function EquityCurve({
                 key={option}
                 type="button"
                 className={timeframe === option ? "active" : ""}
-                onClick={() => setTimeframe(option)}
+                onClick={() => {
+                  setTimeframe(option);
+                  updateHover(null);
+                }}
               >
                 {option === "minute" ? "1m" : option === "hourly" ? "1H" : option === "daily" ? "1D" : option === "weekly" ? "7D" : "1M"}
               </button>
@@ -374,96 +333,110 @@ function EquityCurve({
       ) : !hasMarketData ? (
         <p className="panel-lead equity-empty">Data is available, but no {market.toLowerCase()} equity values exist in this range.</p>
       ) : (
-        <div className="equity-chart-shell">
-          {isScrolledAway ? (
-            <button type="button" className="equity-jump-latest" onClick={jumpToLatest}>
-              Jump to latest
-            </button>
-          ) : null}
-          <div
-            ref={chartRef}
-            className={`equity-scroll${isPanning ? " is-panning" : ""}`}
-            onScroll={handleChartScroll}
-            onPointerDown={handleChartPointerDown}
-            onPointerMove={handleChartPointerMove}
-            onPointerUp={stopChartPanning}
-            onPointerCancel={stopChartPanning}
-            onDoubleClick={resetView}
-            title="Ctrl/Cmd+scroll to zoom · Shift+scroll or drag to pan · double-click to reset"
-          >
-            <svg
-              className="equity-chart"
-              viewBox={`0 0 ${svgWidth} ${height}`}
-              style={{ width: `${svgWidth}px`, height: `${height}px` }}
-              role="img"
-              aria-label="Balance over time"
-            >
-              {yTicks.map((v, i) => (
-                <g key={i}>
-                  <line
-                    x1={padding.left}
-                    y1={yFor(v)}
-                    x2={svgWidth - padding.right}
-                    y2={yFor(v)}
-                    className="equity-gridline"
-                  />
-                </g>
-              ))}
-              {tickIndexes.map((i) => (
-                <text
-                  key={i}
-                  x={xFor(i)}
-                  y={height - padding.bottom + 18}
-                  className="equity-axis-label"
-                  textAnchor={i === 0 ? "start" : i === values.length - 1 ? "end" : "middle"}
-                >
-                  {formatTime(times[i])}
-                </text>
-              ))}
-              {values.map((value, index) => value == null ? null : (
-                <circle
-                  key={`point-${index}`}
-                  cx={xFor(index)}
-                  cy={yFor(value)}
-                  r="2.5"
-                  className={carriedValues[index] ? "equity-point equity-point-carried" : "equity-point"}
-                />
-              ))}
-              {realPaths.map((segment, index) => <path key={`real-${index}`} d={segment} className="equity-line" />)}
-              {carriedPaths.map((segment, index) => <path key={`carried-${index}`} d={segment} className="equity-line equity-line-carried" />)}
-            </svg>
-          </div>
-          {/* Fixed y-axis: lives outside the scroll container so the price
-              labels stay put while the chart scrolls underneath. Gridlines
-              remain inside the scrolling SVG. */}
+        <div className="equity-chart-shell" ref={shellRef} style={{ position: "relative" }}>
           <svg
-            className="equity-yaxis"
-            width={padding.left}
+            className="equity-chart"
+            width={svgWidth}
             height={height}
-            aria-hidden="true"
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              zIndex: 1,
-              display: "block",
-              background: "var(--bg-sunken)",
-              pointerEvents: "none",
-            }}
+            viewBox={`0 0 ${svgWidth} ${height}`}
+            style={{ display: "block", cursor: "crosshair", touchAction: "pan-y" }}
+            role="img"
+            aria-label={`${market} balance over time`}
+            onPointerMove={handlePointerMove}
+            onPointerDown={handlePointerMove}
+            onPointerLeave={clearHover}
+            onPointerCancel={clearHover}
           >
+            <defs>
+              {/* Everything left of the cursor stays bright; the rest is dimmed. */}
+              <clipPath id={`${uid}-past`}>
+                <rect x={0} y={0} width={hoverX ?? svgWidth} height={height} />
+              </clipPath>
+            </defs>
+
             {yTicks.map((v, i) => (
+              <g key={i}>
+                <line
+                  x1={padding.left}
+                  y1={yFor(v)}
+                  x2={svgWidth - padding.right}
+                  y2={yFor(v)}
+                  className="equity-gridline"
+                />
+                <text
+                  x={padding.left - 8}
+                  y={yFor(v)}
+                  className="equity-axis-label"
+                  textAnchor="end"
+                  dominantBaseline="middle"
+                >
+                  ${v.toFixed(0)}
+                </text>
+              </g>
+            ))}
+
+            {tickIndexes.map((i) => (
               <text
                 key={i}
-                x={padding.left - 8}
-                y={yFor(v)}
+                x={xFor(i)}
+                y={height - padding.bottom + 18}
                 className="equity-axis-label"
-                textAnchor="end"
-                dominantBaseline="middle"
+                textAnchor={i === 0 ? "start" : i === values.length - 1 ? "end" : "middle"}
               >
-                ${v.toFixed(0)}
+                {formatTime(times[i])}
               </text>
             ))}
+
+            {hoverX != null ? (
+              <>
+                <g opacity={0.35}>{lines}</g>
+                <g clipPath={`url(#${uid}-past)`}>{lines}</g>
+              </>
+            ) : (
+              <g>{lines}</g>
+            )}
+
+            {hoverX != null && hoverY != null ? (
+              <>
+                <line
+                  x1={hoverX}
+                  y1={padding.top}
+                  x2={hoverX}
+                  y2={height - padding.bottom}
+                  className="equity-gridline"
+                />
+                <circle
+                  cx={hoverX}
+                  cy={hoverY}
+                  r={4.5}
+                  className="equity-line"
+                  style={{ fill: "var(--bg-sunken)", strokeWidth: 2 }}
+                />
+              </>
+            ) : null}
           </svg>
+
+          {hoverX != null && hoverValue != null && hoverIndex != null ? (
+            <div
+              className="equity-tooltip"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: Math.min(Math.max(hoverX, 80), svgWidth - 80),
+                transform: "translateX(-50%)",
+                padding: "4px 8px",
+                background: "var(--bg-sunken)",
+                border: "1px solid currentColor",
+                fontSize: 12,
+                whiteSpace: "nowrap",
+                pointerEvents: "none",
+                zIndex: 2,
+              }}
+            >
+              <div>{formatHoverTime(times[hoverIndex])}</div>
+              <div>${hoverValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+            </div>
+          ) : null}
         </div>
       )}
     </div>
@@ -487,6 +460,8 @@ export default function ControlCenterPanel() {
   const [modes, setModes] = useState<Array<"autonomous" | "strategy">>(["autonomous"]);
   const [marketSaving, setMarketSaving] = useState(false);
   const [marketError, setMarketError] = useState<string | null>(null);
+  const [futuresHover, setFuturesHover] = useState<HoverInfo>(null);
+  const [spotHover, setSpotHover] = useState<HoverInfo>(null);
   const loadVersionRef = useRef(0);
 
   const loadData = () => {
@@ -709,19 +684,31 @@ export default function ControlCenterPanel() {
         <div className="equity-market-grid">
           <div className="market-equity-card">
             <div className="perf-label">Futures balance</div>
-            <div className="market-balance-value">${Number(balance?.futures_equity ?? 0).toFixed(2)}</div>
-            <div className={`balance-change ${(balance?.futures_daily_change ?? 0) >= 0 ? "up" : "down"}`}>
-              {(balance?.futures_daily_change ?? 0) >= 0 ? "+" : ""}${Number(balance?.futures_daily_change ?? 0).toFixed(2)} today
+            <div className="market-balance-value">
+              ${(futuresHover?.value ?? Number(balance?.futures_equity ?? 0)).toFixed(2)}
             </div>
-            <EquityCurve points={equityHistory} market="Futures" valueKey="futures_equity" />
+            {futuresHover ? (
+              <div className="balance-change">{formatHoverTime(futuresHover.time)}</div>
+            ) : (
+              <div className={`balance-change ${(balance?.futures_daily_change ?? 0) >= 0 ? "up" : "down"}`}>
+                {(balance?.futures_daily_change ?? 0) >= 0 ? "+" : ""}${Number(balance?.futures_daily_change ?? 0).toFixed(2)} today
+              </div>
+            )}
+            <EquityCurve points={equityHistory} market="Futures" valueKey="futures_equity" onHover={setFuturesHover} />
           </div>
           <div className="market-equity-card">
             <div className="perf-label">Spot balance</div>
-            <div className="market-balance-value">${Number(balance?.spot_equity ?? 0).toFixed(2)}</div>
-            <div className={`balance-change ${(balance?.spot_daily_change ?? 0) >= 0 ? "up" : "down"}`}>
-              {(balance?.spot_daily_change ?? 0) >= 0 ? "+" : ""}${Number(balance?.spot_daily_change ?? 0).toFixed(2)} today
+            <div className="market-balance-value">
+              ${(spotHover?.value ?? Number(balance?.spot_equity ?? 0)).toFixed(2)}
             </div>
-            <EquityCurve points={equityHistory} market="Spot" valueKey="spot_equity" />
+            {spotHover ? (
+              <div className="balance-change">{formatHoverTime(spotHover.time)}</div>
+            ) : (
+              <div className={`balance-change ${(balance?.spot_daily_change ?? 0) >= 0 ? "up" : "down"}`}>
+                {(balance?.spot_daily_change ?? 0) >= 0 ? "+" : ""}${Number(balance?.spot_daily_change ?? 0).toFixed(2)} today
+              </div>
+            )}
+            <EquityCurve points={equityHistory} market="Spot" valueKey="spot_equity" onHover={setSpotHover} />
           </div>
         </div>
       </div>
