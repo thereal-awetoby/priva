@@ -56,6 +56,7 @@ paper_execution_client = BitgetPaperExecutionClient()
 cycle_logger = SupabaseCycleLogger()
 _daily_balance_baselines: dict[str, tuple[str, float]] = {}
 _balance_history: list[dict[str, Any]] = []
+EFFECTIVE_BALANCE_HISTORY_START = datetime(2026, 9, 23, 13, 42, tzinfo=timezone.utc)
 
 
 def execution_client_for(user: AuthenticatedUser) -> BitgetPaperExecutionClient:
@@ -405,8 +406,21 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
 @app.get("/account/balance-history")
 def account_balance_history(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user_logger = cycle_logger_for(user)
-    persisted = user_logger.fetch_balance_snapshots()
-    runtime_points = agent_loop.recent_balance_snapshots() + list(_balance_history)
+    persisted = user_logger.fetch_balance_snapshots(
+        created_after=EFFECTIVE_BALANCE_HISTORY_START.isoformat(),
+    )
+    runtime_points = [
+        point
+        for point in agent_loop.recent_balance_snapshots() + list(_balance_history)
+        if point.get("timestamp") or point.get("created_at")
+    ]
+    runtime_points = [
+        point
+        for point in runtime_points
+        if datetime.fromisoformat(
+            (point.get("timestamp") or point.get("created_at")).replace("Z", "+00:00")
+        ) >= EFFECTIVE_BALANCE_HISTORY_START
+    ]
     points_by_timestamp = {
         point.get("timestamp") or point.get("created_at"): point
         for point in [*persisted, *runtime_points]

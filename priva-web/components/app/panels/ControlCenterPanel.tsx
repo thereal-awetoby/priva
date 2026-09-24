@@ -16,27 +16,33 @@ type EquityPoint = {
   spot_equity?: number | null;
 };
 
-type ChartTimeframe = "hourly" | "daily" | "weekly" | "monthly";
+type ChartTimeframe = "minute" | "hourly" | "daily" | "weekly" | "monthly";
 
-function filterByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe): EquityPoint[] {
+function aggregateByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe): EquityPoint[] {
   const validPoints = points
     .map((point) => ({ point, time: new Date(point.timestamp ?? point.created_at ?? 0).getTime() }))
     .filter(({ time }) => Number.isFinite(time));
   if (!validPoints.length) return [];
 
-  const settings = {
-    hourly: { windowMs: 60 * 60 * 1000, bucketMs: 60 * 1000 },
-    daily: { windowMs: 24 * 60 * 60 * 1000, bucketMs: 60 * 60 * 1000 },
-    weekly: { windowMs: 7 * 24 * 60 * 60 * 1000, bucketMs: 4 * 60 * 60 * 1000 },
-    monthly: { windowMs: 30 * 24 * 60 * 60 * 1000, bucketMs: 24 * 60 * 60 * 1000 },
-  }[timeframe];
-  const latestTime = Math.max(...validPoints.map(({ time }) => time));
-  const earliestTime = latestTime - settings.windowMs;
   const buckets = new Map<string, EquityPoint>();
 
   for (const { point, time } of validPoints) {
-    if (time < earliestTime) continue;
-    const bucketKey = String(Math.floor(time / settings.bucketMs));
+    const date = new Date(time);
+    let bucketKey: string;
+    if (timeframe === "minute") {
+      bucketKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}-${date.getMinutes()}`;
+    } else if (timeframe === "hourly") {
+      bucketKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`;
+    } else if (timeframe === "daily") {
+      bucketKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+    } else if (timeframe === "weekly") {
+      const weekStart = new Date(date);
+      const daysSinceMonday = (date.getDay() + 6) % 7;
+      weekStart.setDate(date.getDate() - daysSinceMonday);
+      bucketKey = `${weekStart.getFullYear()}-${weekStart.getMonth()}-${weekStart.getDate()}`;
+    } else {
+      bucketKey = `${date.getFullYear()}-${date.getMonth()}`;
+    }
     const existing = buckets.get(bucketKey);
     if (!existing || time > new Date(existing.timestamp ?? existing.created_at ?? 0).getTime()) {
       buckets.set(bucketKey, point);
@@ -70,45 +76,46 @@ function executionLabel(entry: ActivityEntry): string {
   const plotW = width - padding.left - padding.right;
   const plotH = height - padding.top - padding.bottom;
 
-  // Only plot points that carry a real value for this market. Snapshots are
-  // written by two sources: the agent worker (combined balance only) and the
-  // balance endpoint (combined + per-market breakdowns). Without this filter,
-  // legacy/worker snapshots would punch the Spot curve down to $0 and mix
-  // combined totals into the Futures curve.
-  let chartPoints = filterByTimeframe(points, timeframe).filter((p) => p[valueKey] != null);
-  if (chartPoints.length < 2 && valueKey === "futures_equity") {
-    // Legacy snapshots only stored the combined balance; fall back to it so
-    // the Futures curve still renders before per-market fields exist.
-    chartPoints = filterByTimeframe(points, timeframe).filter((p) => p.balance != null || p.equity != null);
-  }
-
-  const hasMarketData = chartPoints.length > 0;
-  const values = chartPoints.map((p) =>
-    Number(
-      valueKey === "futures_equity" && p[valueKey] == null
-        ? p.balance ?? p.equity ?? 0
-        : p[valueKey],
-    ),
-  );
+  // Keep the complete aggregated timeline for every resolution. A snapshot
+  // can lack a market-specific field while the account is migrating from
+  // legacy combined-balance records, so missing market values become gaps
+  // rather than changing the chart's visible date range.
+  const chartPoints = aggregateByTimeframe(points, timeframe);
+  const values = chartPoints.map((point): number | null => {
+    if (point[valueKey] != null) return Number(point[valueKey]);
+    if (valueKey === "futures_equity" && (point.balance != null || point.equity != null)) {
+      return Number(point.balance ?? point.equity);
+    }
+    return null;
+  });
+  const numericValues = values.filter((value): value is number => value != null && Number.isFinite(value));
+  const hasMarketData = numericValues.length > 0;
   const times = chartPoints.map((p) => p.timestamp ?? p.created_at ?? "");
 
-  const min = values.length ? Math.min(...values) : 0;
-  const max = values.length ? Math.max(...values) : 1;
+  const min = numericValues.length ? Math.min(...numericValues) : 0;
+  const max = numericValues.length ? Math.max(...numericValues) : 1;
   const range = max - min || 1;
 
   const xFor = (i: number) =>
-    padding.left + (i / Math.max(values.length - 1, 1)) * plotW;
+    padding.left + (i / Math.max(chartPoints.length - 1, 1)) * plotW;
   const yFor = (v: number) =>
     padding.top + plotH - ((v - min) / range) * plotH;
 
-  const path = values
-    .map((v, i) => `${i === 0 ? "M" : "L"} ${xFor(i).toFixed(1)} ${yFor(v).toFixed(1)}`)
-    .join(" ");
+  let path = "";
+  let hasPreviousValue = false;
+  values.forEach((value, index) => {
+    if (value == null) {
+      hasPreviousValue = false;
+      return;
+    }
+    path += `${hasPreviousValue ? "L" : "M"} ${xFor(index).toFixed(1)} ${yFor(value).toFixed(1)} `;
+    hasPreviousValue = true;
+  });
 
   const yTicks = [min, min + range / 2, max];
   const tickIndexes =
-    values.length <= 1
-      ? []
+    chartPoints.length <= 1
+      ? (chartPoints.length === 1 ? [0] : [])
       : Array.from(
           new Set([0, Math.floor((values.length - 1) / 2), values.length - 1])
         );
@@ -116,13 +123,13 @@ function executionLabel(entry: ActivityEntry): string {
   const formatTime = (iso: string) => {
     if (!iso) return "";
     const d = new Date(iso);
-    if (timeframe === "hourly") {
+    if (timeframe === "minute" || timeframe === "hourly") {
       return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
     }
     if (timeframe === "monthly") {
       return d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
     }
-    return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
 
   // Reset zoom/pan whenever the underlying dataset changes shape (timeframe
@@ -204,20 +211,20 @@ function executionLabel(entry: ActivityEntry): string {
         <div className="panel-title">{market} equity curve</div>
         <div className="equity-chart-tools">
           <div className="equity-timeframes" role="group" aria-label={`${market} chart timeframe`}>
-            {(["hourly", "daily", "weekly", "monthly"] as const).map((option) => (
+            {(["minute", "hourly", "daily", "weekly", "monthly"] as const).map((option) => (
               <button
                 key={option}
                 type="button"
                 className={timeframe === option ? "active" : ""}
                 onClick={() => setTimeframe(option)}
               >
-                {option === "hourly" ? "1H" : option === "daily" ? "1D" : option === "weekly" ? "7D" : "1M"}
+                {option === "minute" ? "1m" : option === "hourly" ? "1H" : option === "daily" ? "1D" : option === "weekly" ? "7D" : "1M"}
               </button>
             ))}
           </div>
         </div>
       </div>
-      {!hasMarketData || values.length < 2 ? (
+      {!hasMarketData ? (
         <p className="panel-lead equity-empty">Waiting for the next agent cycle.</p>
       ) : (
         <div
@@ -233,7 +240,7 @@ function executionLabel(entry: ActivityEntry): string {
           <svg
             className="equity-chart"
             viewBox={`0 0 ${width} ${height}`}
-            style={{ width: `${zoom * 100}%`, height: `${height}px` }}
+            style={{ width: `${Math.max(100, values.length * 2) * zoom}%`, height: `${height}px` }}
             role="img"
             aria-label="Balance over time"
           >
@@ -261,6 +268,15 @@ function executionLabel(entry: ActivityEntry): string {
               >
                 {formatTime(times[i])}
               </text>
+            ))}
+            {values.map((value, index) => value == null ? null : (
+              <circle
+                key={`point-${index}`}
+                cx={xFor(index)}
+                cy={yFor(value)}
+                r="2.5"
+                className="equity-point"
+              />
             ))}
             <path d={path} className="equity-line" />
           </svg>

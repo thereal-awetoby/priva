@@ -95,6 +95,27 @@ def test_supabase_logger_filters_balance_snapshots_by_date_without_session(monke
     assert params["created_at"] == "gte.2026-09-22"
 
 
+def test_supabase_logger_paginates_balance_snapshots_past_single_request_cap(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+
+    class PaginatedSession(FakeSession):
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            offset = kwargs["params"]["offset"]
+            payload = [{"created_at": f"2026-09-23T00:{index:02d}:00Z"} for index in range(1000)] if offset == 0 else [{"created_at": "2026-09-23T16:40:00Z"}]
+            response = FakeResponse()
+            response.json = lambda: payload
+            return response
+
+    session = PaginatedSession()
+    snapshots = SupabaseCycleLogger(session=session, user_id="user-1").fetch_balance_snapshots()
+
+    assert len(snapshots) == 1001
+    assert [call[1]["params"]["offset"] for call in session.calls] == [0, 1000]
+    assert all(call[1]["params"]["limit"] == 1000 for call in session.calls)
+
+
 def test_supabase_logger_detects_open_position(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")

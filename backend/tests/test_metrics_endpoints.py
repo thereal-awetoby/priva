@@ -89,7 +89,8 @@ def test_account_balance_history_exposes_equity_curve_summary(monkeypatch):
     main._balance_history.extend(
         [
             {"timestamp": "2026-09-20T00:00:00Z", "balance": 1000.0, "equity": 1000.0},
-            {"timestamp": "2026-09-20T00:10:00Z", "balance": 1100.0, "equity": 1100.0},
+            {"timestamp": "2026-09-23T13:42:00Z", "balance": 1000.0, "equity": 1000.0},
+            {"timestamp": "2026-09-23T13:52:00Z", "balance": 1100.0, "equity": 1100.0},
         ]
     )
 
@@ -99,7 +100,7 @@ def test_account_balance_history_exposes_equity_curve_summary(monkeypatch):
     assert result["starting_balance"] == 1000.0
     assert result["latest_balance"] == 1100.0
     assert result["point_count"] == 2
-    assert result["points"][0]["balance"] == 1000.0
+    assert result["points"][0]["timestamp"] == "2026-09-23T13:42:00Z"
 
 
 def test_account_balance_combines_futures_and_spot_equity(monkeypatch):
