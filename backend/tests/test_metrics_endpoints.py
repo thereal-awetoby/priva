@@ -433,7 +433,7 @@ def test_activity_log_adds_readable_labels_categories_and_intent_hash(monkeypatc
                 "decision": {"action": "buy"},
                 "risk_check": {
                     "allowed": False,
-                    "reasons": ["max_position_size:26000>25000", "max_leverage:6>5"],
+                    "reasons": ["max_position_size:26000.0>25000", "max_leverage:6.0>5"],
                 },
                 "intent": {"intent_hash": "1234567890abcdef"},
             },
@@ -462,11 +462,46 @@ def test_activity_log_adds_readable_labels_categories_and_intent_hash(monkeypatc
     assert "intent_hash_short" not in evaluation
 
 
+def test_activity_log_humanizes_blocked_reasons_and_skips_nothing_to_sell(monkeypatch):
+    monkeypatch.setattr(
+        main.cycle_logger,
+        "fetch_cycles",
+        lambda **kwargs: [
+            {
+                "created_at": "2026-09-22T19:57:02Z",
+                "symbol": "AAPLUSDT",
+                "market": "spot",
+                "status": "blocked",
+                "decision": {"action": "buy"},
+                "reason": "spot_ticker_unavailable",
+            },
+            {
+                "created_at": "2026-09-22T19:58:02Z",
+                "symbol": "TSLAUSDT",
+                "market": "spot",
+                "status": "logged",
+                "decision": {"action": "sell"},
+                "reason": "no_spot_position_to_close",
+            },
+        ],
+    )
+
+    blocked, skipped = main.activity_log()["entries"]
+
+    assert blocked["display_detail"] == "spot ticker unavailable"
+    assert blocked["display_label"] == "Blocked · spot ticker unavailable"
+    assert blocked["category"] == "event"
+    assert skipped["display_detail"] == "nothing to sell"
+    assert skipped["display_label"] == "Skipped · nothing to sell"
+    assert skipped["category"] == "event"
+
+
 def test_status_reports_live_cycle_and_risk_usage(monkeypatch):
     monkeypatch.setattr(
         main.user_runtime_registry,
         "status",
         lambda user_id: {
+            "running": True,
             "symbols": ["TSLAUSDT"],
             "cycle_interval_seconds": 45,
             "workers": {
@@ -488,6 +523,14 @@ def test_status_reports_live_cycle_and_risk_usage(monkeypatch):
     assert result["last_cycle"] == "2026-09-24T12:00:00+00:00"
     assert result["cycle_interval_seconds"] == 45
     assert result["daily_loss_usage_pct"] == 42.5
+    assert result["agent_state"] == "online"
+
+    monkeypatch.setattr(
+        main.user_runtime_registry,
+        "status",
+        lambda user_id: {"running": False, "symbols": [], "workers": {}, "cycle_interval_seconds": None},
+    )
+    assert main.status()["agent_state"] == "offline"
 
 
 def test_agent_settings_can_switch_autonomous_market():

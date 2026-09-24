@@ -858,7 +858,7 @@ def status(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
         logger.warning("Status daily loss usage unavailable", exc_info=True)
     return {
         "mode": "autonomous",
-        "agent_state": "online",
+        "agent_state": "online" if runtime_status.get("running") else "offline",
         "paper_trading": True,
         "risk_engine": "armed",
         "watched_symbols": runtime_status.get("symbols") or None,
@@ -1217,7 +1217,11 @@ def _format_activity_limit_reason(reason: str, risk_check: dict[str, Any]) -> st
     if prefix in labels and separator and ">" in values:
         actual, limit = values.split(">", 1)
         if prefix == "max_leverage":
-            return f"{labels[prefix]} ({actual}x > {limit}x)"
+            actual_number = float(actual)
+            limit_number = float(limit)
+            actual_text = str(int(actual_number)) if actual_number.is_integer() else str(actual_number)
+            limit_text = str(int(limit_number)) if limit_number.is_integer() else str(limit_number)
+            return f"{labels[prefix]} ({actual_text}x > {limit_text}x)"
         return f"{labels[prefix]} (${float(actual):,.2f} > ${float(limit):,.2f})"
     if prefix == "max_daily_loss":
         return "Daily loss limit reached"
@@ -1226,33 +1230,55 @@ def _format_activity_limit_reason(reason: str, risk_check: dict[str, Any]) -> st
     return reason
 
 
+def _humanize_activity_reason(reason: str) -> str:
+    labels = {
+        "insufficient_margin": "insufficient margin",
+        "margin_check_unavailable": "margin check unavailable",
+        "spot_ticker_unavailable": "spot ticker unavailable",
+        "spot_market_unavailable": "spot market unavailable",
+        "no_spot_position_to_close": "nothing to sell",
+    }
+    return labels.get(reason, reason.replace("_", " "))
+
+
+def _is_limit_risk_rejection(cycle: dict[str, Any]) -> bool:
+    risk_check = cycle.get("risk_check") or {}
+    if risk_check.get("allowed") is not False:
+        return False
+    reasons = risk_check.get("reasons") or []
+    return any(
+        str(reason).split(":", 1)[0]
+        in {"max_position_size", "aggregate_position_limit", "max_leverage", "max_daily_loss"}
+        for reason in reasons
+    )
+
+
 def _activity_detail(cycle: dict[str, Any]) -> str:
     status = cycle.get("status")
     risk_check = cycle.get("risk_check") or {}
-    if status == "risk_rejected":
+    if _is_limit_risk_rejection(cycle):
         reasons = risk_check.get("reasons") or []
         return "; ".join(_format_activity_limit_reason(str(reason), risk_check) for reason in reasons) or "Risk rejected"
     order = cycle.get("order_result") or cycle.get("order") or {}
     reason = cycle.get("reason") or order.get("reason") or order.get("message")
-    if reason == "no_spot_position_to_close" and cycle.get("market") == "futures":
-        return "Futures position check used for futures order"
     if status == "closed":
-        return str(cycle.get("exit_reason") or reason or "Position closed")
+        return _humanize_activity_reason(str(cycle.get("exit_reason") or reason or "Position closed"))
     if reason == "no_trade_signal" or (cycle.get("decision") or {}).get("action") == "hold":
         return "No trade signal"
     if status == "skipped_existing_position":
         return "Position already open"
-    return str(reason or "")
+    return _humanize_activity_reason(str(reason or ""))
 
 
 def _activity_label(cycle: dict[str, Any], detail: str) -> str:
     status = cycle.get("status")
     action = (cycle.get("decision") or {}).get("action")
-    if detail == "Futures position check used for futures order":
-        return "Wrong market · futures position check"
+    reason = cycle.get("reason") or ((cycle.get("order_result") or cycle.get("order") or {}).get("reason"))
+    if reason == "no_spot_position_to_close":
+        return "Skipped · nothing to sell"
     if status == "closed":
         return "Position closed" + (f" · {detail}" if cycle.get("exit_reason") else "")
-    if status == "risk_rejected":
+    if _is_limit_risk_rejection(cycle):
         return f"Risk rejected · {detail}"
     if status == "skipped_existing_position":
         return "Skipped · Position already open"
@@ -1272,8 +1298,8 @@ def _activity_entry(cycle: dict[str, Any]) -> dict[str, Any]:
     is_evaluation = (
         action == "hold"
         or cycle.get("status") in {"logged", "skipped_existing_position"}
-    ) and not (
-        cycle.get("reason") == "no_spot_position_to_close" and cycle.get("market") == "futures"
+    ) and not _is_limit_risk_rejection(cycle) and not (
+        cycle.get("reason") == "no_spot_position_to_close"
     )
     order = cycle.get("order_result") or cycle.get("order") or {}
     entry = {
