@@ -80,7 +80,7 @@ def _trailing_profit_exit_reason(
         if _profit_peaks[key] >= float(trigger) and current_profit <= float(floor):
             return "trailing_profit_floor"
         return None
-    if current_profit <= 0:
+    if _profit_peaks[key] <= 0:
         return None
     protected_profit = _profit_peaks[key] * float(lock_pct) / 100.0
     if current_profit <= protected_profit:

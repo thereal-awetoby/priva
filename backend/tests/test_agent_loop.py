@@ -1,4 +1,5 @@
 from app.main import process_market_cycle
+from app import agent_loop as agent_loop_module
 from app.agent_loop import run_cycle, run_pair_cycle
 from app.risk_engine import RiskEngine
 from app.performance import calculate_unrealized_pnl
@@ -556,6 +557,53 @@ def test_agent_cycle_closes_position_at_take_profit(monkeypatch):
     assert result["status"] == "closed"
     assert result["exit_reason"] == "take_profit"
     assert execution.closed["position_side"] == "buy"
+
+
+def test_percentage_trailing_lock_closes_after_profit_crosses_zero():
+    agent_loop_module._profit_peaks.clear()
+    position = {"entry_price": 100.0, "unrealized_pnl": 64.0}
+    decision = {"trailing_profit_lock_pct": 30.0}
+    try:
+        assert agent_loop_module._trailing_profit_exit_reason(
+            "AAPLUSDT", "futures", position, decision, None
+        ) is None
+        position["unrealized_pnl"] = -6.0
+        assert agent_loop_module._trailing_profit_exit_reason(
+            "AAPLUSDT", "futures", position, decision, None
+        ) == "trailing_profit_lock"
+    finally:
+        agent_loop_module._profit_peaks.clear()
+
+
+def test_percentage_trailing_lock_ignores_position_first_seen_at_a_loss():
+    agent_loop_module._profit_peaks.clear()
+    position = {"entry_price": 100.0, "unrealized_pnl": -6.0}
+    decision = {"trailing_profit_lock_pct": 30.0}
+    try:
+        assert agent_loop_module._trailing_profit_exit_reason(
+            "AAPLUSDT", "futures", position, decision, None
+        ) is None
+    finally:
+        agent_loop_module._profit_peaks.clear()
+
+
+def test_fixed_dollar_trailing_floor_remains_distinct_from_percentage_lock():
+    agent_loop_module._profit_peaks.clear()
+    position = {"entry_price": 100.0, "unrealized_pnl": 64.0}
+    decision = {
+        "trailing_profit_trigger_usd": 30.0,
+        "trailing_profit_floor_usd": 20.0,
+    }
+    try:
+        assert agent_loop_module._trailing_profit_exit_reason(
+            "AAPLUSDT", "futures", position, decision, None
+        ) is None
+        position["unrealized_pnl"] = 19.0
+        assert agent_loop_module._trailing_profit_exit_reason(
+            "AAPLUSDT", "futures", position, decision, None
+        ) == "trailing_profit_floor"
+    finally:
+        agent_loop_module._profit_peaks.clear()
 
 
 def test_agent_cycle_closes_position_on_opposite_signal(monkeypatch):
