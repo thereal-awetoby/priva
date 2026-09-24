@@ -78,6 +78,7 @@ export default function AppShell() {
           </div>
           <div className="topbar-right">
             <div className="env-tag">Paper environment</div>
+            <div className="env-tag">Paper trading only · Withdrawals disabled</div>
             <div className={`worker-status worker-status-${workerState}`} title={workerTitle}>
               <span className="worker-status-dot" aria-hidden="true" />
               {workerLabel}

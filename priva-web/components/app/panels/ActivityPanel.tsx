@@ -61,24 +61,6 @@ function rangeStartMs(range: TimeRange): number | null {
   return Date.now() - days * 24 * 60 * 60 * 1000;
 }
 
-function entryDetails(entry: EventItem): string {
-  if (entry.risk_check?.allowed === false) {
-    return (entry.risk_check?.reasons ?? []).join(", ") || "Blocked by risk check";
-  }
-  if (entry.status === "skipped_existing_position") return "Position already open";
-  if (entry.status === "closed") return "Position closed";
-  return "";
-}
-
-function executionLabel(entry: EventItem): string {
-  if (entry.status === "closed") return "Position closed";
-  if (entry.status === "submitted") return "Position opened";
-  if (entry.status === "skipped_existing_position") return "Skipped: position already open";
-  if (entry.status === "rejected") return "Rejected by exchange";
-  if (entry.status === "risk_rejected") return "Rejected by risk check";
-  return "Signal logged";
-}
-
 function lifecycleLabel(entry: EventItem): string | null {
   if (entry.status === "closed") return "Closed";
   if (entry.status === "submitted") return "Opened";
@@ -100,7 +82,7 @@ function buildCsv(rows: EventItem[]): string {
       e.mode ?? "autonomous",
       getEventTag(e),
       e.status ?? "",
-      entryDetails(e),
+      e.display_detail ?? "",
     ]
       .map((v) => csvEscape(String(v)))
       .join(",")
@@ -236,24 +218,40 @@ export default function ActivityPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState("all");
-    const [search, setSearch] = useState("");
-    const [modeFilter, setModeFilter] = useState<"all" | "autonomous" | "strategy">("all");
+  const [search, setSearch] = useState("");
+  const [modeFilter, setModeFilter] = useState<"all" | "autonomous" | "strategy">("all");
+  const [showEvaluations, setShowEvaluations] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
 
-  useEffect(() => {
+  const loadActivity = (attempt = 0) => {
     apiGet<any>("/activity-log")
       .then((data) => {
         setEntries(data.entries ?? []);
+        setError(null);
         setLoading(false);
       })
       .catch((err) => {
+        if (attempt === 0) {
+          window.setTimeout(() => loadActivity(1), 500);
+          return;
+        }
         setError(err.message);
         setLoading(false);
       });
+  };
+
+  useEffect(() => {
+    loadActivity();
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") loadActivity();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
 
   const filteredEntries = useMemo(() => {
     return entries.filter((e) => {
+      const matchesCategory = showEvaluations || e.category !== "evaluation";
       const tag = getEventTag(e);
       const matchesFilter =
         activeFilter === "all" ||
@@ -266,9 +264,9 @@ export default function ActivityPanel() {
         search.trim() === "" ||
         (e.symbol ?? "").toLowerCase().includes(search.toLowerCase()) ||
         (e.action ?? "").toLowerCase().includes(search.toLowerCase());
-      return matchesFilter && matchesMode && matchesSearch;
+      return matchesCategory && matchesFilter && matchesMode && matchesSearch;
     });
-  }, [entries, activeFilter, modeFilter, search]);
+  }, [entries, activeFilter, modeFilter, search, showEvaluations]);
 
   if (loading) {
     return <p className="panel-lead">Loading activity…</p>;
@@ -289,6 +287,9 @@ export default function ActivityPanel() {
       <p className="panel-lead">
         A human-readable record of every signal, decision, and order Priva
         considered.
+      </p>
+      <p className="panel-lead">
+        {showEvaluations ? "Showing events and evaluations" : "Showing meaningful events only"}
       </p>
 
       <div className="activity-controls">
@@ -326,6 +327,13 @@ export default function ActivityPanel() {
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                      <button
+                        className={`btn ${showEvaluations ? "btn-primary" : ""}`}
+                        type="button"
+                        onClick={() => setShowEvaluations((current) => !current)}
+                      >
+                        {showEvaluations ? "Hide holds & evaluations" : "Show holds & evaluations"}
+                      </button>
                       <input
                         className="activity-search"
                         type="text"
@@ -346,13 +354,20 @@ export default function ActivityPanel() {
                   <div className="event-list">
         {filteredEntries.length === 0 ? (
           <div className="empty-state">
-                        <p className="empty-state-title">Nothing here yet</p>
-            <p className="empty-state-sub">Try widening your filters or search</p>
+            <p className="empty-state-title">
+              {entries.some((entry) => entry.category === "evaluation") && !showEvaluations
+                ? "Evaluations are hidden"
+                : "Nothing here yet"}
+            </p>
+            <p className="empty-state-sub">
+              {entries.some((entry) => entry.category === "evaluation") && !showEvaluations
+                ? "Show holds & evaluations to see them"
+                : "Try widening your filters or search"}
+            </p>
           </div>
         ) : (
           filteredEntries.slice(0, 50).map((entry) => {
             const tag = getEventTag(entry);
-            const blocked = tag === "blocked";
             const lifecycle = lifecycleLabel(entry);
             const eventTimestamp = entry.status === "closed"
               ? entry.closed_at
@@ -377,11 +392,18 @@ export default function ActivityPanel() {
                       <span className="event-tag event-lifecycle-tag">{lifecycle}</span>
                     )}
                   </div>
-                  <p>
-                    {blocked
-                      ? (entry.risk_check?.reasons ?? []).join(", ") || "Blocked by risk check"
-                      : executionLabel(entry)}
-                  </p>
+                  <p>{entry.display_label}</p>
+                  {entry.display_detail ? <p className="event-detail">{entry.display_detail}</p> : null}
+                  {entry.intent_hash_short ? (
+                    <button
+                      type="button"
+                      className="event-intent"
+                      title={entry.intent_hash}
+                      onClick={() => navigator.clipboard?.writeText(entry.intent_hash)}
+                    >
+                      Intent hash · {entry.intent_hash_short}
+                    </button>
+                  ) : null}
                 </div>
                 <div className="event-meta">
                   <time className="event-time" dateTime={eventTimestamp ?? undefined} title={activityTime.title}>

@@ -60,9 +60,7 @@ export default function StrategyList({ typeFilter }: { typeFilter: string | null
     try {
       const data = await apiPost<any>(`/strategies/${selectedId}/activate`, { symbols });
       console.log("ACTIVATE RESPONSE:", data);
-      setActivateResult(
-        `Activated on ${symbols.map((s) => s.replace("USDT", "")).join(", ")}.`
-      );
+      setActivateResult("Symbols updated · Agent will use these on the next cycle");
     } catch (err: any) {
       setActivateResult(`Couldn't activate: ${err.message}`);
     } finally {

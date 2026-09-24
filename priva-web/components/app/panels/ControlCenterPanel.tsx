@@ -104,29 +104,6 @@ function aggregateByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe):
   });
 }
 
-function activityReasonLabel(reason: unknown): string | null {
-  const labels: Record<string, string> = {
-    insufficient_margin: "Blocked · insufficient margin",
-    margin_check_unavailable: "Blocked · margin check unavailable",
-    "insufficient margin": "Blocked · insufficient margin",
-    "below minimum order size": "Rejected · below minimum order size",
-    "invalid order precision": "Rejected · invalid order precision",
-    "symbol not available on this market": "Symbol not available on this market",
-  };
-  if (!reason) return null;
-  return labels[String(reason)] ?? String(reason);
-}
-
-function executionLabel(entry: ActivityEntry): string {
-  if (entry.status === "submitted" || entry.status === "closed") return "Executed";
-  if (entry.status === "skipped_existing_position") return "Skipped: position already open";
-  const reasonLabel = activityReasonLabel(entry.reason);
-  if (reasonLabel) return reasonLabel;
-  if (entry.status === "rejected") return "Rejected by exchange";
-  if (entry.status === "risk_rejected") return "Rejected by risk check";
-  return "Signal logged";
-}
-
 // Date + time label used for the hover readout (chart tooltip and card header).
 function formatHoverTime(iso: string): string {
   if (!iso) return "";
@@ -444,6 +421,7 @@ export default function ControlCenterPanel() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [pnl, setPnl] = useState<Record<string, any> | null>(null);
   const [riskUsage, setRiskUsage] = useState<Record<string, any> | null>(null);
+  const [statusData, setStatusData] = useState<Record<string, any> | null>(null);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [balance, setBalance] = useState<Record<string, any> | null>(null);
   const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
@@ -459,9 +437,12 @@ export default function ControlCenterPanel() {
   const [marketError, setMarketError] = useState<string | null>(null);
   const [futuresHover, setFuturesHover] = useState<HoverInfo>(null);
   const [spotHover, setSpotHover] = useState<HoverInfo>(null);
+  const [killSwitchNotice, setKillSwitchNotice] = useState<string | null>(null);
+  const previousKillSwitchRef = useRef<boolean | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const loadVersionRef = useRef(0);
 
-  const loadData = () => {
+  const loadData = (attempt = 0) => {
     const loadVersion = ++loadVersionRef.current;
     Promise.all([
       apiGet<any>("/positions"),
@@ -472,14 +453,20 @@ export default function ControlCenterPanel() {
       apiGet<any>("/account/balance"),
       apiGet<any>("/account/balance-history"),
       apiGet<any>("/user/agent-settings"),
+      apiGet<any>("/status"),
     ])
-      .then(([positionsData, pnlData, riskData, activityData, killData, balanceData, historyData, settingsData]) => {
+      .then(([positionsData, pnlData, riskData, activityData, killData, balanceData, historyData, settingsData, statusResponse]) => {
         if (loadVersion !== loadVersionRef.current) return;
         setPositions(positionsData.positions ?? []);
         setPnl(pnlData);
         setRiskUsage(riskData);
+        setStatusData(statusResponse);
         setActivity(activityData.entries ?? []);
         setKillSwitchEnabled(killData.enabled ?? false);
+        if (previousKillSwitchRef.current !== null && previousKillSwitchRef.current !== killData.enabled) {
+          setKillSwitchNotice(killData.enabled ? "Kill switch engaged · Agent paused" : "Kill switch released · Agent restarted");
+        }
+        previousKillSwitchRef.current = Boolean(killData.enabled);
         setBalance(balanceData);
         setEquityHistory([
           ...(historyData.points ?? []),
@@ -508,6 +495,10 @@ export default function ControlCenterPanel() {
       })
       .catch((err) => {
         if (loadVersion !== loadVersionRef.current) return;
+        if (attempt === 0) {
+          window.setTimeout(() => loadData(1), 500);
+          return;
+        }
         setError(err.message);
         setLoading(false);
       });
@@ -515,8 +506,20 @@ export default function ControlCenterPanel() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 15 * 1000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => loadData(), 15 * 1000);
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") loadData();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(clock);
   }, []);
 
   const handleKillSwitch = async () => {
@@ -525,6 +528,7 @@ export default function ControlCenterPanel() {
       const next = !killSwitchEnabled;
       await apiPost("/kill-switch", { enabled: next });
       setKillSwitchEnabled(next);
+      setKillSwitchNotice(next ? "Kill switch engaged · Agent paused" : "Kill switch released · Agent restarted");
     } catch (err: any) {
       alert(`Couldn't update kill switch: ${err.message}`);
     } finally {
@@ -567,6 +571,17 @@ export default function ControlCenterPanel() {
   }
 
   const dailyLossUsage = Math.max(0, Math.min(100, Number(riskUsage?.usage_percent?.daily_loss) || 0));
+  const watchedSymbols = (statusData?.watched_symbols ?? []).map((symbol: string) => symbol.replace(/USDT$/, ""));
+  const watchLine = watchedSymbols.length ? `Watching ${watchedSymbols.join(" & ")}` : "Watching";
+  const lastCycle = statusData?.last_cycle ? new Date(statusData.last_cycle).getTime() : null;
+  const intervalSeconds = statusData?.cycle_interval_seconds;
+  const remainingSeconds = lastCycle && intervalSeconds != null
+    ? Math.max(0, Math.ceil((lastCycle + Number(intervalSeconds) * 1000 - now) / 1000))
+    : null;
+  const cycleLine = remainingSeconds != null
+    ? `${watchLine} · Next cycle in ${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`
+    : watchLine;
+  const statusLine = statusData?.agent_state === "offline" ? `Agent offline · ${cycleLine}` : cycleLine;
   const filteredActivity = activity
     .filter((entry) => (entry.mode ?? "autonomous") === activityMode)
     .sort((a, b) => new Date(b.timestamp ?? b.created_at ?? 0).getTime() - new Date(a.timestamp ?? a.created_at ?? 0).getTime())
@@ -590,6 +605,7 @@ export default function ControlCenterPanel() {
             />
             {killSwitchEnabled ? "Stopped" : "Running"}
           </div>
+          <div className="status-line">{statusLine}</div>
           <div className="market-control">
             <span className="market-control-label">Markets</span>
             <div className="mode-switch" aria-label="Trading market">
@@ -644,6 +660,10 @@ export default function ControlCenterPanel() {
           </button>
         </div>
       </div>
+      {killSwitchNotice ? <div className="panel-lead">{killSwitchNotice}</div> : null}
+      {statusData?.daily_loss_usage_pct != null && Number(statusData.daily_loss_usage_pct) > 70 ? (
+        <div className="panel-lead">Risk usage elevated · {Math.round(Number(statusData.daily_loss_usage_pct))}% of daily loss limit</div>
+      ) : null}
 
       <div className="perf-row">
         <div className="perf-cell">
@@ -822,7 +842,7 @@ export default function ControlCenterPanel() {
                   </time>
                   <span>
                     {cleanSymbol(entry.symbol)} — {entry.action}
-                    <span className="log-status"> ({executionLabel(entry)})</span>
+                    <span className="log-status"> ({entry.display_label})</span>
                   </span>
                 </div>
               );

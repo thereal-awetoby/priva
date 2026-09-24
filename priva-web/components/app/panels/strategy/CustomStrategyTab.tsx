@@ -43,11 +43,10 @@ function ActivationBanner({ result }: { result: ActivationResult }) {
   return (
     <div className="backtest-result">
       <div className="backtest-result-title">
-        {result.name ? `"${result.name}" is live` : "Strategy activated"}
+        Strategy created and activated · Running live on your demo account
       </div>
       <p style={{ margin: 0, fontSize: "13.5px", color: "var(--ink-dim)" }}>
-        This strategy is now live on your account and will act on the next
-        agent cycle. You'll find it saved in the Pre-built tab going forward.
+        {result.name ? `"${result.name}" is ready to use.` : "Your strategy is ready to use."}
       </p>
       <div className="config-rows" style={{ marginTop: "16px", marginBottom: 0 }}>
         <div className="config-row">
