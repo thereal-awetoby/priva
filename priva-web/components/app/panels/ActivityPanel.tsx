@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { apiGet } from "@/lib/api";
-import { timeAgo, cleanSymbol } from "@/lib/format";
+import { formatActivityTime, cleanSymbol } from "@/lib/format";
 
 type EventItem = Record<string, any>;
 
@@ -12,6 +12,8 @@ const filters = [
   { id: "sell", label: "Sell" },
   { id: "hold", label: "Hold" },
   { id: "blocked", label: "Blocked" },
+  { id: "open", label: "Open" },
+  { id: "closed", label: "Closed" },
 ];
 
 function getEventIcon(entry: EventItem) {
@@ -75,6 +77,12 @@ function executionLabel(entry: EventItem): string {
   if (entry.status === "rejected") return "Rejected by exchange";
   if (entry.status === "risk_rejected") return "Rejected by risk check";
   return "Signal logged";
+}
+
+function lifecycleLabel(entry: EventItem): string | null {
+  if (entry.status === "closed") return "Closed";
+  if (entry.status === "submitted") return "Opened";
+  return null;
 }
 
 function csvEscape(value: string): string {
@@ -247,7 +255,11 @@ export default function ActivityPanel() {
   const filteredEntries = useMemo(() => {
     return entries.filter((e) => {
       const tag = getEventTag(e);
-      const matchesFilter = activeFilter === "all" || tag === activeFilter;
+      const matchesFilter =
+        activeFilter === "all" ||
+        (activeFilter === "open" && e.status === "submitted") ||
+        (activeFilter === "closed" && e.status === "closed") ||
+        (!(["open", "closed"].includes(activeFilter)) && tag === activeFilter);
       const matchesMode =
         modeFilter === "all" || (e.mode ?? "autonomous") === modeFilter;
       const matchesSearch =
@@ -341,8 +353,16 @@ export default function ActivityPanel() {
           filteredEntries.slice(0, 50).map((entry) => {
             const tag = getEventTag(entry);
             const blocked = tag === "blocked";
+            const lifecycle = lifecycleLabel(entry);
+            const eventTimestamp = entry.status === "closed"
+              ? entry.closed_at
+              : entry.opened_at ?? entry.timestamp;
+            const activityTime = formatActivityTime(eventTimestamp);
             return (
-              <div className="event-row" key={entry.id}>
+              <div
+                className={`event-row${entry.status === "submitted" ? " event-row-open" : ""}${entry.status === "closed" ? " event-row-closed" : ""}`}
+                key={entry.id}
+              >
                 <div className="event-icon">{getEventIcon(entry)}</div>
                 <div className="event-body">
                   <div className="event-title-row">
@@ -353,6 +373,9 @@ export default function ActivityPanel() {
                     {entry.mode && (
                       <span className="event-tag">{entry.mode}</span>
                     )}
+                    {lifecycle && (
+                      <span className="event-tag event-lifecycle-tag">{lifecycle}</span>
+                    )}
                   </div>
                   <p>
                     {blocked
@@ -361,9 +384,9 @@ export default function ActivityPanel() {
                   </p>
                 </div>
                 <div className="event-meta">
-                  <div className="event-time">
-                    {timeAgo(entry.status === "closed" ? entry.closed_at : entry.opened_at ?? entry.timestamp)}
-                  </div>
+                  <time className="event-time" dateTime={eventTimestamp ?? undefined} title={activityTime.title}>
+                    {activityTime.display}
+                  </time>
                 </div>
               </div>
             );

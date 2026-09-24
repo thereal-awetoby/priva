@@ -2,7 +2,7 @@
 
 import { useRef, useState, useEffect, useLayoutEffect } from "react";
 import { apiGet, apiPost } from "@/lib/api";
-import { timeAgo, cleanSymbol } from "@/lib/format";
+import { formatActivityTime, timeAgo, cleanSymbol } from "@/lib/format";
 import PositionDetailModal from "@/components/app/PositionDetailModal";
 
 type Position = Record<string, any>;
@@ -826,17 +826,23 @@ export default function ControlCenterPanel() {
               No activity yet.
             </p>
           ) : (
-            filteredActivity.map((entry) => (
-              <div className="log-row" key={entry.id}>
-                <span className="log-time">
-                  {timeAgo(entry.status === "closed" ? entry.closed_at : entry.opened_at ?? entry.timestamp)}
-                </span>
-                <span>
-                  {cleanSymbol(entry.symbol)} — {entry.action}
-                  <span className="log-status"> ({executionLabel(entry)})</span>
-                </span>
-              </div>
-            ))
+            filteredActivity.map((entry) => {
+              const eventTimestamp = entry.status === "closed"
+                ? entry.closed_at
+                : entry.opened_at ?? entry.timestamp;
+              const activityTime = formatActivityTime(eventTimestamp);
+              return (
+                <div className="log-row" key={entry.id}>
+                  <time className="log-time" dateTime={eventTimestamp ?? undefined} title={activityTime.title}>
+                    {activityTime.display}
+                  </time>
+                  <span>
+                    {cleanSymbol(entry.symbol)} — {entry.action}
+                    <span className="log-status"> ({executionLabel(entry)})</span>
+                  </span>
+                </div>
+              );
+            })
           )}
         </div>
       </div>
