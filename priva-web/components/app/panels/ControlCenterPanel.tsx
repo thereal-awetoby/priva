@@ -111,6 +111,28 @@ function formatHoverTime(iso: string): string {
   return `${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })} ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
 }
 
+function CycleCountdown({ lastCycle, intervalSeconds, watchLine, agentState }: {
+  lastCycle: number | null;
+  intervalSeconds: number | null;
+  watchLine: string;
+  agentState: string | undefined;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(clock);
+  }, []);
+
+  const remainingSeconds = lastCycle && intervalSeconds != null
+    ? Math.max(0, Math.ceil((lastCycle + Number(intervalSeconds) * 1000 - now) / 1000))
+    : null;
+  const cycleLine = remainingSeconds != null && remainingSeconds > 0
+    ? `${watchLine} · Next cycle in ${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`
+    : watchLine;
+
+  return <div className="status-line">{agentState === "offline" ? `Agent offline · ${cycleLine}` : cycleLine}</div>;
+}
+
 function EquityCurve({
   points,
   market,
@@ -126,6 +148,7 @@ function EquityCurve({
   const [timeframe, setTimeframe] = useState<ChartTimeframe>("hourly");
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const shellRef = useRef<HTMLDivElement>(null);
+  const lastReportedIndexRef = useRef<number | null>(null);
   const [containerWidth, setContainerWidth] = useState(720);
   const height = 260;
   const padding = { top: 12, right: 12, bottom: 28, left: 60 };
@@ -237,6 +260,8 @@ function EquityCurve({
   const updateHover = (index: number | null) => {
     setHoverIndex(index);
     if (!onHover) return;
+    if (index === lastReportedIndexRef.current) return;
+    lastReportedIndexRef.current = index;
     const value = index != null ? values[index] : null;
     if (index == null || value == null) onHover(null);
     else onHover({ value, time: times[index] });
@@ -439,7 +464,6 @@ export default function ControlCenterPanel() {
   const [spotHover, setSpotHover] = useState<HoverInfo>(null);
   const [killSwitchNotice, setKillSwitchNotice] = useState<string | null>(null);
   const previousKillSwitchRef = useRef<boolean | null>(null);
-  const [now, setNow] = useState(() => Date.now());
   const loadVersionRef = useRef(0);
 
   const loadData = (attempt = 0) => {
@@ -518,11 +542,6 @@ export default function ControlCenterPanel() {
   }, []);
 
   useEffect(() => {
-    const clock = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(clock);
-  }, []);
-
-  useEffect(() => {
     if (!killSwitchNotice) return;
     const timeout = window.setTimeout(() => setKillSwitchNotice(null), 7000);
     return () => window.clearTimeout(timeout);
@@ -581,13 +600,6 @@ export default function ControlCenterPanel() {
   const watchLine = watchedSymbols.length ? `Watching ${watchedSymbols.join(" & ")}` : "Watching";
   const lastCycle = statusData?.last_cycle ? new Date(statusData.last_cycle).getTime() : null;
   const intervalSeconds = statusData?.cycle_interval_seconds;
-  const remainingSeconds = lastCycle && intervalSeconds != null
-    ? Math.max(0, Math.ceil((lastCycle + Number(intervalSeconds) * 1000 - now) / 1000))
-    : null;
-  const cycleLine = remainingSeconds != null && remainingSeconds > 0
-    ? `${watchLine} · Next cycle in ${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`
-    : watchLine;
-  const statusLine = statusData?.agent_state === "offline" ? `Agent offline · ${cycleLine}` : cycleLine;
   const filteredActivity = activity
     .filter((entry) => (entry.mode ?? "autonomous") === activityMode)
     .sort((a, b) => new Date(b.timestamp ?? b.created_at ?? 0).getTime() - new Date(a.timestamp ?? a.created_at ?? 0).getTime())
@@ -612,7 +624,12 @@ export default function ControlCenterPanel() {
               />
               {killSwitchEnabled ? "Stopped" : "Running"}
             </div>
-            <div className="status-line">{statusLine}</div>
+            <CycleCountdown
+              lastCycle={lastCycle}
+              intervalSeconds={intervalSeconds != null ? Number(intervalSeconds) : null}
+              watchLine={watchLine}
+              agentState={statusData?.agent_state}
+            />
           </div>
           <div className="app-actions" style={{ marginTop: 0 }}>
             <button

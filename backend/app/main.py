@@ -1254,6 +1254,21 @@ def _is_limit_risk_rejection(cycle: dict[str, Any]) -> bool:
     )
 
 
+def _first_risk_reason(cycle: dict[str, Any]) -> str | None:
+    """Fallback reason for statuses that record a reason only inside
+    risk_check.reasons rather than at the top level (e.g. spot sell
+    with no position to close). Only used when nothing more specific
+    (top-level cycle['reason'], order['reason'], order['message']) is
+    already present.
+    """
+    risk_check = cycle.get("risk_check") or {}
+    if risk_check.get("allowed") is False:
+        reasons = risk_check.get("reasons") or []
+        if reasons:
+            return str(reasons[0])
+    return None
+
+
 def _activity_detail(cycle: dict[str, Any]) -> str:
     status = cycle.get("status")
     risk_check = cycle.get("risk_check") or {}
@@ -1261,7 +1276,7 @@ def _activity_detail(cycle: dict[str, Any]) -> str:
         reasons = risk_check.get("reasons") or []
         return "; ".join(_format_activity_limit_reason(str(reason), risk_check) for reason in reasons) or "Risk rejected"
     order = cycle.get("order_result") or cycle.get("order") or {}
-    reason = cycle.get("reason") or order.get("reason") or order.get("message")
+    reason = cycle.get("reason") or order.get("reason") or order.get("message") or _first_risk_reason(cycle)
     if status == "closed":
         return _humanize_activity_reason(str(cycle.get("exit_reason") or reason or "Position closed"))
     if reason == "no_trade_signal" or (cycle.get("decision") or {}).get("action") == "hold":
@@ -1274,7 +1289,7 @@ def _activity_detail(cycle: dict[str, Any]) -> str:
 def _activity_label(cycle: dict[str, Any], detail: str) -> str:
     status = cycle.get("status")
     action = (cycle.get("decision") or {}).get("action")
-    reason = cycle.get("reason") or ((cycle.get("order_result") or cycle.get("order") or {}).get("reason"))
+    reason = cycle.get("reason") or ((cycle.get("order_result") or cycle.get("order") or {}).get("reason")) or _first_risk_reason(cycle)
     if reason == "no_spot_position_to_close":
         return "Skipped · nothing to sell"
     if status == "closed":
@@ -1653,12 +1668,29 @@ def parse_strategy(payload: dict[str, Any], user: AuthenticatedUser = Depends(cu
 
 
 @app.get("/kill-switch")
-def get_kill_switch() -> dict[str, Any]:
-    return {"enabled": False, "message": "Agent loop is active."}
+def get_kill_switch(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user = normalize_user(user)
+    if supabase_auth.required:
+        runtime_status = user_runtime_registry.status(user.id)
+        enabled = not runtime_status.get("running", False)
+        return {"enabled": enabled, "message": "Worker paused." if enabled else "Agent loop is active."}
+    return {"enabled": not agent_loop.is_running(), "message": "Agent loop is active." if agent_loop.is_running() else "Worker paused."}
 
 
 @app.post("/kill-switch")
-async def set_kill_switch(payload: KillSwitchRequest) -> dict[str, Any]:
+async def set_kill_switch(payload: KillSwitchRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user = normalize_user(user)
+    if supabase_auth.required:
+        if payload.enabled:
+            await user_runtime_registry.stop(user.id)
+        else:
+            user_runtime_registry.start(user.id, execution_client_for(user))
+        runtime_status = user_runtime_registry.status(user.id)
+        return {
+            "enabled": payload.enabled,
+            "running": runtime_status.get("running", False),
+            "message": "Kill switch updated." if payload.enabled else "Agent loop restarted.",
+        }
     if payload.enabled:
         agent_loop.stop()
     else:
