@@ -77,7 +77,6 @@ export default function AppShell() {
             Priva / <span>{crumbLabels[activeTab]}</span>
           </div>
           <div className="topbar-right">
-            <div className="env-tag">Paper environment</div>
             <div className="env-tag">Paper trading only · Withdrawals disabled</div>
             <div className={`worker-status worker-status-${workerState}`} title={workerTitle}>
               <span className="worker-status-dot" aria-hidden="true" />
@@ -105,17 +104,6 @@ export default function AppShell() {
                   d="M6 12.5C6 13.3 6.7 14 7.5 14C8.3 14 9 13.3 9 12.5"
                   stroke="currentColor"
                   strokeWidth="1.2"
-                />
-              </svg>
-            </button>
-            <button className="icon-btn" aria-label="Settings" title="Settings">
-              <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-                <circle cx="7.5" cy="7.5" r="2.3" stroke="currentColor" strokeWidth="1.2" />
-                <path
-                  d="M7.5 1.8V3.3M7.5 11.7V13.2M13.2 7.5H11.7M3.3 7.5H1.8M11.5 3.5L10.4 4.6M4.6 10.4L3.5 11.5M11.5 11.5L10.4 10.4M4.6 4.6L3.5 3.5"
-                  stroke="currentColor"
-                  strokeWidth="1.1"
-                  strokeLinecap="round"
                 />
               </svg>
             </button>

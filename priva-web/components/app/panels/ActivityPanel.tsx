@@ -305,70 +305,71 @@ export default function ActivityPanel() {
         A human-readable record of every signal, decision, and order Priva
         considered.
       </p>
-      <p className="panel-lead">
-        {showEvaluations ? "Showing events and evaluations" : "Showing meaningful events only"}
-      </p>
 
       <div className="activity-controls">
-      <div className="activity-filter-stack" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          <div className="mode-switch">
-            <button
-              className={modeFilter === "all" ? "active" : ""}
-              onClick={() => setModeFilter("all")}
-            >
-              All modes
-            </button>
-            <button
-              className={modeFilter === "autonomous" ? "active" : ""}
-              onClick={() => setModeFilter("autonomous")}
-            >
-              Autonomous
-            </button>
-            <button
-              className={modeFilter === "strategy" ? "active" : ""}
-              onClick={() => setModeFilter("strategy")}
-            >
-              Strategy
+        <div className="activity-controls-top">
+          <div className="activity-filter-group">
+            <div className="mode-switch">
+              <button
+                className={modeFilter === "all" ? "active" : ""}
+                onClick={() => setModeFilter("all")}
+              >
+                All modes
+              </button>
+              <button
+                className={modeFilter === "autonomous" ? "active" : ""}
+                onClick={() => setModeFilter("autonomous")}
+              >
+                Autonomous
+              </button>
+              <button
+                className={modeFilter === "strategy" ? "active" : ""}
+                onClick={() => setModeFilter("strategy")}
+              >
+                Strategy
+              </button>
+            </div>
+            <div className="mode-switch">
+              {filters.map((f) => (
+                <button
+                  key={f.id}
+                  className={activeFilter === f.id ? "active" : ""}
+                  onClick={() => setActiveFilter(f.id)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="activity-controls-actions">
+          <button
+            className={`btn ${showEvaluations ? "btn-primary" : ""}`}
+            type="button"
+            onClick={() => setShowEvaluations((current) => !current)}
+          >
+            {showEvaluations ? "Hide holds & evaluations" : "Show holds & evaluations"}
+          </button>
+          <div className="activity-controls-actions-right">
+            <input
+              className="activity-search"
+              type="text"
+              placeholder="Search AAPL, TSLA, buy, sell…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <button className="btn export-btn" onClick={() => setIsExportOpen(true)}>
+              Export CSV
             </button>
           </div>
-          <div className="mode-switch">
-            {filters.map((f) => (
-              <button
-                key={f.id}
-                className={activeFilter === f.id ? "active" : ""}
-                onClick={() => setActiveFilter(f.id)}
-              >
-                {f.label}
-              </button>
-            ))}
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                      <button
-                        className={`btn ${showEvaluations ? "btn-primary" : ""}`}
-                        type="button"
-                        onClick={() => setShowEvaluations((current) => !current)}
-                      >
-                        {showEvaluations ? "Hide holds & evaluations" : "Show holds & evaluations"}
-                      </button>
-                      <input
-                        className="activity-search"
-                        type="text"
-                        placeholder="Search AAPL, TSLA, buy, sell…"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                      />
-                      <button className="btn export-btn" onClick={() => setIsExportOpen(true)}>
-                        Export CSV
-                      </button>
-                    </div>
-                  </div>
+        </div>
+      </div>
 
-                  {isExportOpen && (
-                    <ExportModal entries={entries} onClose={() => setIsExportOpen(false)} />
-                  )}
+      {isExportOpen && (
+        <ExportModal entries={entries} onClose={() => setIsExportOpen(false)} />
+      )}
 
-                  <div className="event-list">
+      <div className="event-list">
         {filteredEntries.length === 0 ? (
           <div className="empty-state">
             <p className="empty-state-title">
@@ -390,6 +391,8 @@ export default function ActivityPanel() {
               ? entry.closed_at
               : entry.opened_at ?? entry.timestamp;
             const activityTime = formatActivityTime(eventTimestamp);
+            const showDetail =
+              entry.display_detail && entry.display_detail !== entry.display_label;
             return (
               <div
                 className={`event-row${entry.status === "submitted" ? " event-row-open" : ""}${entry.status === "closed" ? " event-row-closed" : ""}`}
@@ -410,7 +413,7 @@ export default function ActivityPanel() {
                     )}
                   </div>
                   <p>{entry.display_label}</p>
-                  {entry.display_detail ? <p className="event-detail">{entry.display_detail}</p> : null}
+                  {showDetail ? <p className="event-detail">{entry.display_detail}</p> : null}
                   {entry.intent_hash_short ? (
                     <button
                       type="button"

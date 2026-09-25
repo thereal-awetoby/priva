@@ -596,22 +596,40 @@ export default function ControlCenterPanel() {
   return (
     <div>
       <div className="control-topline">
-        <div className="control-status-group">
-          <div
-            className="status-pill"
-            style={
-              killSwitchEnabled
-                ? { borderColor: "var(--down)", color: "var(--down)" }
-                : {}
-            }
-          >
-            <span
-              className="status-dot"
-              style={killSwitchEnabled ? { background: "var(--down)" } : {}}
-            />
-            {killSwitchEnabled ? "Stopped" : "Running"}
+        <div className="control-topline-row">
+          <div className="control-status-group">
+            <div
+              className="status-pill"
+              style={
+                killSwitchEnabled
+                  ? { borderColor: "var(--down)", color: "var(--down)" }
+                  : {}
+              }
+            >
+              <span
+                className="status-dot"
+                style={killSwitchEnabled ? { background: "var(--down)" } : {}}
+              />
+              {killSwitchEnabled ? "Stopped" : "Running"}
+            </div>
+            <div className="status-line">{statusLine}</div>
           </div>
-          <div className="status-line">{statusLine}</div>
+          <div className="app-actions" style={{ marginTop: 0 }}>
+            <button
+              className="btn btn-danger"
+              onClick={handleKillSwitch}
+              disabled={killSwitchLoading}
+            >
+              {killSwitchLoading
+                ? "Working…"
+                : killSwitchEnabled
+                ? "Resume"
+                : "Kill switch"}
+            </button>
+          </div>
+        </div>
+
+        <div className="control-topline-row">
           <div className="market-control">
             <span className="market-control-label">Markets</span>
             <div className="mode-switch" aria-label="Trading market">
@@ -652,20 +670,8 @@ export default function ControlCenterPanel() {
             {marketError ? <span className="market-control-error">{marketError}</span> : null}
           </div>
         </div>
-        <div className="app-actions" style={{ marginTop: 0 }}>
-          <button
-            className="btn btn-danger"
-            onClick={handleKillSwitch}
-            disabled={killSwitchLoading}
-          >
-            {killSwitchLoading
-              ? "Working…"
-              : killSwitchEnabled
-              ? "Resume"
-              : "Kill switch"}
-          </button>
-        </div>
       </div>
+
       {killSwitchNotice ? <div className="panel-lead">{killSwitchNotice}</div> : null}
       {dailyLossUsage > 70 ? (
         <div className="panel-lead">Risk usage elevated · {Math.round(dailyLossUsage)}% of daily loss limit</div>
