@@ -78,6 +78,15 @@ function eventTypeLabel(entry: EventItem): string {
 // (see _activity_entry() in backend/app/main.py) — no more guessing
 // across raw cycle["order"] / cycle["decision"] / cycle["risk_check"]
 // field names client-side.
+//
+// Notes on the data itself (from backend/app/main.py):
+// - `pnl` is only populated when the exchange reported
+//   `exchange_realized_pnl` directly on a close order. There's no
+//   lot-matching reconstruction yet, so most closed rows will have
+//   pnl == null for now — that's expected, not a bug.
+// - `price` on a closed row is the exit/mark price at close time, NOT
+//   the original entry price (order.entry_price gets reused for both).
+//   Don't relabel it "entry price" anywhere downstream.
 function eventUnits(entry: EventItem): string {
   return entry.units != null ? String(entry.units) : "";
 }
@@ -92,6 +101,20 @@ function eventPrice(entry: EventItem): string {
 
 function eventPnl(entry: EventItem): string {
   return entry.pnl != null ? Number(entry.pnl).toFixed(2) : "";
+}
+
+// Compact "12 units · @ $223.4500 · $2681.40 notional" line for the
+// on-screen event row. Only includes the pieces that actually have data,
+// so hold/evaluation rows with size 0 don't render an empty fragment.
+function eventStatsLine(entry: EventItem): string {
+  const parts: string[] = [];
+  const units = eventUnits(entry);
+  const price = eventPrice(entry);
+  const size = eventPositionSize(entry);
+  if (units) parts.push(`${units} units`);
+  if (price) parts.push(`@ $${price}`);
+  if (size) parts.push(`$${size} notional`);
+  return parts.join(" · ");
 }
 
 function csvEscape(value: string): string {
@@ -387,6 +410,13 @@ export default function ActivityPanel() {
               ))}
             </div>
           </div>
+          <button
+            className={`btn eval-toggle-btn ${showEvaluations ? "btn-primary" : ""}`}
+            type="button"
+            onClick={() => setShowEvaluations((current) => !current)}
+          >
+            {showEvaluations ? "Hide holds & evaluations" : "Show holds & evaluations"}
+          </button>
           <div className="activity-controls-actions-right">
             <input
               className="activity-search"
@@ -399,15 +429,6 @@ export default function ActivityPanel() {
               Export CSV
             </button>
           </div>
-        </div>
-        <div className="activity-controls-actions">
-          <button
-            className={`btn ${showEvaluations ? "btn-primary" : ""}`}
-            type="button"
-            onClick={() => setShowEvaluations((current) => !current)}
-          >
-            {showEvaluations ? "Hide holds & evaluations" : "Show holds & evaluations"}
-          </button>
         </div>
       </div>
 
@@ -439,6 +460,9 @@ export default function ActivityPanel() {
             const activityTime = formatActivityTime(eventTimestamp);
             const showDetail =
               entry.display_detail && entry.display_detail !== entry.display_label;
+            const statsLine = eventStatsLine(entry);
+            const pnlText = eventPnl(entry);
+            const showPnl = entry.status === "closed";
             return (
               <div
                 className={`event-row${entry.status === "submitted" ? " event-row-open" : ""}${entry.status === "closed" ? " event-row-closed" : ""}`}
@@ -460,6 +484,25 @@ export default function ActivityPanel() {
                   </div>
                   <p>{entry.display_label}</p>
                   {showDetail ? <p className="event-detail">{entry.display_detail}</p> : null}
+                  {statsLine || showPnl ? (
+                    <p className="event-detail">
+                      {statsLine}
+                      {showPnl && (
+                        <span
+                          style={{
+                            color: pnlText
+                              ? Number(pnlText) >= 0
+                                ? "#2e9e5b"
+                                : "#d64545"
+                              : undefined,
+                          }}
+                        >
+                          {statsLine ? " · " : ""}
+                          {pnlText ? `PnL ${Number(pnlText) >= 0 ? "+" : ""}$${pnlText}` : "PnL —"}
+                        </span>
+                      )}
+                    </p>
+                  ) : null}
                   {entry.intent_hash_short ? (
                     <button
                       type="button"
