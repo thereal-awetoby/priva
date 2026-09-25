@@ -9,19 +9,26 @@ export default function TradingLimitsForm() {
   const [maxPositionSize, setMaxPositionSize] = useState("25000");
   const [maxDailyLoss, setMaxDailyLoss] = useState("1500");
   const [maxLeverage, setMaxLeverage] = useState("2");
+  const [takeProfitPct, setTakeProfitPct] = useState("3.5");
+  const [stopLossPct, setStopLossPct] = useState("2");
   const [allowedSymbols, setAllowedSymbols] = useState<string[]>(SUPPORTED_SYMBOLS);
+  const [agentSettings, setAgentSettings] = useState<Record<string, any>>({});
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   useEffect(() => {
-    apiGet<any>("/risk-settings")
-      .then((data) => {
+    Promise.all([apiGet<any>("/risk-settings"), apiGet<any>("/user/agent-settings")])
+      .then(([data, userData]) => {
         if (data.max_position_size != null) setMaxPositionSize(String(data.max_position_size));
         if (data.max_daily_loss != null) setMaxDailyLoss(String(data.max_daily_loss));
         if (data.max_leverage != null) setMaxLeverage(String(data.max_leverage));
         if (data.allowed_symbols) setAllowedSymbols(data.allowed_symbols);
+        if (userData.take_profit_pct != null) setTakeProfitPct(String(userData.take_profit_pct));
+        if (userData.stop_loss_pct != null) setStopLossPct(String(userData.stop_loss_pct));
+        if (userData.max_leverage != null) setMaxLeverage(String(userData.max_leverage));
+        setAgentSettings(userData);
         setLoading(false);
       })
       .catch((err) => {
@@ -44,6 +51,20 @@ export default function TradingLimitsForm() {
         max_daily_loss: Number(maxDailyLoss),
         max_leverage: Number(maxLeverage),
         allowed_symbols: allowedSymbols,
+      });
+      await apiPost("/user/agent-settings", {
+        market: agentSettings.market ?? "futures",
+        take_profit_pct: Number(takeProfitPct),
+        stop_loss_pct: Number(stopLossPct),
+        close_on_signal_violation: agentSettings.close_on_signal_violation ?? true,
+        symbols: agentSettings.symbols ?? ["AAPLUSDT", "TSLAUSDT"],
+        strategy_id: agentSettings.strategy_id ?? null,
+        strategy_by_symbol: agentSettings.strategy_by_symbol ?? null,
+        max_position_size: Number(maxPositionSize),
+        max_daily_loss: Number(maxDailyLoss),
+        max_leverage: Number(maxLeverage),
+        risk_enabled: agentSettings.risk_enabled ?? true,
+        allowed_symbols: agentSettings.allowed_symbols ?? allowedSymbols,
       });
       setStatus({ type: "success", message: "Settings saved." });
     } catch (err: any) {
@@ -110,6 +131,38 @@ export default function TradingLimitsForm() {
           step="0.5"
           value={maxLeverage}
           onChange={(e) => setMaxLeverage(e.target.value)}
+        />
+      </div>
+
+      <div className="slider-row">
+        <div className="slider-label-row">
+          <label className="form-label">Take profit</label>
+          <span className="slider-value">{takeProfitPct}%</span>
+        </div>
+        <input
+          className="form-slider"
+          type="range"
+          min="0.1"
+          max="25"
+          step="0.1"
+          value={takeProfitPct}
+          onChange={(e) => setTakeProfitPct(e.target.value)}
+        />
+      </div>
+
+      <div className="slider-row">
+        <div className="slider-label-row">
+          <label className="form-label">Stop loss</label>
+          <span className="slider-value">{stopLossPct}%</span>
+        </div>
+        <input
+          className="form-slider"
+          type="range"
+          min="0.1"
+          max="25"
+          step="0.1"
+          value={stopLossPct}
+          onChange={(e) => setStopLossPct(e.target.value)}
         />
       </div>
 
