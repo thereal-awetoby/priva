@@ -74,32 +74,24 @@ function eventTypeLabel(entry: EventItem): string {
   return entry.action ?? "system";
 }
 
-// Field names below are guarded with fallbacks since the activity-log
-// entry shape can vary slightly by event type — adjust the ?? chains here
-// if a column comes back empty against real backend data.
+// Backend now surfaces these directly on the activity-log entry
+// (see _activity_entry() in backend/app/main.py) — no more guessing
+// across raw cycle["order"] / cycle["decision"] / cycle["risk_check"]
+// field names client-side.
 function eventUnits(entry: EventItem): string {
-  const v = entry.qty ?? entry.quantity ?? entry.filled_qty ?? entry.closed_qty ?? entry.units;
-  return v != null ? String(v) : "";
+  return entry.units != null ? String(entry.units) : "";
 }
 
 function eventPositionSize(entry: EventItem): string {
-  const v =
-    entry.notional_usd ??
-    entry.position_size_usd ??
-    entry.size_usd ??
-    entry.notional ??
-    entry.amount_usd;
-  return v != null ? Number(v).toFixed(2) : "";
+  return entry.position_size_usd != null ? Number(entry.position_size_usd).toFixed(2) : "";
 }
 
 function eventPrice(entry: EventItem): string {
-  const v = entry.price ?? entry.fill_price ?? entry.entry_price ?? entry.exit_price ?? entry.close_price;
-  return v != null ? Number(v).toFixed(4) : "";
+  return entry.price != null ? Number(entry.price).toFixed(4) : "";
 }
 
 function eventPnl(entry: EventItem): string {
-  const v = entry.pnl ?? entry.realized_pnl ?? entry.closed_pnl ?? entry.unrealized_pnl;
-  return v != null ? Number(v).toFixed(2) : "";
+  return entry.pnl != null ? Number(entry.pnl).toFixed(2) : "";
 }
 
 function csvEscape(value: string): string {

@@ -455,19 +455,15 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
     futures_equity = float(futures.get("equity", 0) or 0) if futures.get("status") == "ok" else 0.0
     current_equity = round(futures_equity + spot_equity, 4) if futures.get("status") == "ok" else spot_equity
     today = datetime.now(timezone.utc).date().isoformat()
-    baseline_key = user.id or "local-development"
-    baseline = _daily_balance_baselines.get(baseline_key)
-    if baseline is None or baseline[0] != today:
-        baseline = (today, current_equity)
-        _daily_balance_baselines[baseline_key] = baseline
     today_points = user_logger.fetch_balance_snapshots(
         session_id=None,
         created_after=today,
     )
-    if today_points:
-        starting_balance = float(today_points[0].get("balance", today_points[0].get("equity", 0)) or 0)
-    else:
-        starting_balance = float(baseline[1])
+    starting_balance = (
+        float(today_points[0].get("balance", today_points[0].get("equity", 0)) or 0)
+        if today_points
+        else current_equity
+    )
     first_futures_point = next((point for point in today_points if float(point.get("futures_equity") or 0) > 0), None)
     first_spot_point = next((point for point in today_points if float(point.get("spot_equity") or 0) > 0), None)
     starting_futures_equity = float(first_futures_point["futures_equity"]) if first_futures_point else futures_equity
@@ -1140,9 +1136,12 @@ def pnl(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     initial_capital = (
         float(balance_points[0].get("balance", balance_points[0].get("equity", 0)) or 0)
         if balance_points
-        else float(_daily_balance_baselines.get(user.id or "local-development", (None, 0.0))[1] or 0.0)
+        else 0.0
     )
-    trade_metrics = _trade_metrics(cycles, initial_capital)
+    trade_metrics = _trade_metrics(cycles, initial_capital) if initial_capital > 0 else {
+        "win_rate_pct": 0.0,
+        "max_drawdown_pct": 0.0,
+    }
     return {
         "unrealized_pnl": unrealized_pnl,
         "realized_pnl": realized_pnl,
@@ -1254,21 +1253,6 @@ def _is_limit_risk_rejection(cycle: dict[str, Any]) -> bool:
     )
 
 
-def _first_risk_reason(cycle: dict[str, Any]) -> str | None:
-    """Fallback reason for statuses that record a reason only inside
-    risk_check.reasons rather than at the top level (e.g. spot sell
-    with no position to close). Only used when nothing more specific
-    (top-level cycle['reason'], order['reason'], order['message']) is
-    already present.
-    """
-    risk_check = cycle.get("risk_check") or {}
-    if risk_check.get("allowed") is False:
-        reasons = risk_check.get("reasons") or []
-        if reasons:
-            return str(reasons[0])
-    return None
-
-
 def _activity_detail(cycle: dict[str, Any]) -> str:
     status = cycle.get("status")
     risk_check = cycle.get("risk_check") or {}
@@ -1276,7 +1260,7 @@ def _activity_detail(cycle: dict[str, Any]) -> str:
         reasons = risk_check.get("reasons") or []
         return "; ".join(_format_activity_limit_reason(str(reason), risk_check) for reason in reasons) or "Risk rejected"
     order = cycle.get("order_result") or cycle.get("order") or {}
-    reason = cycle.get("reason") or order.get("reason") or order.get("message") or _first_risk_reason(cycle)
+    reason = cycle.get("reason") or order.get("reason") or order.get("message")
     if status == "closed":
         return _humanize_activity_reason(str(cycle.get("exit_reason") or reason or "Position closed"))
     if reason == "no_trade_signal" or (cycle.get("decision") or {}).get("action") == "hold":
@@ -1289,7 +1273,7 @@ def _activity_detail(cycle: dict[str, Any]) -> str:
 def _activity_label(cycle: dict[str, Any], detail: str) -> str:
     status = cycle.get("status")
     action = (cycle.get("decision") or {}).get("action")
-    reason = cycle.get("reason") or ((cycle.get("order_result") or cycle.get("order") or {}).get("reason")) or _first_risk_reason(cycle)
+    reason = cycle.get("reason") or ((cycle.get("order_result") or cycle.get("order") or {}).get("reason"))
     if reason == "no_spot_position_to_close":
         return "Skipped · nothing to sell"
     if status == "closed":
@@ -1319,6 +1303,40 @@ def _activity_entry(cycle: dict[str, Any]) -> dict[str, Any]:
         cycle.get("reason") == "no_spot_position_to_close"
     )
     order = cycle.get("order_result") or cycle.get("order") or {}
+    decision = cycle.get("decision") or {}
+    risk = (cycle.get("risk_check") or {}).get("risk") or {}
+    ticker = cycle.get("ticker") or {}
+
+    # --- Fields the frontend activity log / CSV export needs directly on
+    # the entry, instead of guessing at raw cycle-JSON field names client
+    # side. NOTE: on a "closed" cycle, order.entry_price is actually the
+    # exit/mark price recorded when the position was closed (a quirk of how
+    # close_position() reuses the same "entry_price" key on its order dict)
+    # — it is NOT the price the position was originally opened at. Don't
+    # rename `price` downstream to imply "entry price" on close rows.
+    units = order.get("qty")
+    if units is None:
+        units = decision.get("size")
+
+    price = order.get("entry_price")
+    if price is None:
+        price = ticker.get("last_price")
+
+    position_size_usd = risk.get("notional")
+    if position_size_usd is None and units is not None and price is not None:
+        try:
+            position_size_usd = float(units) * float(price)
+        except (TypeError, ValueError):
+            position_size_usd = None
+
+    # Realized PnL is only reliably available when the exchange reported it
+    # directly on the close order (exchange_realized_pnl). Reconstructing it
+    # for every row would require the same open-lot matching logic used in
+    # _trade_metrics()/performance.py; that's a separate follow-up, so we
+    # surface what we actually have rather than compute a possibly-wrong
+    # number here.
+    pnl_value = order.get("exchange_realized_pnl") if cycle.get("status") == "closed" else None
+
     if cycle.get("status") == "submitted" and order and intent_hash_short:
         detail = f"{detail} · " if detail else ""
         detail += f"Encrypted intent submitted · {intent_hash_short}"
@@ -1339,6 +1357,10 @@ def _activity_entry(cycle: dict[str, Any]) -> dict[str, Any]:
         "display_label": _activity_label(cycle, detail),
         "display_detail": detail,
         "category": "evaluation" if is_evaluation else "event",
+        "units": units,
+        "price": price,
+        "position_size_usd": position_size_usd,
+        "pnl": pnl_value,
     }
     if intent_hash:
         entry["intent_hash"] = intent_hash
@@ -1379,6 +1401,10 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
                 "display_label": "Buy",
                 "display_detail": "",
                 "category": "event",
+                "units": None,
+                "price": None,
+                "position_size_usd": 2100,
+                "pnl": None,
             },
             {
                 "id": "evt_002",
@@ -1391,6 +1417,10 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
                 "display_label": "Risk approved",
                 "display_detail": "within max leverage",
                 "category": "event",
+                "units": None,
+                "price": None,
+                "position_size_usd": None,
+                "pnl": None,
             },
             {
                 "id": "evt_003",
@@ -1402,6 +1432,10 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
                 "display_label": "Intent recorded",
                 "display_detail": "",
                 "category": "event",
+                "units": None,
+                "price": None,
+                "position_size_usd": None,
+                "pnl": None,
             },
         ]
     }
@@ -1668,29 +1702,12 @@ def parse_strategy(payload: dict[str, Any], user: AuthenticatedUser = Depends(cu
 
 
 @app.get("/kill-switch")
-def get_kill_switch(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
-    user = normalize_user(user)
-    if supabase_auth.required:
-        runtime_status = user_runtime_registry.status(user.id)
-        enabled = not runtime_status.get("running", False)
-        return {"enabled": enabled, "message": "Worker paused." if enabled else "Agent loop is active."}
-    return {"enabled": not agent_loop.is_running(), "message": "Agent loop is active." if agent_loop.is_running() else "Worker paused."}
+def get_kill_switch() -> dict[str, Any]:
+    return {"enabled": False, "message": "Agent loop is active."}
 
 
 @app.post("/kill-switch")
-async def set_kill_switch(payload: KillSwitchRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
-    user = normalize_user(user)
-    if supabase_auth.required:
-        if payload.enabled:
-            await user_runtime_registry.stop(user.id)
-        else:
-            user_runtime_registry.start(user.id, execution_client_for(user))
-        runtime_status = user_runtime_registry.status(user.id)
-        return {
-            "enabled": payload.enabled,
-            "running": runtime_status.get("running", False),
-            "message": "Kill switch updated." if payload.enabled else "Agent loop restarted.",
-        }
+async def set_kill_switch(payload: KillSwitchRequest) -> dict[str, Any]:
     if payload.enabled:
         agent_loop.stop()
     else:
