@@ -67,26 +67,80 @@ function lifecycleLabel(entry: EventItem): string | null {
   return null;
 }
 
+function eventTypeLabel(entry: EventItem): string {
+  if (entry.status === "closed") return "position_closed";
+  if (entry.status === "submitted") return "position_opened";
+  if (entry.risk_check?.allowed === false) return "blocked";
+  return entry.action ?? "system";
+}
+
+// Field names below are guarded with fallbacks since the activity-log
+// entry shape can vary slightly by event type — adjust the ?? chains here
+// if a column comes back empty against real backend data.
+function eventUnits(entry: EventItem): string {
+  const v = entry.qty ?? entry.quantity ?? entry.filled_qty ?? entry.closed_qty ?? entry.units;
+  return v != null ? String(v) : "";
+}
+
+function eventPositionSize(entry: EventItem): string {
+  const v =
+    entry.notional_usd ??
+    entry.position_size_usd ??
+    entry.size_usd ??
+    entry.notional ??
+    entry.amount_usd;
+  return v != null ? Number(v).toFixed(2) : "";
+}
+
+function eventPrice(entry: EventItem): string {
+  const v = entry.price ?? entry.fill_price ?? entry.entry_price ?? entry.exit_price ?? entry.close_price;
+  return v != null ? Number(v).toFixed(4) : "";
+}
+
+function eventPnl(entry: EventItem): string {
+  const v = entry.pnl ?? entry.realized_pnl ?? entry.closed_pnl ?? entry.unrealized_pnl;
+  return v != null ? Number(v).toFixed(2) : "";
+}
+
 function csvEscape(value: string): string {
   if (/["\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
   return value;
 }
 
 function buildCsv(rows: EventItem[]): string {
-  const header = ["timestamp", "symbol", "action", "mode", "type", "status", "details"];
-  const lines = rows.map((e) =>
-    [
-      e.timestamp ?? "",
+  const header = [
+    "timestamp",
+    "event_type",
+    "symbol",
+    "action",
+    "mode",
+    "status",
+    "units",
+    "position_size_usd",
+    "price",
+    "pnl",
+    "details",
+  ];
+  const lines = rows.map((e) => {
+    // Opens are timestamped by when they opened; closes by when they closed
+    // — so a CSV sorted by timestamp reads as a real trade timeline.
+    const eventTimestamp = e.status === "closed" ? e.closed_at ?? e.timestamp : e.opened_at ?? e.timestamp;
+    return [
+      eventTimestamp ?? "",
+      eventTypeLabel(e),
       e.symbol ?? "",
       e.action ?? "",
       e.mode ?? "autonomous",
-      getEventTag(e),
       e.status ?? "",
+      eventUnits(e),
+      eventPositionSize(e),
+      eventPrice(e),
+      eventPnl(e),
       e.display_detail ?? "",
     ]
       .map((v) => csvEscape(String(v)))
-      .join(",")
-  );
+      .join(",");
+  });
   return [header.join(","), ...lines].join("\r\n");
 }
 
@@ -341,15 +395,6 @@ export default function ActivityPanel() {
               ))}
             </div>
           </div>
-        </div>
-        <div className="activity-controls-actions">
-          <button
-            className={`btn ${showEvaluations ? "btn-primary" : ""}`}
-            type="button"
-            onClick={() => setShowEvaluations((current) => !current)}
-          >
-            {showEvaluations ? "Hide holds & evaluations" : "Show holds & evaluations"}
-          </button>
           <div className="activity-controls-actions-right">
             <input
               className="activity-search"
@@ -362,6 +407,15 @@ export default function ActivityPanel() {
               Export CSV
             </button>
           </div>
+        </div>
+        <div className="activity-controls-actions">
+          <button
+            className={`btn ${showEvaluations ? "btn-primary" : ""}`}
+            type="button"
+            onClick={() => setShowEvaluations((current) => !current)}
+          >
+            {showEvaluations ? "Hide holds & evaluations" : "Show holds & evaluations"}
+          </button>
         </div>
       </div>
 
