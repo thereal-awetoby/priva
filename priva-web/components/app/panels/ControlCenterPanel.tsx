@@ -584,7 +584,7 @@ export default function ControlCenterPanel() {
   const remainingSeconds = lastCycle && intervalSeconds != null
     ? Math.max(0, Math.ceil((lastCycle + Number(intervalSeconds) * 1000 - now) / 1000))
     : null;
-  const cycleLine = remainingSeconds != null
+  const cycleLine = remainingSeconds != null && remainingSeconds > 0
     ? `${watchLine} · Next cycle in ${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`
     : watchLine;
   const statusLine = statusData?.agent_state === "offline" ? `Agent offline · ${cycleLine}` : cycleLine;

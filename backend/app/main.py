@@ -455,15 +455,19 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
     futures_equity = float(futures.get("equity", 0) or 0) if futures.get("status") == "ok" else 0.0
     current_equity = round(futures_equity + spot_equity, 4) if futures.get("status") == "ok" else spot_equity
     today = datetime.now(timezone.utc).date().isoformat()
+    baseline_key = user.id or "local-development"
+    baseline = _daily_balance_baselines.get(baseline_key)
+    if baseline is None or baseline[0] != today:
+        baseline = (today, current_equity)
+        _daily_balance_baselines[baseline_key] = baseline
     today_points = user_logger.fetch_balance_snapshots(
         session_id=None,
         created_after=today,
     )
-    starting_balance = (
-        float(today_points[0].get("balance", today_points[0].get("equity", 0)) or 0)
-        if today_points
-        else current_equity
-    )
+    if today_points:
+        starting_balance = float(today_points[0].get("balance", today_points[0].get("equity", 0)) or 0)
+    else:
+        starting_balance = float(baseline[1])
     first_futures_point = next((point for point in today_points if float(point.get("futures_equity") or 0) > 0), None)
     first_spot_point = next((point for point in today_points if float(point.get("spot_equity") or 0) > 0), None)
     starting_futures_equity = float(first_futures_point["futures_equity"]) if first_futures_point else futures_equity
@@ -1136,12 +1140,9 @@ def pnl(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     initial_capital = (
         float(balance_points[0].get("balance", balance_points[0].get("equity", 0)) or 0)
         if balance_points
-        else 0.0
+        else float(_daily_balance_baselines.get(user.id or "local-development", (None, 0.0))[1] or 0.0)
     )
-    trade_metrics = _trade_metrics(cycles, initial_capital) if initial_capital > 0 else {
-        "win_rate_pct": 0.0,
-        "max_drawdown_pct": 0.0,
-    }
+    trade_metrics = _trade_metrics(cycles, initial_capital)
     return {
         "unrealized_pnl": unrealized_pnl,
         "realized_pnl": realized_pnl,
