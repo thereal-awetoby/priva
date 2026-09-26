@@ -9,6 +9,7 @@ import ControlCenterPanel from "@/components/app/panels/ControlCenterPanel";
 import StrategyLabPanel from "@/components/app/panels/StrategyLabPanel";
 import RiskAccessPanel from "@/components/app/panels/RiskAccessPanel";
 import ActivityPanel from "@/components/app/panels/ActivityPanel";
+import NotificationBell from "@/components/app/NotificationBell";
 import OnboardingModal, { hasSeenOnboarding } from "@/components/app/OnboardingModal";
 
 const crumbLabels: Record<string, string> = {
@@ -92,21 +93,7 @@ export default function AppShell() {
             >
               Sign out
             </button>
-            <button className="icon-btn" aria-label="Notifications" title="Notifications">
-              <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-                <path
-                  d="M3 6.2C3 4 4.9 2.2 7.5 2.2S12 4 12 6.2V9L13 11H2L3 9V6.2Z"
-                  stroke="currentColor"
-                  strokeWidth="1.2"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M6 12.5C6 13.3 6.7 14 7.5 14C8.3 14 9 13.3 9 12.5"
-                  stroke="currentColor"
-                  strokeWidth="1.2"
-                />
-              </svg>
-            </button>
+            <NotificationBell />
           </div>
         </div>
 

@@ -8,11 +8,47 @@ type EventItem = Record<string, any>;
 
 const SEEN_KEY = "priva_notifications_last_seen";
 
-function isPositionOpened(entry: EventItem): boolean {
-  const isTrade = entry.action === "buy" || entry.action === "sell";
-  const wasBlocked = entry.risk_check?.allowed === false;
-  const wasSkipped = entry.status === "skipped_existing_position";
-  return isTrade && !wasBlocked && !wasSkipped;
+// Mirrors exactly what backend/app/main.py's _activity_entry() considers a
+// real position event: opened_at is only ever set when status === "submitted",
+// closed_at only when status === "closed". Checking action alone (buy/sell/close)
+// isn't enough — an exchange-rejected order still has action "buy" but status
+// "rejected", and would otherwise show up here as a fake "Long opened".
+function isPositionEvent(entry: EventItem): boolean {
+  if (entry.status === "closed") return true;
+  if (entry.status === "submitted") {
+    return entry.action === "buy" || entry.action === "sell";
+  }
+  return false;
+}
+
+// The timestamp that actually matters for a row: when it opened, or when
+// it closed — same convention ActivityPanel uses, so "20m ago" here
+// matches "20m ago" there for the same event.
+function eventTimestampOf(entry: EventItem): string | undefined {
+  return entry.status === "closed"
+    ? entry.closed_at ?? entry.timestamp
+    : entry.opened_at ?? entry.timestamp;
+}
+
+// Same fields ActivityPanel's eventUnits/eventPrice/eventPositionSize read —
+// backend/app/main.py's _activity_entry() puts these directly on the entry.
+function statsLine(entry: EventItem): string {
+  const parts: string[] = [];
+  if (entry.units != null) parts.push(`${entry.units} units`);
+  if (entry.price != null) parts.push(`@ $${Number(entry.price).toFixed(4)}`);
+  if (entry.position_size_usd != null) {
+    parts.push(`$${Number(entry.position_size_usd).toFixed(2)} notional`);
+  }
+  return parts.join(" · ");
+}
+
+// PnL is only meaningful (and only ever present) on closed rows — see the
+// note in _activity_entry(): it's exchange-reported-only for now, so most
+// closed rows will render "PnL —" rather than a number. That's expected,
+// not a bug — it's the same behavior ActivityPanel's event rows show.
+function pnlText(entry: EventItem): string | null {
+  if (entry.status !== "closed") return null;
+  return entry.pnl != null ? Number(entry.pnl).toFixed(2) : "";
 }
 
 export default function NotificationBell() {
@@ -44,11 +80,19 @@ export default function NotificationBell() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const openedPositions = entries.filter(isPositionOpened).slice(0, 20);
+  const positionEvents = entries
+    .filter(isPositionEvent)
+    .sort(
+      (a, b) =>
+        new Date(eventTimestampOf(b) ?? 0).getTime() -
+        new Date(eventTimestampOf(a) ?? 0).getTime()
+    )
+    .slice(0, 20);
 
-  const unseenCount = openedPositions.filter(
-    (e) => e.timestamp && new Date(e.timestamp).getTime() > lastSeen
-  ).length;
+  const unseenCount = positionEvents.filter((e) => {
+    const ts = eventTimestampOf(e);
+    return ts != null && new Date(ts).getTime() > lastSeen;
+  }).length;
 
   const handleToggle = () => {
     const next = !isOpen;
@@ -94,21 +138,61 @@ export default function NotificationBell() {
 
       {isOpen && (
         <div className="notification-dropdown">
-          <div className="notification-header">Positions opened</div>
-          {openedPositions.length === 0 ? (
-            <div className="notification-empty">No positions opened yet.</div>
+          <div className="notification-header">Opened &amp; closed positions</div>
+          {positionEvents.length === 0 ? (
+            <div className="notification-empty">No position activity yet.</div>
           ) : (
-            openedPositions.map((entry) => (
-              <div className="notification-item" key={entry.id}>
-                <div className="notification-item-title">
-                  {cleanSymbol(entry.symbol)} —{" "}
-                  {entry.action === "buy" ? "Long opened" : "Short opened"}
+            positionEvents.map((entry) => {
+              const isClosed = entry.status === "closed";
+              const pnl = pnlText(entry);
+              const stats = statsLine(entry);
+              return (
+                <div className="notification-item" key={entry.id}>
+                  <div className="notification-item-title">
+                    <span>
+                      {cleanSymbol(entry.symbol)} —{" "}
+                      {isClosed
+                        ? "Position closed"
+                        : entry.action === "buy"
+                        ? "Long opened"
+                        : "Short opened"}
+                    </span>
+                    <span
+                      className="event-tag"
+                      style={
+                        isClosed
+                          ? { color: "var(--down)", borderColor: "var(--down)" }
+                          : undefined
+                      }
+                    >
+                      {isClosed ? "Closed" : "Opened"}
+                    </span>
+                  </div>
+                  {(stats || pnl !== null) && (
+                    <div className="notification-item-stats">
+                      {stats}
+                      {pnl !== null && (
+                        <span
+                          style={{
+                            color: pnl
+                              ? Number(pnl) >= 0
+                                ? "var(--up)"
+                                : "var(--down)"
+                              : undefined,
+                          }}
+                        >
+                          {stats ? " · " : ""}
+                          {pnl ? `PnL ${Number(pnl) >= 0 ? "+" : ""}$${pnl}` : "PnL —"}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <div className="notification-item-time">
+                    {timeAgo(eventTimestampOf(entry) ?? "")}
+                  </div>
                 </div>
-                <div className="notification-item-time">
-                  {timeAgo(entry.timestamp)}
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}

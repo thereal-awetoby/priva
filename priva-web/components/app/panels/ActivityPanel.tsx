@@ -407,39 +407,39 @@ export default function ActivityPanel() {
 
       <div className="activity-controls">
         <div className="activity-controls-top">
-          <div className="activity-filter-group">
-            <div className="mode-switch">
-              <button
-                className={modeFilter === "all" ? "active" : ""}
-                onClick={() => setModeFilter("all")}
-              >
-                All modes
-              </button>
-              <button
-                className={modeFilter === "autonomous" ? "active" : ""}
-                onClick={() => setModeFilter("autonomous")}
-              >
-                Autonomous
-              </button>
-              <button
-                className={modeFilter === "strategy" ? "active" : ""}
-                onClick={() => setModeFilter("strategy")}
-              >
-                Strategy
-              </button>
-            </div>
-            <div className="mode-switch">
-              {filters.map((f) => (
-                <button
-                  key={f.id}
-                  className={activeFilter === f.id ? "active" : ""}
-                  onClick={() => setActiveFilter(f.id)}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
+          <div className="mode-switch">
+            <button
+              className={modeFilter === "all" ? "active" : ""}
+              onClick={() => setModeFilter("all")}
+            >
+              All modes
+            </button>
+            <button
+              className={modeFilter === "autonomous" ? "active" : ""}
+              onClick={() => setModeFilter("autonomous")}
+            >
+              Autonomous
+            </button>
+            <button
+              className={modeFilter === "strategy" ? "active" : ""}
+              onClick={() => setModeFilter("strategy")}
+            >
+              Strategy
+            </button>
           </div>
+          <div className="mode-switch">
+            {filters.map((f) => (
+              <button
+                key={f.id}
+                className={activeFilter === f.id ? "active" : ""}
+                onClick={() => setActiveFilter(f.id)}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="activity-controls-bottom">
           <button
             className={`btn eval-toggle-btn ${showEvaluations ? "btn-primary" : ""}`}
             type="button"
