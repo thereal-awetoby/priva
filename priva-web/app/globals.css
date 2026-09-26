@@ -407,7 +407,6 @@ a{ color: inherit; }
     border: 1px solid var(--rule);
     font-family:var(--font-ibm-plex-mono), monospace;
     font-size: 12px;
-    width: fit-content;
   }
   .mode-switch button{
     background:none;
@@ -590,6 +589,26 @@ a{ color: inherit; }
   padding: 4px;
 }
 .modal-close:hover{ color: var(--ink); }
+
+.modal-download-row{
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--rule-soft);
+}
+
+.modal-download{
+  background: none;
+  border: 1px solid var(--rule);
+  color: var(--ink-dim);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.modal-download:hover{ color: var(--ink); border-color: var(--ink-faint); }
+.modal-download:disabled{ cursor: not-allowed; opacity: 0.6; }
 
 .modal-title{
   font-weight: 400;

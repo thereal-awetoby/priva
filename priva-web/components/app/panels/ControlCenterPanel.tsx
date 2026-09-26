@@ -454,6 +454,7 @@ export default function ControlCenterPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [killSwitchLoading, setKillSwitchLoading] = useState(false);
+  const [showKillSwitchConfirm, setShowKillSwitchConfirm] = useState(false);
   const [activityMode, setActivityMode] = useState<"autonomous" | "strategy">("autonomous");
   const [selectedPosition, setSelectedPosition] = useState<Record<string, any> | null>(null);
   const [markets, setMarkets] = useState<Array<"spot" | "futures">>(["futures"]);
@@ -561,6 +562,13 @@ export default function ControlCenterPanel() {
     }
   };
 
+  // The visible button only opens the confirmation modal now; the actual
+  // request fires from confirmKillSwitch below, after the user confirms.
+  const confirmKillSwitch = async () => {
+    await handleKillSwitch();
+    setShowKillSwitchConfirm(false);
+  };
+
   const handleExecutionChange = async (
     nextMarkets: Array<"spot" | "futures">,
     nextModes: Array<"autonomous" | "strategy">,
@@ -634,7 +642,7 @@ export default function ControlCenterPanel() {
           <div className="app-actions" style={{ marginTop: 0 }}>
             <button
               className="btn btn-danger"
-              onClick={handleKillSwitch}
+              onClick={() => setShowKillSwitchConfirm(true)}
               disabled={killSwitchLoading}
             >
               {killSwitchLoading
@@ -885,6 +893,48 @@ export default function ControlCenterPanel() {
           position={selectedPosition}
           onClose={() => setSelectedPosition(null)}
         />
+      )}
+
+      {showKillSwitchConfirm && (
+        <div className="modal-overlay" onClick={() => setShowKillSwitchConfirm(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="modal-close"
+              onClick={() => setShowKillSwitchConfirm(false)}
+              aria-label="Close"
+            >
+              Close ✕
+            </button>
+            <h2 className="modal-title">
+              {killSwitchEnabled ? "Resume the agent?" : "Engage kill switch?"}
+            </h2>
+            <p className="modal-sub">
+              {killSwitchEnabled
+                ? "This resumes the autonomous agent — it will start evaluating and placing trades again on its normal cycle."
+                : "This immediately pauses the agent. No new trades will be evaluated or placed. Any positions you already hold stay open until you close them manually."}
+            </p>
+            <div className="connection-actions">
+              <button
+                className="btn"
+                onClick={() => setShowKillSwitchConfirm(false)}
+                disabled={killSwitchLoading}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={confirmKillSwitch}
+                disabled={killSwitchLoading}
+              >
+                {killSwitchLoading
+                  ? "Working…"
+                  : killSwitchEnabled
+                  ? "Resume"
+                  : "Engage kill switch"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
