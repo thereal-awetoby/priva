@@ -414,22 +414,26 @@
   .activity-controls-top{
     display: flex;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: space-between;
     gap: 20px;
     flex-wrap: wrap;
   }
   .activity-filter-group{
     display: contents;
   }
-  .eval-toggle-btn{
-    white-space: nowrap;
+  .activity-controls-actions{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    width: 100%;
   }
   .activity-controls-actions-right{
     display: flex;
     gap: 10px;
     align-items: center;
     flex-wrap: wrap;
-    margin-left: auto;
   }
   .activity-search{
     width: 220px;

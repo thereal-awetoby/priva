@@ -105,14 +105,21 @@ a{ color: inherit; }
     background: transparent;
     color: var(--ink);
   }
+  .btn:hover{ background: var(--bg-raised); }
   .btn-primary{
     background: var(--accent);
     border-color: var(--accent);
     color: var(--accent-ink);
     font-weight: 500;
   }
-  .btn-primary:hover{ background: #D6AC63; border-color: #D6AC63; }
-  .btn:hover{ background: var(--bg-raised); }
+  /* .btn.btn-primary:hover (two classes) beats .btn:hover (one class)
+     regardless of source order, so the gold hover state can never be
+     shadowed by the plain .btn dark-hover rule above. */
+  .btn.btn-primary:hover{
+    background: #D6AC63;
+    border-color: #D6AC63;
+    color: var(--accent-ink);
+  }
   .btn-danger{
     border-color: var(--down);
     color: var(--down);
@@ -400,6 +407,7 @@ a{ color: inherit; }
     border: 1px solid var(--rule);
     font-family:var(--font-ibm-plex-mono), monospace;
     font-size: 12px;
+    width: fit-content;
   }
   .mode-switch button{
     background:none;

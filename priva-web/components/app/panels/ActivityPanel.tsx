@@ -174,6 +174,7 @@ function ExportModal({
 
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]); // empty = all
   const [range, setRange] = useState<TimeRange>("all");
+  const [exportMode, setExportMode] = useState<"all" | "autonomous" | "strategy">("all");
 
   const toggleSymbol = (s: string) =>
     setSelectedSymbols((prev) =>
@@ -190,13 +191,15 @@ function ExportModal({
           selectedSymbols.includes(cleanSymbol(e.symbol ?? ""));
         const ts = e.timestamp ? new Date(e.timestamp).getTime() : NaN;
         const matchesRange = startMs === null || (!Number.isNaN(ts) && ts >= startMs);
-        return matchesSymbol && matchesRange;
+        const matchesMode =
+          exportMode === "all" || (e.mode ?? "autonomous") === exportMode;
+        return matchesSymbol && matchesRange && matchesMode;
       })
       .sort(
         (a, b) =>
           new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime()
       );
-  }, [entries, selectedSymbols, startMs]);
+  }, [entries, selectedSymbols, startMs, exportMode]);
 
   const handleDownload = () => {
     const csv = buildCsv(rows);
@@ -243,6 +246,33 @@ function ExportModal({
                 {s}
               </button>
             ))}
+          </div>
+        </div>
+
+        <div className="form-field">
+          <label className="form-label">Mode</label>
+          <div className="mode-switch">
+            <button
+              type="button"
+              className={exportMode === "all" ? "active" : ""}
+              onClick={() => setExportMode("all")}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              className={exportMode === "autonomous" ? "active" : ""}
+              onClick={() => setExportMode("autonomous")}
+            >
+              Autonomous
+            </button>
+            <button
+              type="button"
+              className={exportMode === "strategy" ? "active" : ""}
+              onClick={() => setExportMode("strategy")}
+            >
+              Strategy
+            </button>
           </div>
         </div>
 
