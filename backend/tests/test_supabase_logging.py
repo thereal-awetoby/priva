@@ -99,6 +99,22 @@ def test_supabase_logger_filters_cycles_by_session(monkeypatch):
     assert session.calls[0][1]["params"]["session_id"] == "eq.session-1"
 
 
+def test_supabase_logger_persists_balance_account_key(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
+    session = FakeSession()
+
+    SupabaseCycleLogger(session=session, user_id="user-1").log_balance_snapshot(
+        {
+            "balance": 10,
+            "equity": 10,
+            "account_key": "account-hash",
+        }
+    )
+
+    assert session.calls[0][1]["json"]["account_key"] == "account-hash"
+
+
 def test_supabase_logger_filters_balance_snapshots_by_date_without_session(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
@@ -107,12 +123,14 @@ def test_supabase_logger_filters_balance_snapshots_by_date_without_session(monke
     SupabaseCycleLogger(session=session, user_id="user-1").fetch_balance_snapshots(
         session_id=None,
         created_after="2026-09-22",
+        account_key="account-hash",
     )
 
     params = session.calls[0][1]["params"]
     assert "session_id" not in params
     assert params["user_id"] == "eq.user-1"
     assert params["created_at"] == "gte.2026-09-22"
+    assert params["account_key"] == "eq.account-hash"
 
 
 def test_supabase_logger_paginates_balance_snapshots_past_single_request_cap(monkeypatch):

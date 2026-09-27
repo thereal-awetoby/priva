@@ -97,6 +97,12 @@ class BitgetPaperExecutionClient:
     def configured(self) -> bool:
         return bool(self.api_key and self.api_secret and self.passphrase)
 
+    @property
+    def account_fingerprint(self) -> str | None:
+        if not self.api_key:
+            return None
+        return hashlib.sha256(self.api_key.strip().encode()).hexdigest()
+
     def configure_credentials(self, api_key: str, api_secret: str, passphrase: str) -> None:
         self.api_key = api_key.strip()
         self.api_secret = api_secret.strip()

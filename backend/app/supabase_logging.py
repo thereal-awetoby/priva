@@ -85,6 +85,8 @@ class SupabaseCycleLogger:
             record["futures_equity"] = float(snapshot["futures_equity"] or 0)
         if snapshot.get("spot_equity") is not None:
             record["spot_equity"] = float(snapshot["spot_equity"] or 0)
+        if snapshot.get("account_key"):
+            record["account_key"] = str(snapshot["account_key"])
         if self.user_id:
             record["user_id"] = self.user_id
         try:
@@ -111,6 +113,7 @@ class SupabaseCycleLogger:
         limit: int | None = None,
         session_id: str | None = None,
         created_after: str | None = None,
+        account_key: str | None = None,
     ) -> list[dict[str, Any]]:
         if not self.configured:
             return []
@@ -120,7 +123,7 @@ class SupabaseCycleLogger:
             offset = 0
             while limit is None or len(snapshots) < limit:
                 params = {
-                    "select": "created_at,balance,equity,futures_equity,spot_equity",
+                    "select": "created_at,balance,equity,futures_equity,spot_equity,account_key",
                     "order": "created_at.asc",
                     "limit": page_size if limit is None else min(page_size, limit - len(snapshots)),
                     "offset": offset,
@@ -131,6 +134,8 @@ class SupabaseCycleLogger:
                     params["created_at"] = f"gte.{created_after}"
                 if self.user_id:
                     params["user_id"] = f"eq.{self.user_id}"
+                if account_key:
+                    params["account_key"] = f"eq.{account_key}"
                 response = self.session.get(
                     f"{self.url}/rest/v1/balance_snapshots",
                     headers={

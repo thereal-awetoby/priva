@@ -59,7 +59,11 @@ alter table public.user_agent_settings
 
 alter table public.balance_snapshots
   add column if not exists futures_equity numeric,
-  add column if not exists spot_equity numeric;
+  add column if not exists spot_equity numeric,
+  add column if not exists account_key text;
+
+create index if not exists balance_snapshots_user_account_created_idx
+  on public.balance_snapshots (user_id, account_key, created_at desc);
 
 alter table public.agent_cycles
   add column if not exists mode text not null default 'autonomous',

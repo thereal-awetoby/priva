@@ -236,11 +236,17 @@ def test_paper_client_fails_closed_without_credentials(monkeypatch):
 def test_paper_client_can_configure_and_clear_runtime_credentials():
     client = BitgetPaperExecutionClient(session=FakeSession())
     client.configure_credentials(" key ", " secret ", " passphrase ")
+    same_account = BitgetPaperExecutionClient(session=FakeSession())
+    same_account.configure_credentials("key", "another-secret", "another-passphrase")
 
     assert client.configured is True
     assert client.api_key == "key"
+    assert client.account_fingerprint == same_account.account_fingerprint
+    assert len(client.account_fingerprint) == 64
+    assert client.account_fingerprint != client.api_key
     client.clear_credentials()
     assert client.configured is False
+    assert client.account_fingerprint is None
 
 
 def test_paper_client_submits_paper_order(monkeypatch):

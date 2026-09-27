@@ -273,12 +273,17 @@ def test_account_balance_history_excludes_other_users_runtime_snapshots(monkeypa
     monkeypatch.setattr(main.cycle_logger, "fetch_balance_snapshots", lambda **kwargs: [])
     monkeypatch.setattr(main, "cycle_logger_for", lambda user: main.cycle_logger)
     monkeypatch.setattr(main.agent_loop, "recent_balance_snapshots", lambda user_id=None: [])
+    monkeypatch.setattr(
+        main,
+        "execution_client_for",
+        lambda user: type("Client", (), {"account_fingerprint": "new-account"})(),
+    )
     main._balance_history.clear()
     main._balance_history["first-user"] = [
-        {"timestamp": "2026-09-26T14:00:00+00:00", "balance": 1985.28, "equity": 1985.28}
+        {"timestamp": "2026-09-26T14:00:00+00:00", "balance": 1985.28, "equity": 1985.28, "account_key": "old-account"}
     ]
     main._balance_history["new-user"] = [
-        {"timestamp": "2026-09-26T14:01:00+00:00", "balance": 0.0, "equity": 0.0}
+        {"timestamp": "2026-09-26T14:01:00+00:00", "balance": 0.0, "equity": 0.0, "account_key": "new-account"}
     ]
 
     result = main.account_balance_history(AuthenticatedUser("new-user"))

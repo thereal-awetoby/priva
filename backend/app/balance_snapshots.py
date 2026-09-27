@@ -49,6 +49,7 @@ def fetch_combined_balance_snapshot(
         "equity": combined_equity,
         "futures_equity": round(futures_equity, 4),
         "spot_equity": round(spot_equity, 4),
+        "account_key": getattr(execution_client, "account_fingerprint", None),
     }
     if (
         futures.get("status") != "ok"

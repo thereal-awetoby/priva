@@ -68,7 +68,7 @@ market_service = BitgetMarketDataService()
 risk_engine = RiskEngine()
 paper_execution_client = BitgetPaperExecutionClient()
 cycle_logger = SupabaseCycleLogger()
-_daily_balance_baselines: dict[str, tuple[str, float]] = {}
+_daily_balance_baselines: dict[tuple[str, str | None], tuple[str, float]] = {}
 _balance_history: dict[str, list[dict[str, Any]]] = {}
 EFFECTIVE_BALANCE_HISTORY_START = datetime(2026, 9, 23, 13, 42, tzinfo=timezone.utc)
 POSITION_LEDGER_START = datetime(2026, 9, 23, tzinfo=timezone.utc)
@@ -425,6 +425,7 @@ def debug_bitget_account(symbol: str = "AAPLUSDT", user: AuthenticatedUser = Dep
 def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user = normalize_user(user)
     client = execution_client_for(user)
+    account_key = getattr(client, "account_fingerprint", None)
     user_logger = cycle_logger_for(user)
     futures = client.fetch_futures_account_balance()
     spot = client.fetch_spot_assets()
@@ -468,17 +469,19 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
     today_points = user_logger.fetch_balance_snapshots(
         session_id=None,
         created_after=today,
+        account_key=account_key,
     )
+    baseline_key = (user.id, account_key)
     if today_points:
         starting_balance = float(today_points[0].get("balance", today_points[0].get("equity", 0)) or 0)
-        _daily_balance_baselines[user.id] = (today, starting_balance)
+        _daily_balance_baselines[baseline_key] = (today, starting_balance)
     else:
-        baseline = _daily_balance_baselines.get(user.id)
+        baseline = _daily_balance_baselines.get(baseline_key)
         if baseline and baseline[0] == today:
             starting_balance = baseline[1]
         else:
             starting_balance = current_equity
-            _daily_balance_baselines[user.id] = (today, starting_balance)
+            _daily_balance_baselines[baseline_key] = (today, starting_balance)
     first_futures_point = next((point for point in today_points if float(point.get("futures_equity") or 0) > 0), None)
     first_spot_point = next((point for point in today_points if float(point.get("spot_equity") or 0) > 0), None)
     starting_futures_equity = float(first_futures_point["futures_equity"]) if first_futures_point else futures_equity
@@ -494,6 +497,7 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
         "equity": current_equity,
         "futures_equity": futures_equity,
         "spot_equity": spot_equity,
+        "account_key": account_key,
     }
     if (
         futures.get("status") != "ok"
@@ -546,14 +550,17 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
 @app.get("/account/balance-history")
 def account_balance_history(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user = normalize_user(user)
+    account_key = getattr(execution_client_for(user), "account_fingerprint", None)
     user_logger = cycle_logger_for(user)
     persisted = user_logger.fetch_balance_snapshots(
         created_after=EFFECTIVE_BALANCE_HISTORY_START.isoformat(),
+        account_key=account_key,
     )
     runtime_points = [
         point
         for point in agent_loop.recent_balance_snapshots(user.id) + _balance_history.get(user.id, [])
-        if point.get("timestamp") or point.get("created_at")
+        if point.get("account_key") == account_key
+        and (point.get("timestamp") or point.get("created_at"))
     ]
     runtime_points = [
         point
@@ -1146,9 +1153,11 @@ def pnl(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     realized_pnl = round(float(logged_pnl.get("realized_pnl", 0) or 0), 4)
     total_pnl = round(realized_pnl + unrealized_pnl, 4)
     today_start = datetime.now(timezone.utc).date().isoformat()
+    account_key = getattr(execution_client_for(user), "account_fingerprint", None)
     balance_points = user_logger.fetch_balance_snapshots(
         session_id=None,
         created_after=today_start,
+        account_key=account_key,
     )
     initial_capital = (
         float(balance_points[0].get("balance", balance_points[0].get("equity", 0)) or 0)
