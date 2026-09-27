@@ -19,20 +19,23 @@ def fetch_combined_balance_snapshot(
         return None
 
     assets = spot.get("assets", []) if spot.get("status") == "ok" else []
-    usdt_asset = next(
-        (asset for asset in assets if str(asset.get("coin", "")).upper() == "USDT"),
-        {},
-    )
-    spot_equity = float(
-        usdt_asset.get(
-            "usdtBalance",
-            usdt_asset.get("balance", usdt_asset.get("available", usdt_asset.get("availableBalance", 0))),
+    cash_assets = [
+        asset for asset in assets
+        if str(asset.get("coin", "")).upper() in {"USD", "USDT"}
+    ]
+    spot_equity = sum(
+        float(
+            asset.get(
+                "usdtBalance",
+                asset.get("balance", asset.get("available", asset.get("availableBalance", 0))),
+            )
+            or 0
         )
-        or 0
+        for asset in cash_assets
     )
     for asset in assets:
         coin = str(asset.get("coin", "")).upper()
-        if not coin or coin == "USDT":
+        if not coin or coin in {"USD", "USDT"}:
             continue
         quantity = float(asset.get("total", asset.get("available", asset.get("balance", 0))) or 0)
         if quantity <= 0:

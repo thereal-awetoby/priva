@@ -76,6 +76,22 @@ class CombinedBalanceExecutionClient(BalanceExecutionClient):
         }
 
 
+class UsdBalanceExecutionClient(BalanceExecutionClient):
+    def fetch_spot_assets(self):
+        return {
+            "status": "ok",
+            "assets": [
+                {
+                    "coin": "USD",
+                    "available": "10000.0000000000000000",
+                    "limitAvailable": "0",
+                    "frozen": "0.0000000000000000",
+                    "locked": "0.0000000000000000",
+                }
+            ],
+        }
+
+
 class BalanceMarketService:
     def fetch_spot_ticker(self, symbol):
         return {"status": "live", "last_price": 100.0}
@@ -306,6 +322,45 @@ def test_account_balance_combines_futures_and_spot_equity(monkeypatch):
     assert result["spot_holdings"] == [
         {"coin": "AAPL", "quantity": 2.0, "mark_price": 100.0, "value_usd": 200.0}
     ]
+
+
+def test_account_balance_treats_usd_available_as_cash_without_ticker_lookup(monkeypatch):
+    main._daily_balance_baselines.clear()
+    ticker_calls = []
+
+    class NoUsdTickerService:
+        def fetch_spot_ticker(self, symbol):
+            ticker_calls.append(symbol)
+            assert symbol != "USDUSDT"
+            return {"status": "live", "last_price": 100.0}
+
+    monkeypatch.setattr(main, "paper_execution_client", UsdBalanceExecutionClient(0.0))
+    monkeypatch.setattr(main, "market_service", NoUsdTickerService())
+
+    result = main.account_balance()
+
+    assert result["spot_equity"] == 10000.0
+    assert result["spot"]["available"] == 10000.0
+    assert result["spot_holdings"] == []
+    assert ticker_calls == []
+
+
+def test_combined_snapshot_treats_usd_available_as_cash_without_ticker_lookup():
+    ticker_calls = []
+
+    class NoUsdTickerService:
+        def fetch_spot_ticker(self, symbol):
+            ticker_calls.append(symbol)
+            assert symbol != "USDUSDT"
+            return {"status": "live", "last_price": 100.0}
+
+    snapshot = fetch_combined_balance_snapshot(
+        UsdBalanceExecutionClient(0.0),
+        NoUsdTickerService(),
+    )
+
+    assert snapshot["spot_equity"] == 10000.0
+    assert ticker_calls == []
 
 
 def test_trade_metrics_detect_real_drawdown_from_closed_pnl(monkeypatch):

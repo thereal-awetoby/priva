@@ -24,7 +24,6 @@ connect, verify, inspect, and disconnect their own Bitget account through:
 
 - `GET /auth/session`
 - `POST /connection/bitget`
-- `GET /debug/bitget-account`
 - `POST /connection/bitget/disconnect`
 - `POST /paper-trade`
 - `GET /user/agent-loop`
