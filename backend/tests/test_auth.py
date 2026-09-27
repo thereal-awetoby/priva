@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from fastapi.testclient import TestClient
+
 from app.auth import AuthenticatedUser, SupabaseAuth, UserCredentialVault
+from app.main import app
 
 
 def test_credential_vault_isolates_users(monkeypatch):
@@ -88,3 +91,42 @@ def test_required_flag_does_not_force_auth_without_supabase_config(monkeypatch):
 
     assert auth.required is True
     assert auth.current_user(None) == AuthenticatedUser("local-development")
+
+
+def test_risk_settings_endpoints_require_auth(monkeypatch):
+    from app.auth import supabase_auth
+
+    monkeypatch.setattr(supabase_auth, "required", True)
+    monkeypatch.setattr(supabase_auth, "url", "https://example.supabase.co")
+    monkeypatch.setattr(supabase_auth, "anon_key", "anon")
+    monkeypatch.setattr(supabase_auth, "user_from_token", lambda token: None)
+
+    client = TestClient(app)
+
+    response = client.get("/risk-settings")
+    assert response.status_code == 401
+
+    response = client.post("/risk-settings", json={"max_position_size": 1000})
+    assert response.status_code == 401
+
+
+def test_user_risk_engines_are_isolated_by_user():
+    from app import main
+
+    engine_a = main._risk_engine_for_user("user-a")
+    engine_a.update_settings({"max_position_size": 1500, "max_daily_loss": 500})
+
+    engine_b = main._risk_engine_for_user("user-b")
+    assert engine_a.max_position_size == 1500
+    assert engine_b.max_position_size == main.DEFAULT_RISK_SETTINGS["max_position_size"]
+    assert engine_b.max_daily_loss == main.DEFAULT_RISK_SETTINGS["max_daily_loss"]
+
+
+def test_builtin_strategy_configs_are_isolated_by_user():
+    from app import strategy as strategy_module
+
+    strategy_module.configure_builtin_strategy("momentum_breakout", {"threshold_pct": 3.0}, user_id="user-a")
+    strategy_module.configure_builtin_strategy("momentum_breakout", {"threshold_pct": 7.0}, user_id="user-b")
+
+    assert strategy_module._get_builtin_strategy_config("momentum_breakout", user_id="user-a")["threshold_pct"] == 3.0
+    assert strategy_module._get_builtin_strategy_config("momentum_breakout", user_id="user-b")["threshold_pct"] == 7.0

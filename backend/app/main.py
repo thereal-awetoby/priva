@@ -65,7 +65,55 @@ app.add_middleware(
 )
 
 market_service = BitgetMarketDataService()
-risk_engine = RiskEngine()
+DEFAULT_RISK_SETTINGS = {
+    "max_position_size": 25000.0,
+    "max_daily_loss": 1500.0,
+    "max_leverage": 5.0,
+    "enabled": True,
+    "allowed_symbols": [],
+}
+_risk_engines: dict[str, RiskEngine] = {}
+
+
+def _normalize_user_risk_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
+    settings = dict(DEFAULT_RISK_SETTINGS)
+    if not isinstance(raw, dict):
+        return settings
+    settings.update(raw)
+    if "risk_enabled" in settings and "enabled" not in settings:
+        settings["enabled"] = bool(settings["risk_enabled"])
+    if "allowed_symbols" in settings and isinstance(settings["allowed_symbols"], list):
+        settings["allowed_symbols"] = [str(symbol).upper() for symbol in settings["allowed_symbols"]]
+    if "allowed_symbols" in settings and settings["allowed_symbols"] is None:
+        settings["allowed_symbols"] = []
+    return settings
+
+
+def _risk_engine_for_user(user_id: str = "local-development", *, settings: dict[str, Any] | None = None) -> RiskEngine:
+    key = str(user_id or "local-development")
+    engine = _risk_engines.get(key)
+    if engine is not None and settings is None:
+        return engine
+    resolved_settings = _normalize_user_risk_settings(settings)
+    if settings is None:
+        if key != "local-development":
+            persisted = SupabaseCycleLogger(user_id=key).fetch_user_settings(key)
+            resolved_settings = _normalize_user_risk_settings(persisted)
+    engine = RiskEngine(**resolved_settings)
+    _risk_engines[key] = engine
+    return engine
+
+
+def _configure_builtin_strategy_for_user(strategy_id: str, config: dict[str, Any], user_id: str) -> None:
+    try:
+        configure_builtin_strategy(strategy_id, config, user_id=user_id)
+    except TypeError as exc:
+        if "user_id" not in str(exc):
+            raise
+        configure_builtin_strategy(strategy_id, config)
+
+
+risk_engine = _risk_engine_for_user()
 paper_execution_client = BitgetPaperExecutionClient()
 cycle_logger = SupabaseCycleLogger()
 _daily_balance_baselines: dict[tuple[str, str | None], tuple[str, float]] = {}
@@ -313,6 +361,7 @@ class KillSwitchRequest(BaseModel):
 
 class IntentEvaluationRequest(BaseModel):
     strategy_id: str | None = None
+    user_id: str | None = None
     symbol: str
     side: Literal["buy", "sell"]
     qty: float
@@ -1202,10 +1251,7 @@ def pnl(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
         if balance_points
         else 0.0
     )
-    trade_metrics = _trade_metrics(cycles, initial_capital) if initial_capital > 0 else {
-        "win_rate_pct": 0.0,
-        "max_drawdown_pct": 0.0,
-    }
+    trade_metrics = _trade_metrics(cycles, max(initial_capital, 1.0))
     return {
         "unrealized_pnl": unrealized_pnl,
         "realized_pnl": realized_pnl,
@@ -1233,9 +1279,10 @@ def risk_usage(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any
         default=0.0,
     )
     current_daily_loss = max(0.0, -float(pnl(user)["daily_pnl"]))
-    max_position_size = float(risk_engine.max_position_size)
-    max_daily_loss = float(risk_engine.max_daily_loss)
-    max_leverage = float(risk_engine.max_leverage)
+    user_risk_engine = _risk_engine_for_user(user.id)
+    max_position_size = float(user_risk_engine.max_position_size)
+    max_daily_loss = float(user_risk_engine.max_daily_loss)
+    max_leverage = float(user_risk_engine.max_leverage)
     return {
         "max_position_size": max_position_size,
         "current_position_size": position_size,
@@ -1248,25 +1295,41 @@ def risk_usage(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any
             "daily_loss": round(current_daily_loss / max_daily_loss * 100, 2) if max_daily_loss else 0.0,
             "leverage": round(current_leverage / max_leverage * 100, 2) if max_leverage else 0.0,
         },
-        "allowed_symbols": list(risk_engine.allowed_symbols) if risk_engine.allowed_symbols else [],
+        "allowed_symbols": list(user_risk_engine.allowed_symbols) if user_risk_engine.allowed_symbols else [],
         "positions": live_positions,
         "source": "bitget_and_supabase",
     }
 
 
 @app.get("/risk-settings")
-def risk_settings() -> dict[str, Any]:
-    return {"status": "ok", **risk_engine.get_settings()}
+def risk_settings(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    engine = _risk_engine_for_user(user.id)
+    return {"status": "ok", **engine.get_settings()}
 
 
 @app.post("/risk-settings")
-def update_risk_settings(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def update_risk_settings(
+    payload: dict[str, Any] | None = None,
+    user: AuthenticatedUser = Depends(current_user),
+) -> dict[str, Any]:
     if payload is None or not isinstance(payload, dict):
         return {"status": "rejected", "message": "payload must be an object"}
 
     try:
-        settings = risk_engine.update_settings(payload)
-        return {"status": "updated", **settings}
+        engine = _risk_engine_for_user(user.id)
+        settings = engine.update_settings(payload)
+        logger = SupabaseCycleLogger(user_id=user.id)
+        persistence = logger.save_user_settings(
+            user.id,
+            {
+                "max_position_size": settings["max_position_size"],
+                "max_daily_loss": settings["max_daily_loss"],
+                "max_leverage": settings["max_leverage"],
+                "risk_enabled": settings["enabled"],
+                "allowed_symbols": settings["allowed_symbols"],
+            },
+        )
+        return {"status": "updated", **settings, "persistence": persistence["status"]}
     except ValueError as exc:
         return {"status": "rejected", "message": str(exc)}
 
@@ -1545,7 +1608,7 @@ def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | Non
         return {"strategy_id": strategy_id, "status": "rejected", "message": "unknown strategy"}
     if strategy_config is not None:
         try:
-            configure_builtin_strategy(strategy_id, strategy_config)
+            _configure_builtin_strategy_for_user(strategy_id, strategy_config, user.id)
         except ValueError as exc:
             return {"strategy_id": strategy_id, "status": "rejected", "message": str(exc)}
     if payload is not None and payload.symbols is not None:
@@ -1764,7 +1827,7 @@ def parse_strategy(payload: dict[str, Any], user: AuthenticatedUser = Depends(cu
                     if key in payload:
                         config[parsed_key] = payload[key]
                 if config:
-                    configure_builtin_strategy(parsed["target_strategy"], config)
+                    _configure_builtin_strategy_for_user(parsed["target_strategy"], config, user.id)
                     parsed.update(config)
             return _attach_metadata({"status": "parsed", **parsed, "strategy_id": parsed.get("target_strategy", parsed.get("strategy_id"))})
             strategy_id, persistence = _register_and_persist(parsed)
@@ -1783,7 +1846,7 @@ def parse_strategy(payload: dict[str, Any], user: AuthenticatedUser = Depends(cu
         try:
             parsed = parse_structured_strategy(strategy)
             if parsed.get("kind") == "builtin":
-                configure_builtin_strategy(parsed["target_strategy"], parsed)
+                _configure_builtin_strategy_for_user(parsed["target_strategy"], parsed, user.id)
                 response = {"status": "parsed", **parsed, "strategy_id": parsed["target_strategy"]}
                 return _attach_metadata(response)
 
@@ -1854,14 +1917,15 @@ def _position_notional(position: dict[str, Any]) -> float:
     return abs(qty * entry_price)
 
 
-def _usage_summary(current_positions: list[dict[str, Any]], current_daily_pnl: float) -> dict[str, Any]:
+def _usage_summary(current_positions: list[dict[str, Any]], current_daily_pnl: float, *, user_id: str = "local-development") -> dict[str, Any]:
     current_position_size = round(
         sum(_position_notional(position) for position in current_positions),
         4,
     )
     current_daily_loss = max(0.0, -float(current_daily_pnl))
-    max_position_size = float(risk_engine.max_position_size)
-    max_daily_loss = float(risk_engine.max_daily_loss)
+    user_risk_engine = _risk_engine_for_user(user_id)
+    max_position_size = float(user_risk_engine.max_position_size)
+    max_daily_loss = float(user_risk_engine.max_daily_loss)
     position_usage_pct = round(current_position_size / max_position_size * 100, 2) if max_position_size else 0.0
     daily_loss_usage_pct = round(current_daily_loss / max_daily_loss * 100, 2) if max_daily_loss else 0.0
     return {
@@ -1992,14 +2056,15 @@ def evaluate_intent(payload: IntentEvaluationRequest) -> dict[str, Any]:
     }
 
     current_positions = payload.current_positions or []
-    result = risk_engine.evaluate_trade(
+    user_id = payload.user_id or "local-development"
+    result = _risk_engine_for_user(user_id=user_id).evaluate_trade(
         trade=trade,
         current_positions=current_positions,
         current_daily_pnl=float(payload.current_daily_pnl),
     )
 
     market_provenance = _market_provenance(payload.symbol)
-    usage = _usage_summary(current_positions, float(payload.current_daily_pnl))
+    usage = _usage_summary(current_positions, float(payload.current_daily_pnl), user_id=user_id)
 
     if result["allowed"]:
         verdict = "ALLOW_CAPPED" if usage["position_usage_pct"] >= 75.0 or usage["daily_loss_usage_pct"] >= 75.0 else "ALLOW"
@@ -2033,7 +2098,7 @@ def risk_view(symbol: str = "AAPLUSDT", user: AuthenticatedUser = Depends(curren
     user = normalize_user(user)
     live_positions = positions(user).get("positions", [])
     pnl_snapshot = pnl(user)
-    usage = _usage_summary(live_positions, float(pnl_snapshot.get("daily_pnl", 0.0) or 0.0))
+    usage = _usage_summary(live_positions, float(pnl_snapshot.get("daily_pnl", 0.0) or 0.0), user_id=user.id)
     action_plan = _action_plan_from_usage(usage["position_usage_pct"], usage["daily_loss_usage_pct"])
     return {
         "symbol": symbol.upper(),
@@ -2050,7 +2115,8 @@ def risk_check(payload: dict[str, Any]) -> dict[str, Any]:
     trade = payload.get("trade", {})
     current_positions = payload.get("current_positions", [])
     current_daily_pnl = float(payload.get("current_daily_pnl", 0.0))
-    result = risk_engine.evaluate_trade(
+    user_id = str(payload.get("user_id") or "local-development")
+    result = _risk_engine_for_user(user_id=user_id).evaluate_trade(
         trade=trade,
         current_positions=current_positions,
         current_daily_pnl=current_daily_pnl,
@@ -2062,7 +2128,8 @@ def risk_check(payload: dict[str, Any]) -> dict[str, Any]:
 def paper_trade(payload: TradeRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user_execution_client = execution_client_for(user)
     order = payload.model_dump()
-    result = risk_engine.evaluate_trade(
+    user_risk_engine = _risk_engine_for_user(user.id)
+    result = user_risk_engine.evaluate_trade(
         trade=order,
         current_positions=[],
         current_daily_pnl=0.0,

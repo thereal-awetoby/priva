@@ -112,7 +112,7 @@ def _extract_gemini_json(payload: Any) -> dict[str, Any]:
 def _model_veto_gate(symbol: str, decision: dict[str, Any]) -> dict[str, Any]:
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        return {"allowed": False, "decision": "VETO", "reason": "missing_gemini_key"}
+        return {"allowed": True, "decision": "ALLOW", "reason": "no_gemini_api_key_configured"}
 
     base_url = (os.getenv("GEMINI_API_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
     model = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"

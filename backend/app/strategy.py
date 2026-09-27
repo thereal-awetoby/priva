@@ -205,25 +205,39 @@ _custom_strategy_functions: dict[tuple[str, str], Any] = {}
 _custom_strategy_catalog: dict[tuple[str, str], dict[str, Any]] = {}
 _active_strategy_id = "momentum_breakout"
 _builtin_strategy_configs: dict[str, dict[str, Any]] = {}
+_user_builtin_strategy_configs: dict[tuple[str, str], dict[str, Any]] = {}
 _symbol_strategy_ids: dict[str, str] = {}
 
 
-def _set_builtin_strategy_config(strategy_id: str, config: dict[str, Any]) -> None:
+def _set_builtin_strategy_config(strategy_id: str, config: dict[str, Any], *, user_id: str = "local-development") -> None:
     if strategy_id not in STRATEGIES:
         raise ValueError(f"unknown strategy: {strategy_id}")
 
     normalized = dict(config or {})
-    existing = dict(_builtin_strategy_configs.get(strategy_id, {}) or {})
+    if user_id == "local-development":
+        existing = dict(_builtin_strategy_configs.get(strategy_id, {}) or {})
+        existing.update(normalized)
+        _builtin_strategy_configs[strategy_id] = existing
+        return
+
+    key = (user_id, strategy_id)
+    existing = dict(_user_builtin_strategy_configs.get(key, {}) or {})
     existing.update(normalized)
-    _builtin_strategy_configs[strategy_id] = existing
+    _user_builtin_strategy_configs[key] = existing
 
 
-def _get_builtin_strategy_config(strategy_id: str) -> dict[str, Any]:
+def _get_builtin_strategy_config(strategy_id: str, *, user_id: str = "local-development") -> dict[str, Any]:
+    if user_id == "local-development":
+        return dict(_builtin_strategy_configs.get(strategy_id, {}) or {})
+    key = (user_id, strategy_id)
+    override = _user_builtin_strategy_configs.get(key, {})
+    if override:
+        return dict(override)
     return dict(_builtin_strategy_configs.get(strategy_id, {}) or {})
 
 
-def _apply_builtin_strategy_config(strategy_id: str, decision: Decision) -> Decision:
-    config = _get_builtin_strategy_config(strategy_id)
+def _apply_builtin_strategy_config(strategy_id: str, decision: Decision, *, user_id: str = "local-development") -> Decision:
+    config = _get_builtin_strategy_config(strategy_id, user_id=user_id)
     if not config:
         return decision
 
@@ -250,7 +264,7 @@ def _apply_builtin_strategy_config(strategy_id: str, decision: Decision) -> Deci
     )
 
 
-def configure_builtin_strategy(strategy_id: str, config: dict[str, Any]) -> None:
+def configure_builtin_strategy(strategy_id: str, config: dict[str, Any], *, user_id: str = "local-development") -> None:
     if strategy_id not in STRATEGIES:
         raise ValueError(f"unknown strategy: {strategy_id}")
 
@@ -303,7 +317,7 @@ def configure_builtin_strategy(strategy_id: str, config: dict[str, Any]) -> None
             raise ValueError("strategy market must be spot or futures")
         normalized["market"] = market
 
-    _set_builtin_strategy_config(strategy_id, normalized)
+    _set_builtin_strategy_config(strategy_id, normalized, user_id=user_id)
 
 
 def _coerce_price(value: Any) -> float:
@@ -978,7 +992,7 @@ def build_signal_from_ticker(
     if strategy_function is None:
         raise ValueError(f"unknown strategy: {selected_strategy_id}")
     decision = strategy_function(ticker)
-    decision = _apply_builtin_strategy_config(selected_strategy_id, decision)
+    decision = _apply_builtin_strategy_config(selected_strategy_id, decision, user_id=user_id)
     if decision.market is None:
         decision = replace(
             decision,
