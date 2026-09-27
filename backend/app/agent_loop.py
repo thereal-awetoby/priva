@@ -49,6 +49,65 @@ def _record_cycle(entry: dict[str, Any]) -> None:
     del _recent_cycles[:-1000]
 
 
+def _extract_gemini_json(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        if "verdict" in payload and isinstance(payload, dict):
+            return payload
+        candidates = payload.get("candidates") or []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content") or {}
+            for part in content.get("parts") or []:
+                if not isinstance(part, dict):
+                    continue
+                text = str(part.get("text") or "").strip()
+                if not text:
+                    continue
+                cleaned = text
+                if cleaned.startswith("```"):
+                    cleaned = cleaned.strip("`")
+                    if cleaned.lower().startswith("json"):
+                        cleaned = cleaned[4:].lstrip()
+                    cleaned = cleaned.strip()
+                if cleaned.startswith("{") or cleaned.startswith("["):
+                    try:
+                        parsed = json.loads(cleaned)
+                    except ValueError:
+                        if "{" in cleaned and "}" in cleaned:
+                            start = cleaned.index("{")
+                            end = cleaned.rindex("}") + 1
+                            try:
+                                parsed = json.loads(cleaned[start:end])
+                            except ValueError:
+                                continue
+                        else:
+                            continue
+                    if isinstance(parsed, dict):
+                        return parsed
+    if isinstance(payload, str):
+        text = payload.strip()
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.lower().startswith("json"):
+                text = text[4:].lstrip()
+        if text.startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                if "{" in text and "}" in text:
+                    start = text.index("{")
+                    end = text.rindex("}") + 1
+                    try:
+                        return json.loads(text[start:end])
+                    except ValueError:
+                        return {}
+                return {}
+            if isinstance(parsed, dict):
+                return parsed
+    return {}
+
+
 def _model_veto_gate(symbol: str, decision: dict[str, Any]) -> dict[str, Any]:
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -91,14 +150,15 @@ def _model_veto_gate(symbol: str, decision: dict[str, Any]) -> dict[str, Any]:
     except ValueError:
         return {"allowed": False, "decision": "VETO", "reason": "gemini_invalid_json"}
 
-    verdict = str((payload or {}).get("verdict", "")).upper()
+    parsed = _extract_gemini_json(payload)
+    verdict = str((parsed or {}).get("verdict", "")).upper()
     if verdict not in {"ALLOW", "VETO"}:
         return {"allowed": False, "decision": "VETO", "reason": "gemini_missing_verdict"}
 
     if verdict == "ALLOW":
-        return {"allowed": True, "decision": "ALLOW", "reason": str((payload or {}).get("reason") or "allow")}
+        return {"allowed": True, "decision": "ALLOW", "reason": str((parsed or {}).get("reason") or "allow")}
 
-    return {"allowed": False, "decision": "VETO", "reason": str((payload or {}).get("reason") or "gemini_veto")}
+    return {"allowed": False, "decision": "VETO", "reason": str((parsed or {}).get("reason") or "gemini_veto")}
 
 
 def recent_cycles() -> list[dict[str, Any]]:

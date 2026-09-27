@@ -112,6 +112,45 @@ def test_agent_cycle_blocks_when_model_vetoes_trade(monkeypatch):
     assert result["reason"] == "gemini_veto"
 
 
+def test_agent_cycle_parses_nested_gemini_verdict(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": '{"verdict": "VETO", "reason": "risk is too high"}'
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+
+    monkeypatch.setattr("app.agent_loop.requests.post", lambda *args, **kwargs: FakeResponse())
+
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=FakeExecutionClient(),
+        )
+    )
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "gemini_veto"
+    assert result["model_gate"]["decision"] == "VETO"
+    assert result["model_gate"]["reason"] == "risk is too high"
+
+
 def test_agent_cycle_records_strategy_mode():
     result = asyncio.run(
         run_cycle(
