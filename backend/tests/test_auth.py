@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from fastapi.testclient import TestClient
 
 from app.auth import AuthenticatedUser, SupabaseAuth, UserCredentialVault
@@ -147,6 +149,37 @@ def test_user_risk_settings_allowlist_strips_supabase_metadata():
     assert engine.max_position_size == 1200
     assert engine.max_daily_loss == 600
     assert engine.enabled is True
+
+
+def test_risk_engine_kwargs_are_strictly_derived_from_constructor_signature():
+    from app import main
+    from app.risk_engine import RiskEngine
+
+    row = {
+        "user_id": "user-a",
+        "market": "futures",
+        "take_profit_pct": 5,
+        "stop_loss_pct": 2,
+        "close_on_signal_violation": True,
+        "execution_profiles": ["autonomous:futures"],
+        "enabled": False,
+        "updated_at": "2026-09-27T00:00:00Z",
+        "strategy_id": "mean_reversion",
+        "strategy_config": {"threshold_pct": 2},
+        "symbols": ["AAPLUSDT", "TSLAUSDT"],
+        "strategy_by_symbol": {"AAPLUSDT": "mean_reversion"},
+        "max_position_size": 9001,
+        "max_daily_loss": 321,
+        "max_leverage": 4,
+        "risk_enabled": True,
+        "allowed_symbols": ["AAPLUSDT", "TSLAUSDT"],
+        "pnl_reset_at": None,
+    }
+
+    resolved = main._normalize_user_risk_settings(row)
+    assert set(resolved) <= set(inspect.signature(RiskEngine.__init__).parameters) - {"self"}
+    assert "risk_enabled" not in resolved
+    RiskEngine(**resolved)
 
 
 def test_builtin_strategy_configs_are_isolated_by_user():

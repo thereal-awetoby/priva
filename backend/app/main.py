@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 from datetime import datetime, timezone
@@ -80,12 +81,16 @@ def _normalize_user_risk_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return settings
 
-    allowed_keys = {"max_position_size", "max_daily_loss", "max_leverage", "enabled", "allowed_symbols", "risk_enabled"}
+    risk_signature = inspect.signature(RiskEngine.__init__).parameters
+    allowed_keys = set(risk_signature) - {"self"}
     filtered = {key: value for key, value in raw.items() if key in allowed_keys}
-    if "risk_enabled" in filtered and "enabled" not in filtered:
-        filtered["enabled"] = bool(filtered["risk_enabled"])
+
+    if "risk_enabled" in raw and "enabled" not in filtered:
+        filtered["enabled"] = bool(raw["risk_enabled"])
     if "enabled" in filtered and not isinstance(filtered["enabled"], bool):
         filtered["enabled"] = bool(filtered["enabled"])
+    if "risk_enabled" in filtered:
+        del filtered["risk_enabled"]
 
     settings.update(filtered)
     if "allowed_symbols" in settings and isinstance(settings["allowed_symbols"], list):
