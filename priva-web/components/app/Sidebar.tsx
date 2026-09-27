@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import { apiGet, apiPost } from "@/lib/api";
+import { createClient } from "@/lib/supabase/client";
 
 type SidebarProps = {
   activeTab: string;
@@ -9,6 +11,8 @@ type SidebarProps = {
 };
 
 const WORKSPACE_NAME_KEY = "priva_workspace_name";
+const CONNECTION_CHECK_INTERVAL_MS = 15_000;
+const CONNECTION_CHECK_TIMEOUT_MS = 10_000;
 
 const navItems = [
   {
@@ -75,20 +79,102 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
   const [workspaceName, setWorkspaceName] = useState("Unknown");
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
+  const connectionCheckVersionRef = useRef(0);
+  const workspaceUserIdRef = useRef<string | null>(null);
+  const editingWorkspaceUserIdRef = useRef<string | null>(null);
 
-    useEffect(() => {
-      apiGet<{ status?: string; position_mode?: string }>("/debug/bitget-account")
-      .then((payload) => setConnection(payload))
-      .catch(() => setConnection({ status: "unavailable" }));
+  useEffect(() => {
+    let active = true;
+    let pendingController: AbortController | null = null;
+
+    const checkConnection = async () => {
+      const checkVersion = ++connectionCheckVersionRef.current;
+      const controller = new AbortController();
+      pendingController = controller;
+      const timeout = window.setTimeout(() => controller.abort(), CONNECTION_CHECK_TIMEOUT_MS);
+
+      try {
+        const payload = await apiGet<{ status?: string }>("/account/balance", { signal: controller.signal });
+        if (!active || checkVersion !== connectionCheckVersionRef.current) return;
+        if (payload.status === "ok" || payload.status === "not_configured") {
+          setConnection({ status: payload.status });
+        } else {
+          setConnection({ status: "unavailable" });
+        }
+      } catch {
+        if (active && checkVersion === connectionCheckVersionRef.current) {
+          setConnection({ status: "unavailable" });
+        }
+      } finally {
+        window.clearTimeout(timeout);
+        if (pendingController === controller) pendingController = null;
+      }
+    };
+
+    void checkConnection();
+    const interval = window.setInterval(() => void checkConnection(), CONNECTION_CHECK_INTERVAL_MS);
+    return () => {
+      active = false;
+      connectionCheckVersionRef.current += 1;
+      window.clearInterval(interval);
+      pendingController?.abort();
+    };
   }, []);
 
   useEffect(() => {
+    let active = true;
+    let authEventRevision = 0;
+
+    const applySession = (session: Session | null, force = false) => {
+      const user = session?.user ?? null;
+      const userId = user?.id ?? null;
+      if (!force && userId === workspaceUserIdRef.current) return;
+
+      workspaceUserIdRef.current = userId;
+      editingWorkspaceUserIdRef.current = null;
+      setIsEditingName(false);
+      setNameInput("");
+      setWorkspaceName("Unknown");
+      if (!user) return;
+
+      const metadataName = [
+        user.user_metadata?.full_name,
+        user.user_metadata?.name,
+        user.user_metadata?.display_name,
+      ].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim();
+      const accountName = metadataName || user.email?.split("@")[0] || "Unknown";
+
+      try {
+        const savedName = localStorage.getItem(`${WORKSPACE_NAME_KEY}:${userId}`);
+        setWorkspaceName(savedName?.trim() || accountName);
+      } catch {
+        setWorkspaceName(accountName);
+      }
+    };
+
     try {
-      const stored = localStorage.getItem(WORKSPACE_NAME_KEY);
-      if (stored) setWorkspaceName(stored);
+      localStorage.removeItem(WORKSPACE_NAME_KEY);
     } catch {
-      // localStorage unavailable — name just stays "Unknown"
+      // localStorage unavailable — account metadata remains the fallback
     }
+
+    const supabase = createClient();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      authEventRevision += 1;
+      applySession(session, event === "USER_UPDATED");
+    });
+    const initialAuthEventRevision = authEventRevision;
+
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      if (active && authEventRevision === initialAuthEventRevision) applySession(session);
+    }).catch(() => {
+      if (active && authEventRevision === initialAuthEventRevision) applySession(null);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const connected = connection?.status === "ok";
@@ -109,6 +195,7 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
       if (payload.status !== "connected") {
         throw new Error(payload.message ?? "Bitget credentials could not be verified");
       }
+      connectionCheckVersionRef.current += 1;
       setConnection({ status: "ok", position_mode: payload.position_mode });
       setCredentials({ apiKey: "", apiSecret: "", passphrase: "" });
       setIsConnectOpen(false);
@@ -123,6 +210,7 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
     setDisconnecting(true);
     try {
       await apiPost("/connection/bitget/disconnect", {});
+      connectionCheckVersionRef.current += 1;
       setConnection({ status: "not_configured" });
       setIsConfirmingDisconnect(false);
       setIsConnectOpen(false);
@@ -132,12 +220,17 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
   };
 
   const saveName = () => {
+    const userId = workspaceUserIdRef.current;
+    const editingUserId = editingWorkspaceUserIdRef.current;
+    editingWorkspaceUserIdRef.current = null;
+    setIsEditingName(false);
+    if (editingUserId !== userId) return;
+
     const trimmed = nameInput.trim();
     const finalName = trimmed === "" ? "Unknown" : trimmed;
     setWorkspaceName(finalName);
-    setIsEditingName(false);
     try {
-      localStorage.setItem(WORKSPACE_NAME_KEY, finalName);
+      if (userId) localStorage.setItem(`${WORKSPACE_NAME_KEY}:${userId}`, finalName);
     } catch {
       // localStorage unavailable — won't persist across reloads, that's fine
     }
@@ -189,7 +282,9 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
                 <div className="connection-name">Bitget paper</div>
                 <div className="connection-sub">
                   {connected
-                    ? `${connection?.position_mode ?? "configured"} mode`
+                    ? connection?.position_mode
+                      ? `${connection.position_mode} mode`
+                      : "Connected"
                     : connection?.status === "not_configured"
                       ? "Not configured"
                       : "Unavailable"}
@@ -212,7 +307,10 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
                             onBlur={saveName}
                             onKeyDown={(e) => {
                               if (e.key === "Enter") saveName();
-                              if (e.key === "Escape") setIsEditingName(false);
+                              if (e.key === "Escape") {
+                                editingWorkspaceUserIdRef.current = null;
+                                setIsEditingName(false);
+                              }
                             }}
                             autoFocus
                           />
@@ -225,6 +323,7 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
                         className="profile-edit-btn"
                         type="button"
                         onClick={() => {
+                          editingWorkspaceUserIdRef.current = workspaceUserIdRef.current;
                           setNameInput(workspaceName === "Unknown" ? "" : workspaceName);
                           setIsEditingName(true);
                         }}

@@ -11,9 +11,10 @@ async function authHeaders(): Promise<HeadersInit> {
   return session ? { Authorization: `Bearer ${session.access_token}` } : {};
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
+export async function apiGet<T>(path: string, options?: { signal?: AbortSignal }): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     headers: await authHeaders(),
+    signal: options?.signal,
   });
   if (!res.ok) {
     throw new Error(`GET ${path} failed: ${res.status}`);
