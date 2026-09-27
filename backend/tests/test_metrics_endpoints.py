@@ -6,6 +6,20 @@ from app.auth import AuthenticatedUser
 from app.balance_snapshots import fetch_combined_balance_snapshot
 
 
+def test_cors_allowed_origins_include_configured_vercel_domains(monkeypatch):
+    monkeypatch.setenv(
+        "CORS_ALLOWED_ORIGINS",
+        " https://priva.vercel.app/ , https://priva-preview.vercel.app ",
+    )
+
+    assert main._cors_allowed_origins() == [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://priva.vercel.app",
+        "https://priva-preview.vercel.app",
+    ]
+
+
 class EmptyExecutionClient:
     def fetch_futures_positions(self):
         return {"status": "ok", "positions": []}
