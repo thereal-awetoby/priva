@@ -40,7 +40,7 @@ MODE = "autonomous"
 _loop_task: asyncio.Task | None = None
 _stop_event = asyncio.Event()
 _recent_cycles: list[dict[str, Any]] = []
-_recent_balance_snapshots: list[dict[str, Any]] = []
+_recent_balance_snapshots: dict[str, list[dict[str, Any]]] = {}
 _profit_peaks: dict[tuple[str, str, str, float], float] = {}
 
 
@@ -165,8 +165,8 @@ def recent_cycles() -> list[dict[str, Any]]:
     return list(_recent_cycles)
 
 
-def recent_balance_snapshots() -> list[dict[str, Any]]:
-    return list(_recent_balance_snapshots)
+def recent_balance_snapshots(user_id: str) -> list[dict[str, Any]]:
+    return list(_recent_balance_snapshots.get(user_id, []))
 
 
 def _trailing_profit_exit_reason(
@@ -453,8 +453,10 @@ async def run_cycle(
                         session_id=getattr(cycle_logger, "session_id", None),
                     )
                     if snapshot is not None:
-                        _recent_balance_snapshots.append(snapshot)
-                        del _recent_balance_snapshots[:-1000]
+                        user_id = getattr(cycle_logger, "user_id", None) or "local-development"
+                        user_snapshots = _recent_balance_snapshots.setdefault(user_id, [])
+                        user_snapshots.append(snapshot)
+                        del user_snapshots[:-1000]
                         log_snapshot(snapshot)
                 except Exception as exc:
                     logger.warning("Balance snapshot failed: %s", exc)

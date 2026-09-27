@@ -38,6 +38,14 @@ def test_process_market_cycle_generates_live_decision_and_trade():
     assert result["log_entry"]["type"] == "trade"
 
 
+def test_recent_balance_snapshots_are_scoped_by_user():
+    agent_loop_module._recent_balance_snapshots.clear()
+    agent_loop_module._recent_balance_snapshots["first-user"] = [{"balance": 1985.28}]
+    agent_loop_module._recent_balance_snapshots["new-user"] = [{"balance": 0.0}]
+
+    assert agent_loop_module.recent_balance_snapshots("new-user") == [{"balance": 0.0}]
+
+
 def test_agent_cycle_blocks_unsupported_symbol_before_market_fetch():
     class UnexpectedMarketService:
         def fetch_spot_ticker(self, symbol):

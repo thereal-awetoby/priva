@@ -20,6 +20,15 @@ def test_cors_allowed_origins_include_configured_vercel_domains(monkeypatch):
     ]
 
 
+def test_cycle_logger_scopes_authenticated_users_when_auth_is_optional(monkeypatch):
+    monkeypatch.setattr(main.supabase_auth, "required", False)
+
+    logger = main.cycle_logger_for(AuthenticatedUser("new-user-id"))
+
+    assert logger is not main.cycle_logger
+    assert logger.user_id == "new-user-id"
+
+
 class EmptyExecutionClient:
     def fetch_futures_positions(self):
         return {"status": "ok", "positions": []}
@@ -242,16 +251,14 @@ def test_account_balance_reports_daily_change_percent(monkeypatch):
 
 
 def test_account_balance_history_exposes_equity_curve_summary(monkeypatch):
-    main._balance_history.clear()
     monkeypatch.setattr(main.cycle_logger, "fetch_balance_snapshots", lambda **kwargs: [])
-    monkeypatch.setattr(main.agent_loop, "recent_balance_snapshots", lambda: [])
-    main._balance_history.extend(
-        [
-            {"timestamp": "2026-09-20T00:00:00Z", "balance": 1000.0, "equity": 1000.0},
-            {"timestamp": "2026-09-23T13:42:00Z", "balance": 1000.0, "equity": 1000.0},
-            {"timestamp": "2026-09-23T13:52:00Z", "balance": 1100.0, "equity": 1100.0},
-        ]
-    )
+    monkeypatch.setattr(main.agent_loop, "recent_balance_snapshots", lambda user_id=None: [])
+    main._balance_history.clear()
+    main._balance_history["local-development"] = [
+        {"timestamp": "2026-09-20T00:00:00Z", "balance": 1000.0, "equity": 1000.0},
+        {"timestamp": "2026-09-23T13:42:00Z", "balance": 1000.0, "equity": 1000.0},
+        {"timestamp": "2026-09-23T13:52:00Z", "balance": 1100.0, "equity": 1100.0},
+    ]
 
     result = main.account_balance_history()
 
@@ -260,6 +267,24 @@ def test_account_balance_history_exposes_equity_curve_summary(monkeypatch):
     assert result["latest_balance"] == 1100.0
     assert result["point_count"] == 2
     assert result["points"][0]["timestamp"] == "2026-09-23T13:42:00Z"
+
+
+def test_account_balance_history_excludes_other_users_runtime_snapshots(monkeypatch):
+    monkeypatch.setattr(main.cycle_logger, "fetch_balance_snapshots", lambda **kwargs: [])
+    monkeypatch.setattr(main, "cycle_logger_for", lambda user: main.cycle_logger)
+    monkeypatch.setattr(main.agent_loop, "recent_balance_snapshots", lambda user_id=None: [])
+    main._balance_history.clear()
+    main._balance_history["first-user"] = [
+        {"timestamp": "2026-09-26T14:00:00+00:00", "balance": 1985.28, "equity": 1985.28}
+    ]
+    main._balance_history["new-user"] = [
+        {"timestamp": "2026-09-26T14:01:00+00:00", "balance": 0.0, "equity": 0.0}
+    ]
+
+    result = main.account_balance_history(AuthenticatedUser("new-user"))
+
+    assert result["point_count"] == 1
+    assert result["latest_balance"] == 0.0
 
 
 def test_account_balance_combines_futures_and_spot_equity(monkeypatch):

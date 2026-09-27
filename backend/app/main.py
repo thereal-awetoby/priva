@@ -69,7 +69,7 @@ risk_engine = RiskEngine()
 paper_execution_client = BitgetPaperExecutionClient()
 cycle_logger = SupabaseCycleLogger()
 _daily_balance_baselines: dict[str, tuple[str, float]] = {}
-_balance_history: list[dict[str, Any]] = []
+_balance_history: dict[str, list[dict[str, Any]]] = {}
 EFFECTIVE_BALANCE_HISTORY_START = datetime(2026, 9, 23, 13, 42, tzinfo=timezone.utc)
 POSITION_LEDGER_START = datetime(2026, 9, 23, tzinfo=timezone.utc)
 
@@ -194,7 +194,7 @@ def execution_client_for(user: AuthenticatedUser) -> BitgetPaperExecutionClient:
 
 
 def cycle_logger_for(user: AuthenticatedUser) -> SupabaseCycleLogger:
-    if supabase_auth.required:
+    if user.id != "local-development":
         return SupabaseCycleLogger(user_id=user.id)
     return cycle_logger
 
@@ -469,11 +469,16 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
         session_id=None,
         created_after=today,
     )
-    starting_balance = (
-        float(today_points[0].get("balance", today_points[0].get("equity", 0)) or 0)
-        if today_points
-        else current_equity
-    )
+    if today_points:
+        starting_balance = float(today_points[0].get("balance", today_points[0].get("equity", 0)) or 0)
+        _daily_balance_baselines[user.id] = (today, starting_balance)
+    else:
+        baseline = _daily_balance_baselines.get(user.id)
+        if baseline and baseline[0] == today:
+            starting_balance = baseline[1]
+        else:
+            starting_balance = current_equity
+            _daily_balance_baselines[user.id] = (today, starting_balance)
     first_futures_point = next((point for point in today_points if float(point.get("futures_equity") or 0) > 0), None)
     first_spot_point = next((point for point in today_points if float(point.get("spot_equity") or 0) > 0), None)
     starting_futures_equity = float(first_futures_point["futures_equity"]) if first_futures_point else futures_equity
@@ -507,8 +512,9 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
             snapshot["futures_equity"],
             snapshot["spot_equity"],
         )
-    _balance_history.append(snapshot)
-    del _balance_history[:-1000]
+    user_history = _balance_history.setdefault(user.id, [])
+    user_history.append(snapshot)
+    del user_history[:-1000]
     user_logger.log_balance_snapshot(snapshot)
 
     return {
@@ -539,13 +545,14 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
 
 @app.get("/account/balance-history")
 def account_balance_history(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user = normalize_user(user)
     user_logger = cycle_logger_for(user)
     persisted = user_logger.fetch_balance_snapshots(
         created_after=EFFECTIVE_BALANCE_HISTORY_START.isoformat(),
     )
     runtime_points = [
         point
-        for point in agent_loop.recent_balance_snapshots() + list(_balance_history)
+        for point in agent_loop.recent_balance_snapshots(user.id) + _balance_history.get(user.id, [])
         if point.get("timestamp") or point.get("created_at")
     ]
     runtime_points = [
