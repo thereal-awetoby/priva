@@ -219,8 +219,9 @@ def cycles_after_reset(cycles: list[dict[str, Any]], user: AuthenticatedUser) ->
     return filtered
 
 
-def restore_custom_strategies(user_id: str) -> None:
-    for record in SupabaseCycleLogger(user_id=user_id).fetch_custom_strategies(user_id):
+def restore_custom_strategies(user_id: str) -> list[dict[str, Any]]:
+    records = SupabaseCycleLogger(user_id=user_id).fetch_custom_strategies(user_id)
+    for record in records:
         strategy_id = record.get("strategy_id")
         definition = record.get("definition")
         if not strategy_id or not isinstance(definition, dict):
@@ -228,9 +229,30 @@ def restore_custom_strategies(user_id: str) -> None:
         register_custom_strategy(
             str(strategy_id),
             definition,
+            user_id=user_id,
             name=str(record.get("name") or "").strip() or None,
             description=str(record.get("description") or "").strip() or None,
         )
+    return records
+
+
+def _owned_custom_strategy_ids(user_id: str, records: list[dict[str, Any]]) -> set[str]:
+    strategy_ids = {
+        str(record.get("strategy_id"))
+        for record in records
+        if record.get("strategy_id") and isinstance(record.get("definition"), dict)
+    }
+    if not SupabaseCycleLogger(user_id=user_id).configured:
+        strategy_ids.update(
+            strategy_id
+            for strategy_id, definition in list_strategy_catalog(user_id).items()
+            if definition.get("type") == "structured"
+        )
+    return strategy_ids
+
+
+def _strategy_is_available_to_user(strategy_id: str, owned_custom_ids: set[str]) -> bool:
+    return strategy_id in STRATEGIES or strategy_id in owned_custom_ids
 
 
 def process_market_cycle(
@@ -662,8 +684,17 @@ def update_user_execution_settings(payload: UserExecutionSettingsRequest, user: 
 @app.post("/user/agent-settings")
 def update_user_agent_settings(payload: UserAgentSettingsRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     settings = payload.model_dump()
-    if settings["strategy_id"] and settings["strategy_id"] not in STRATEGIES:
+    custom_records = restore_custom_strategies(user.id)
+    owned_custom_ids = _owned_custom_strategy_ids(user.id, custom_records)
+    if settings["strategy_id"] and not _strategy_is_available_to_user(
+        settings["strategy_id"], owned_custom_ids
+    ):
         return {"status": "rejected", "message": "unknown strategy"}
+    if any(
+        not _strategy_is_available_to_user(strategy_id, owned_custom_ids)
+        for strategy_id in (settings["strategy_by_symbol"] or {}).values()
+    ):
+        return {"status": "rejected", "message": "strategy_by_symbol contains an unknown strategy"}
     settings["symbols"] = [str(symbol).upper() for symbol in (settings["symbols"] or ["AAPLUSDT", "TSLAUSDT"])]
     logger = SupabaseCycleLogger(user_id=user.id)
     persistence = logger.save_user_settings(user.id, settings)
@@ -1470,14 +1501,22 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
 
 @app.get("/strategies")
 def strategies(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
-    restore_custom_strategies(user.id)
+    custom_records = restore_custom_strategies(user.id)
+    owned_custom_ids = _owned_custom_strategy_ids(user.id, custom_records)
     runtime = user_runtime_registry.get(user.id)
-    active_strategy_id = runtime.strategy_id if runtime else get_active_strategy_id()
-    if runtime is None and supabase_auth.required:
+    if runtime:
+        active_strategy_id = runtime.strategy_id
+    elif user.id != "local-development":
+        active_strategy_id = SupabaseCycleLogger(user_id=user.id).fetch_user_settings(user.id).get("strategy_id")
+    else:
+        active_strategy_id = get_active_strategy_id()
+    if runtime is None and user.id != "local-development":
         settings = SupabaseCycleLogger(user_id=user.id).fetch_user_settings(user.id)
         active_strategy_id = settings.get("strategy_id") or active_strategy_id
     catalog = []
-    for strategy_id, definition in list_strategy_catalog().items():
+    for strategy_id, definition in list_strategy_catalog(user.id).items():
+        if definition.get("type") == "structured" and strategy_id not in owned_custom_ids:
+            continue
         catalog.append(
             {
                 **definition,
@@ -1491,11 +1530,12 @@ def strategies(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any
 def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | None = None, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     if not isinstance(user, AuthenticatedUser):
         user = AuthenticatedUser("local-development")
-    restore_custom_strategies(user.id)
+    custom_records = restore_custom_strategies(user.id)
+    owned_custom_ids = _owned_custom_strategy_ids(user.id, custom_records)
     symbols = None
     strategy_map = payload.strategy_by_symbol if payload is not None else None
     strategy_config = payload.strategy_config if payload is not None else None
-    if strategy_id not in STRATEGIES:
+    if not _strategy_is_available_to_user(strategy_id, owned_custom_ids):
         return {"strategy_id": strategy_id, "status": "rejected", "message": "unknown strategy"}
     if strategy_config is not None:
         try:
@@ -1512,11 +1552,13 @@ def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | Non
                 "message": "symbols must include AAPLUSDT and/or TSLAUSDT only",
             }
 
-    if supabase_auth.required:
+    if user.id != "local-development":
         normalized_map = {}
         for symbol, mapped_strategy in (strategy_map or {}).items():
             normalized_symbol = str(symbol).strip().upper()
-            if normalized_symbol not in {"AAPLUSDT", "TSLAUSDT"} or mapped_strategy not in STRATEGIES:
+            if normalized_symbol not in {"AAPLUSDT", "TSLAUSDT"} or not _strategy_is_available_to_user(
+                mapped_strategy, owned_custom_ids
+            ):
                 return {"strategy_id": strategy_id, "status": "rejected", "message": "invalid per-symbol strategy assignment"}
             normalized_map[normalized_symbol] = mapped_strategy
         settings: dict[str, Any] = {"strategy_id": strategy_id}
@@ -1558,7 +1600,7 @@ def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | Non
                 "message": "strategy_by_symbol supports AAPLUSDT and TSLAUSDT only",
             }
         try:
-            normalized_map = configure_symbol_strategies(strategy_map)
+            normalized_map = configure_symbol_strategies(strategy_map, user_id=user.id)
         except ValueError as exc:
             return {"strategy_id": strategy_id, "status": "rejected", "message": str(exc)}
         if symbols is None:
@@ -1589,13 +1631,19 @@ def activate_strategy(strategy_id: str, payload: StrategyActivationRequest | Non
 def delete_strategy(strategy_id: str, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     if not isinstance(user, AuthenticatedUser):
         user = AuthenticatedUser("local-development")
-    restore_custom_strategies(user.id)
-    definition = list_strategy_catalog().get(strategy_id)
-    if not definition or definition.get("type") != "structured":
+    custom_records = restore_custom_strategies(user.id)
+    owned_custom_ids = _owned_custom_strategy_ids(user.id, custom_records)
+    definition = list_strategy_catalog(user.id).get(strategy_id)
+    if strategy_id not in owned_custom_ids or not definition or definition.get("type") != "structured":
         return {"strategy_id": strategy_id, "status": "rejected", "message": "only custom strategies can be deleted"}
 
     runtime = user_runtime_registry.get(user.id)
-    active_strategy_id = runtime.strategy_id if runtime else get_active_strategy_id()
+    if runtime:
+        active_strategy_id = runtime.strategy_id
+    elif user.id != "local-development":
+        active_strategy_id = SupabaseCycleLogger(user_id=user.id).fetch_user_settings(user.id).get("strategy_id")
+    else:
+        active_strategy_id = get_active_strategy_id()
     if active_strategy_id == strategy_id:
         return {
             "strategy_id": strategy_id,
@@ -1612,14 +1660,20 @@ def delete_strategy(strategy_id: str, user: AuthenticatedUser = Depends(current_
             "message": "custom strategy could not be deleted",
         }
 
-    unregister_custom_strategy(strategy_id)
+    unregister_custom_strategy(strategy_id, user_id=user.id)
     return {"strategy_id": strategy_id, "status": "deleted", "persistence": persistence["status"]}
 
 
 @app.post("/strategies/{strategy_id}/backtest")
-def backtest_strategy_endpoint(strategy_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def backtest_strategy_endpoint(
+    strategy_id: str,
+    payload: dict[str, Any] | None = None,
+    user: AuthenticatedUser = Depends(current_user),
+) -> dict[str, Any]:
     payload = payload or {}
-    if strategy_id not in STRATEGIES:
+    custom_records = restore_custom_strategies(user.id)
+    owned_custom_ids = _owned_custom_strategy_ids(user.id, custom_records)
+    if not _strategy_is_available_to_user(strategy_id, owned_custom_ids):
         return {"strategy_id": strategy_id, "status": "rejected", "message": "unknown strategy"}
 
     candles = payload.get("candles", [])
@@ -1628,7 +1682,12 @@ def backtest_strategy_endpoint(strategy_id: str, payload: dict[str, Any] | None 
 
     try:
         initial_capital = float(payload.get("initial_capital", 10000.0))
-        return backtest_strategy(strategy_id, candles, initial_capital=initial_capital)
+        return backtest_strategy(
+            strategy_id,
+            candles,
+            initial_capital=initial_capital,
+            user_id=user.id,
+        )
     except ValueError as exc:
         return {"strategy_id": strategy_id, "status": "rejected", "message": str(exc)}
 
@@ -1664,7 +1723,13 @@ def parse_strategy(payload: dict[str, Any], user: AuthenticatedUser = Depends(cu
         )
         name = str(payload.get("name") or "").strip() or f"Custom {parsed['action'].upper()} on {parsed['comparison'].upper()}"
         description = str(payload.get("description") or "").strip() or None
-        register_custom_strategy(strategy_id, parsed, name=name, description=description)
+        register_custom_strategy(
+            strategy_id,
+            parsed,
+            user_id=user.id,
+            name=name,
+            description=description,
+        )
         persistence = SupabaseCycleLogger(user_id=user.id).save_custom_strategy(
             user.id, strategy_id, parsed, name, description
         )

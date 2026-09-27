@@ -272,6 +272,9 @@ tables and adds `user_id` to `agent_cycles`. Custom strategy definitions,
 names, and descriptions are restored from `custom_strategies` after a Render
 restart. The backend uses the service-role key server-side; encrypted
 credentials must never be exposed through client policies.
+For existing deployments, also run
+[`add_custom_strategies_owner_policy.sql`](add_custom_strategies_owner_policy.sql)
+to allow authenticated users to access only their own custom strategy rows.
 
 The backend uses the singleton row `id = 'global'`. It loads that row at
 startup and upserts it when `/strategies/{strategy_id}/activate` succeeds.

@@ -430,6 +430,7 @@ async def run_cycle(
     stop_loss_pct: float | None = None,
     close_on_signal_violation: bool | None = None,
     mode: str | None = None,
+    user_id: str = "local-development",
 ) -> dict[str, Any]:
     def persist(result: dict[str, Any]) -> dict[str, Any]:
         configured_market = market_type or MARKET_TYPE
@@ -494,7 +495,11 @@ async def run_cycle(
                     ticker.update(gap_context)
                 else:
                     ticker["status"] = "fallback"
-        decision = build_signal_from_ticker(ticker, strategy_id=selected_strategy) if selected_strategy else build_signal_from_ticker(ticker)
+        decision = build_signal_from_ticker(
+            ticker,
+            strategy_id=selected_strategy,
+            user_id=user_id,
+        )
         decision.update({"symbol": symbol.upper(), "market_status": ticker.get("status", "unknown")})
 
         if ticker.get("status") != "live":

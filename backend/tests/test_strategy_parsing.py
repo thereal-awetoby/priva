@@ -10,6 +10,8 @@ import pytest
 def isolated_strategy_state():
     original_strategies = dict(strategy_module.STRATEGIES)
     original_catalog = dict(strategy_module._registered_strategy_catalog)
+    original_custom_functions = dict(strategy_module._custom_strategy_functions)
+    original_custom_catalog = dict(strategy_module._custom_strategy_catalog)
     original_configs = {key: dict(value) for key, value in strategy_module._builtin_strategy_configs.items()}
     original_symbols = dict(strategy_module._symbol_strategy_ids)
     original_active = strategy_module._active_strategy_id
@@ -18,6 +20,10 @@ def isolated_strategy_state():
     strategy_module.STRATEGIES.update(original_strategies)
     strategy_module._registered_strategy_catalog.clear()
     strategy_module._registered_strategy_catalog.update(original_catalog)
+    strategy_module._custom_strategy_functions.clear()
+    strategy_module._custom_strategy_functions.update(original_custom_functions)
+    strategy_module._custom_strategy_catalog.clear()
+    strategy_module._custom_strategy_catalog.update(original_custom_catalog)
     strategy_module._builtin_strategy_configs.clear()
     strategy_module._builtin_strategy_configs.update({key: dict(value) for key, value in original_configs.items()})
     strategy_module._symbol_strategy_ids.clear()
@@ -507,13 +513,26 @@ def test_strategy_catalog_uses_authenticated_runtime_active_strategy(monkeypatch
             "comparison": "open",
             "threshold_pct": 0.1,
         },
+        user_id="user-1",
         name="Charlie Bear",
     )
 
     class Runtime:
         strategy_id = custom_id
 
-    monkeypatch.setattr(main, "restore_custom_strategies", lambda user_id: None)
+    monkeypatch.setattr(
+        main,
+        "restore_custom_strategies",
+        lambda user_id: [{
+            "strategy_id": custom_id,
+            "definition": {
+                "kind": "custom",
+                "action": "buy",
+                "comparison": "open",
+                "threshold_pct": 0.1,
+            },
+        }],
+    )
     monkeypatch.setattr(main.user_runtime_registry, "get", lambda user_id: Runtime())
 
     catalog = main.strategies(main.AuthenticatedUser("user-1"))["strategies"]
@@ -521,6 +540,90 @@ def test_strategy_catalog_uses_authenticated_runtime_active_strategy(monkeypatch
 
     assert statuses[custom_id] == "active"
     assert statuses["momentum_breakout"] == "inactive"
+
+
+def test_custom_strategy_registry_isolated_for_same_id_across_users():
+    strategy_id = "custom_shared_id"
+    register_custom_strategy(
+        strategy_id,
+        {"kind": "custom", "action": "buy", "comparison": "open", "threshold_pct": 1},
+        user_id="user-1",
+        name="User One Strategy",
+    )
+    register_custom_strategy(
+        strategy_id,
+        {"kind": "custom", "action": "sell", "comparison": "open", "threshold_pct": 1},
+        user_id="user-2",
+        name="User Two Strategy",
+    )
+
+    ticker = {"status": "live", "last_price": 102, "open_price": 100}
+    user_one = build_signal_from_ticker(ticker, strategy_id=strategy_id, user_id="user-1")
+    user_two = build_signal_from_ticker(ticker, strategy_id=strategy_id, user_id="user-2")
+
+    assert list_strategy_catalog("user-1")[strategy_id]["name"] == "User One Strategy"
+    assert list_strategy_catalog("user-2")[strategy_id]["name"] == "User Two Strategy"
+    assert user_one["action"] == "buy"
+    assert user_two["action"] == "hold"
+
+
+def test_strategy_endpoints_reject_other_users_custom_strategy(monkeypatch):
+    strategy_id = "custom_owned_by_user_two"
+    register_custom_strategy(
+        strategy_id,
+        {"kind": "custom", "action": "buy", "comparison": "open", "threshold_pct": 1},
+        user_id="user-2",
+        name="Private strategy",
+    )
+
+    class UnconfiguredLogger:
+        configured = False
+
+        def fetch_user_settings(self, user_id):
+            return {}
+
+    monkeypatch.setattr(main, "SupabaseCycleLogger", lambda **kwargs: UnconfiguredLogger())
+    monkeypatch.setattr(main, "restore_custom_strategies", lambda user_id: [])
+    user = main.AuthenticatedUser("user-1")
+
+    catalog = main.strategies(user)["strategies"]
+    assert strategy_id not in {item["id"] for item in catalog}
+    assert main.activate_strategy(strategy_id, user=user)["status"] == "rejected"
+    assert main.delete_strategy(strategy_id, user=user)["status"] == "rejected"
+    assert main.backtest_strategy_endpoint(
+        strategy_id,
+        {"candles": [{"open": 100, "close": 101}]},
+        user,
+    )["status"] == "rejected"
+    assert main.update_user_agent_settings(
+        main.UserAgentSettingsRequest(strategy_id=strategy_id),
+        user,
+    )["status"] == "rejected"
+
+
+def test_delete_strategy_preserves_users_active_custom_strategy(monkeypatch):
+    strategy_id = "custom_active_for_user_one"
+    definition = {"kind": "custom", "action": "buy", "comparison": "open", "threshold_pct": 1}
+    register_custom_strategy(strategy_id, definition, user_id="user-1", name="Active strategy")
+
+    class UnconfiguredLogger:
+        configured = False
+
+        def fetch_user_settings(self, user_id):
+            return {"strategy_id": strategy_id}
+
+    monkeypatch.setattr(main, "SupabaseCycleLogger", lambda **kwargs: UnconfiguredLogger())
+    monkeypatch.setattr(
+        main,
+        "restore_custom_strategies",
+        lambda user_id: [{"strategy_id": strategy_id, "definition": definition}],
+    )
+    monkeypatch.setattr(main.user_runtime_registry, "get", lambda user_id: None)
+
+    result = main.delete_strategy(strategy_id, user=main.AuthenticatedUser("user-1"))
+
+    assert result["status"] == "rejected"
+    assert result["message"] == "activate another strategy before deleting this one"
 
 
 def test_strategy_activation_rejects_unsupported_symbols_without_mutation(monkeypatch):

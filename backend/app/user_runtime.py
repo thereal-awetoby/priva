@@ -136,6 +136,7 @@ class UserRuntime:
                             stop_loss_pct=self.stop_loss_pct,
                             close_on_signal_violation=self.close_on_signal_violation,
                             mode=worker.mode,
+                            user_id=self.user_id,
                         )
                 worker.last_error = None
                 if isinstance(result, dict):
@@ -180,6 +181,7 @@ class UserRuntimeRegistry:
                 register_custom_strategy(
                     str(strategy_id),
                     definition,
+                    user_id=user_id,
                     name=str(record.get("name") or "").strip() or None,
                     description=str(record.get("description") or "").strip() or None,
                 )

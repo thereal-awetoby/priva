@@ -76,6 +76,14 @@ alter table public.custom_strategies enable row level security;
 alter table public.agent_cycles enable row level security;
 alter table public.balance_snapshots enable row level security;
 
+drop policy if exists custom_strategies_owner_all on public.custom_strategies;
+create policy custom_strategies_owner_all
+  on public.custom_strategies
+  for all
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
 create index if not exists agent_cycles_user_id_idx
   on public.agent_cycles (user_id);
 

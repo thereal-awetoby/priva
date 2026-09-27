@@ -201,6 +201,8 @@ STRATEGIES = {
 }
 
 _registered_strategy_catalog = dict(STRATEGY_CATALOG)
+_custom_strategy_functions: dict[tuple[str, str], Any] = {}
+_custom_strategy_catalog: dict[tuple[str, str], dict[str, Any]] = {}
 _active_strategy_id = "momentum_breakout"
 _builtin_strategy_configs: dict[str, dict[str, Any]] = {}
 _symbol_strategy_ids: dict[str, str] = {}
@@ -342,8 +344,15 @@ def _safe_std(values: list[float]) -> float:
     return sqrt(variance)
 
 
-def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_capital: float = 10000.0) -> dict[str, Any]:
-    if strategy_id not in STRATEGIES:
+def backtest_strategy(
+    strategy_id: str,
+    candles: list[dict[str, Any]],
+    initial_capital: float = 10000.0,
+    *,
+    user_id: str = "local-development",
+) -> dict[str, Any]:
+    strategy_function = _strategy_function(strategy_id, user_id)
+    if strategy_function is None:
         raise ValueError(f"unknown strategy: {strategy_id}")
     if strategy_id in {"overnight_gap", "pairs_trading"}:
         raise ValueError(f"{strategy_id} is not backtestable with single-symbol candles")
@@ -368,7 +377,7 @@ def backtest_strategy(strategy_id: str, candles: list[dict[str, Any]], initial_c
             continue
         last_valid_price = price
         ticker = _build_ticker_from_candle(candle)
-        decision = STRATEGIES[strategy_id](ticker)
+        decision = strategy_function(ticker)
         target_side = decision.action if decision.action in {"buy", "sell"} else None
 
         if target_side is None:
@@ -805,19 +814,29 @@ def get_active_strategy_id() -> str:
     return _active_strategy_id
 
 
-def activate_strategy(strategy_id: str) -> bool:
+def _strategy_function(strategy_id: str, user_id: str = "local-development") -> Any | None:
+    if strategy_id in STRATEGIES:
+        return STRATEGIES[strategy_id]
+    return _custom_strategy_functions.get((user_id, strategy_id))
+
+
+def activate_strategy(strategy_id: str, *, user_id: str = "local-development") -> bool:
     global _active_strategy_id
-    if strategy_id not in STRATEGIES:
+    if _strategy_function(strategy_id, user_id) is None:
         return False
     _active_strategy_id = strategy_id
     return True
 
 
-def configure_symbol_strategies(strategy_by_symbol: dict[str, str]) -> dict[str, str]:
+def configure_symbol_strategies(
+    strategy_by_symbol: dict[str, str],
+    *,
+    user_id: str = "local-development",
+) -> dict[str, str]:
     normalized: dict[str, str] = {}
     for symbol, strategy_id in strategy_by_symbol.items():
         normalized_symbol = str(symbol).strip().upper()
-        if strategy_id not in STRATEGIES:
+        if _strategy_function(strategy_id, user_id) is None:
             raise ValueError(f"unknown strategy: {strategy_id}")
         if normalized_symbol:
             normalized[normalized_symbol] = strategy_id
@@ -834,6 +853,7 @@ def register_custom_strategy(
     strategy_id: str,
     parsed_strategy: dict[str, Any],
     *,
+    user_id: str = "local-development",
     name: str | None = None,
     description: str | None = None,
 ) -> None:
@@ -921,8 +941,9 @@ def register_custom_strategy(
             trailing_profit_lock_pct=trailing_profit_lock_pct,
         )
 
-    STRATEGIES[strategy_id] = custom_strategy
-    _registered_strategy_catalog[strategy_id] = {
+    key = (user_id, strategy_id)
+    _custom_strategy_functions[key] = custom_strategy
+    _custom_strategy_catalog[key] = {
         "id": strategy_id,
         "name": name or f"Custom {action.upper()} on {comparison.upper()}",
         "type": "structured",
@@ -930,23 +951,33 @@ def register_custom_strategy(
     }
 
 
-def unregister_custom_strategy(strategy_id: str) -> bool:
-    definition = _registered_strategy_catalog.get(strategy_id)
+def unregister_custom_strategy(strategy_id: str, *, user_id: str = "local-development") -> bool:
+    key = (user_id, strategy_id)
+    definition = _custom_strategy_catalog.get(key)
     if not definition or definition.get("type") != "structured":
         return False
-    STRATEGIES.pop(strategy_id, None)
-    _registered_strategy_catalog.pop(strategy_id, None)
-    for symbol, mapped_strategy_id in list(_symbol_strategy_ids.items()):
-        if mapped_strategy_id == strategy_id:
-            del _symbol_strategy_ids[symbol]
-    if _active_strategy_id == strategy_id:
+    _custom_strategy_functions.pop(key, None)
+    _custom_strategy_catalog.pop(key, None)
+    if user_id == "local-development":
+        for symbol, mapped_strategy_id in list(_symbol_strategy_ids.items()):
+            if mapped_strategy_id == strategy_id:
+                del _symbol_strategy_ids[symbol]
+    if user_id == "local-development" and _active_strategy_id == strategy_id:
         activate_strategy("momentum_breakout")
     return True
 
 
-def build_signal_from_ticker(ticker: dict[str, Any], strategy_id: str | None = None) -> dict[str, Any]:
+def build_signal_from_ticker(
+    ticker: dict[str, Any],
+    strategy_id: str | None = None,
+    *,
+    user_id: str = "local-development",
+) -> dict[str, Any]:
     selected_strategy_id = strategy_id or get_strategy_for_symbol(str(ticker.get("symbol", "")))
-    decision = STRATEGIES[selected_strategy_id](ticker)
+    strategy_function = _strategy_function(selected_strategy_id, user_id)
+    if strategy_function is None:
+        raise ValueError(f"unknown strategy: {selected_strategy_id}")
+    decision = strategy_function(ticker)
     decision = _apply_builtin_strategy_config(selected_strategy_id, decision)
     if decision.market is None:
         decision = replace(
@@ -958,5 +989,13 @@ def build_signal_from_ticker(ticker: dict[str, Any], strategy_id: str | None = N
     return decision_to_dict(decision)
 
 
-def list_strategy_catalog() -> dict[str, dict[str, Any]]:
-    return dict(_registered_strategy_catalog)
+def list_strategy_catalog(user_id: str = "local-development") -> dict[str, dict[str, Any]]:
+    catalog = dict(_registered_strategy_catalog)
+    catalog.update(
+        {
+            strategy_id: definition
+            for (owner_id, strategy_id), definition in _custom_strategy_catalog.items()
+            if owner_id == user_id
+        }
+    )
+    return catalog
