@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from app.market_data import BitgetMarketDataService
 from app.balance_snapshots import fetch_combined_balance_snapshot
 from app.paper_execution import BitgetPaperExecutionClient
-from app.performance import calculate_unrealized_pnl
+from app.performance import calculate_closed_trade_pnls, calculate_unrealized_pnl
 from app.risk_engine import RiskEngine
 from app.strategy import (
     STRATEGIES,
@@ -1291,7 +1291,7 @@ def _activity_label(cycle: dict[str, Any], detail: str) -> str:
     return str(action or status or "Event").replace("_", " ").title()
 
 
-def _activity_entry(cycle: dict[str, Any]) -> dict[str, Any]:
+def _activity_entry(cycle: dict[str, Any], realized_pnl: float | None = None) -> dict[str, Any]:
     detail = _activity_detail(cycle)
     intent_hash = (cycle.get("intent") or {}).get("intent_hash")
     intent_hash_short = f"{intent_hash[:8]}…" if intent_hash else None
@@ -1329,13 +1329,7 @@ def _activity_entry(cycle: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             position_size_usd = None
 
-    # Realized PnL is only reliably available when the exchange reported it
-    # directly on the close order (exchange_realized_pnl). Reconstructing it
-    # for every row would require the same open-lot matching logic used in
-    # _trade_metrics()/performance.py; that's a separate follow-up, so we
-    # surface what we actually have rather than compute a possibly-wrong
-    # number here.
-    pnl_value = order.get("exchange_realized_pnl") if cycle.get("status") == "closed" else None
+    pnl_value = realized_pnl if cycle.get("status") == "closed" else None
 
     if cycle.get("status") == "submitted" and order and intent_hash_short:
         detail = f"{detail} · " if detail else ""
@@ -1381,7 +1375,13 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
         if str(cycle.get("symbol", "")).upper() in agent_loop.SUPPORTED_SYMBOLS
     ]
     if cycles:
-        return {"entries": [_activity_entry(cycle) for cycle in cycles]}
+        realized_pnls = calculate_closed_trade_pnls(cycles)
+        return {
+            "entries": [
+                _activity_entry(cycle, realized_pnls[index])
+                for index, cycle in enumerate(cycles)
+            ]
+        }
 
     if supabase_auth.required:
         return {"entries": []}

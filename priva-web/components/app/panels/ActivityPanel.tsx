@@ -79,11 +79,9 @@ function eventTypeLabel(entry: EventItem): string {
 // across raw cycle["order"] / cycle["decision"] / cycle["risk_check"]
 // field names client-side.
 //
-// Notes on the data itself (from backend/app/main.py):
-// - `pnl` is only populated when the exchange reported
-//   `exchange_realized_pnl` directly on a close order. There's no
-//   lot-matching reconstruction yet, so most closed rows will have
-//   pnl == null for now — that's expected, not a bug.
+// `pnl` is exchange-reported when available, otherwise reconstructed by
+// matching the close against logged open lots. It remains null if no full
+// matching entry history is available.
 // - `price` on a closed row is the exit/mark price at close time, NOT
 //   the original entry price (order.entry_price gets reused for both).
 //   Don't relabel it "entry price" anywhere downstream.

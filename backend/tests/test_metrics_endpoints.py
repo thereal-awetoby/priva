@@ -421,6 +421,42 @@ def test_activity_log_labels_closed_cycle_as_close(monkeypatch):
     assert result["entries"][0]["action"] == "close"
 
 
+def test_activity_log_reconstructs_pnl_for_closed_partial_trade(monkeypatch):
+    monkeypatch.setattr(
+        main.cycle_logger,
+        "fetch_cycles",
+        lambda **kwargs: [
+            {
+                "created_at": "2026-09-22T19:54:02Z",
+                "symbol": "AAPLUSDT",
+                "market": "futures",
+                "status": "closed",
+                "decision": {"action": "close", "closed_position_side": "buy"},
+                "order_result": {
+                    "order_id": "close-1",
+                    "closed_position_side": "buy",
+                    "qty": 4.0,
+                    "exit_price": 110.0,
+                },
+            },
+            {
+                "created_at": "2026-09-22T19:50:02Z",
+                "symbol": "AAPLUSDT",
+                "market": "futures",
+                "status": "submitted",
+                "decision": {"action": "buy"},
+                "ticker": {"last_price": 100.0},
+                "risk_check": {"risk": {"notional": 1000.0}},
+            },
+        ],
+    )
+
+    entry = main.activity_log()["entries"][0]
+
+    assert entry["action"] == "close"
+    assert entry["pnl"] == 40.0
+
+
 def test_activity_log_adds_readable_labels_categories_and_intent_hash(monkeypatch):
     monkeypatch.setattr(
         main.cycle_logger,
