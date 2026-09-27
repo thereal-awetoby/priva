@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { apiGet, apiPost } from "@/lib/api";
 import { createClient } from "@/lib/supabase/client";
 
@@ -159,13 +159,13 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
     }
 
     const supabase = createClient();
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event: AuthChangeEvent, session: Session | null) => {
       authEventRevision += 1;
       applySession(session, event === "USER_UPDATED");
     });
     const initialAuthEventRevision = authEventRevision;
 
-    void supabase.auth.getSession().then(({ data: { session } }) => {
+    void supabase.auth.getSession().then(({ data: { session } }: { data: { session: Session | null } }) => {
       if (active && authEventRevision === initialAuthEventRevision) applySession(session);
     }).catch(() => {
       if (active && authEventRevision === initialAuthEventRevision) applySession(null);
