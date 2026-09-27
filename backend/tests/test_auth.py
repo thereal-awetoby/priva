@@ -122,6 +122,33 @@ def test_user_risk_engines_are_isolated_by_user():
     assert engine_b.max_daily_loss == main.DEFAULT_RISK_SETTINGS["max_daily_loss"]
 
 
+def test_user_risk_settings_allowlist_strips_supabase_metadata():
+    from app import main
+
+    sanitized = main._normalize_user_risk_settings({
+        "user_id": "user-a",
+        "max_position_size": 1200,
+        "max_daily_loss": 600,
+        "max_leverage": 7,
+        "enabled": True,
+        "allowed_symbols": ["AAPLUSDT"],
+        "created_at": "2026-09-27T00:00:00Z",
+    })
+
+    assert sanitized == {
+        "max_position_size": 1200,
+        "max_daily_loss": 600,
+        "max_leverage": 7,
+        "enabled": True,
+        "allowed_symbols": ["AAPLUSDT"],
+    }
+
+    engine = main._risk_engine_for_user("user-a", settings=sanitized)
+    assert engine.max_position_size == 1200
+    assert engine.max_daily_loss == 600
+    assert engine.enabled is True
+
+
 def test_builtin_strategy_configs_are_isolated_by_user():
     from app import strategy as strategy_module
 

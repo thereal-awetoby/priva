@@ -79,9 +79,15 @@ def _normalize_user_risk_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     settings = dict(DEFAULT_RISK_SETTINGS)
     if not isinstance(raw, dict):
         return settings
-    settings.update(raw)
-    if "risk_enabled" in settings and "enabled" not in settings:
-        settings["enabled"] = bool(settings["risk_enabled"])
+
+    allowed_keys = {"max_position_size", "max_daily_loss", "max_leverage", "enabled", "allowed_symbols", "risk_enabled"}
+    filtered = {key: value for key, value in raw.items() if key in allowed_keys}
+    if "risk_enabled" in filtered and "enabled" not in filtered:
+        filtered["enabled"] = bool(filtered["risk_enabled"])
+    if "enabled" in filtered and not isinstance(filtered["enabled"], bool):
+        filtered["enabled"] = bool(filtered["enabled"])
+
+    settings.update(filtered)
     if "allowed_symbols" in settings and isinstance(settings["allowed_symbols"], list):
         settings["allowed_symbols"] = [str(symbol).upper() for symbol in settings["allowed_symbols"]]
     if "allowed_symbols" in settings and settings["allowed_symbols"] is None:
