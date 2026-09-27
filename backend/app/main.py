@@ -408,14 +408,20 @@ def agent_cycle(symbol: str = "AAPLUSDT") -> dict[str, Any]:
 
 
 @app.get("/agent-loop")
-def agent_loop_status() -> dict[str, Any]:
+def agent_loop_status(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user = normalize_user(user)
+    if user.id != "local-development":
+        return {
+            **user_runtime_registry.status(user.id),
+            "recent_cycles": agent_loop.recent_cycles(user.id),
+        }
     return {
         "running": agent_loop.is_running(),
         "interval_seconds": agent_loop.LOOP_INTERVAL_SECONDS,
         "watched_symbols": agent_loop.WATCHED_SYMBOLS,
         "market": agent_loop.MARKET_TYPE,
         "strategy_by_symbol": {symbol: get_strategy_for_symbol(symbol) for symbol in agent_loop.WATCHED_SYMBOLS},
-        "recent_cycles": agent_loop.recent_cycles(),
+        "recent_cycles": agent_loop.recent_cycles(user.id),
     }
 
 
@@ -940,7 +946,7 @@ def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]
         if ledger_cycles is None:
             ledger_cycles = user_logger.fetch_cycles()
             if not ledger_cycles and not supabase_auth.required:
-                ledger_cycles = agent_loop.recent_cycles()
+                ledger_cycles = agent_loop.recent_cycles(user.id)
         return _annotate_live_position(position, ledger_cycles)
 
     exchange_positions = execution_client_for(user).fetch_futures_positions()
@@ -984,7 +990,7 @@ def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]
     if ledger_cycles is None:
         ledger_cycles = user_logger.fetch_cycles()
         if not ledger_cycles and not supabase_auth.required:
-            ledger_cycles = agent_loop.recent_cycles()
+            ledger_cycles = agent_loop.recent_cycles(user.id)
     cycles = cycles_after_reset(ledger_cycles, user)
     if cycles:
         live_positions = calculate_unrealized_pnl(
@@ -1426,7 +1432,7 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
     user_logger = cycle_logger_for(user)
     cycles = user_logger.fetch_cycles()
     if not cycles and not supabase_auth.required:
-        cycles = agent_loop.recent_cycles()
+        cycles = agent_loop.recent_cycles(user.id)
     cycles = [
         cycle
         for cycle in cycles

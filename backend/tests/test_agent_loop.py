@@ -1,3 +1,5 @@
+from app import main as main_module
+from app.auth import AuthenticatedUser
 from app.main import process_market_cycle
 from app import agent_loop as agent_loop_module
 from app.agent_loop import run_cycle, run_pair_cycle
@@ -36,6 +38,61 @@ def test_process_market_cycle_generates_live_decision_and_trade():
     assert result["decision"]["action"] == "buy"
     assert result["risk_check"]["allowed"] is True
     assert result["log_entry"]["type"] == "trade"
+
+
+def test_recent_cycles_are_scoped_by_user():
+    agent_loop_module._recent_cycles.clear()
+    agent_loop_module._record_cycle({"symbol": "AAPLUSDT", "id": "one"}, "user-one")
+    agent_loop_module._record_cycle({"symbol": "TSLAUSDT", "id": "two"}, "user-two")
+
+    assert agent_loop_module.recent_cycles("user-one") == [{"symbol": "AAPLUSDT", "id": "one"}]
+    assert agent_loop_module.recent_cycles("user-two") == [{"symbol": "TSLAUSDT", "id": "two"}]
+    assert agent_loop_module.recent_cycles() == []
+
+
+def test_agent_loop_status_returns_only_the_authenticated_users_cycles():
+    agent_loop_module._recent_cycles.clear()
+    agent_loop_module._record_cycle({"symbol": "AAPLUSDT", "id": "one"}, "user-one")
+    agent_loop_module._record_cycle({"symbol": "TSLAUSDT", "id": "two"}, "user-two")
+
+    result = main_module.agent_loop_status(AuthenticatedUser("user-two"))
+
+    assert result["recent_cycles"] == [{"symbol": "TSLAUSDT", "id": "two"}]
+
+
+def test_position_fallback_uses_only_the_cycle_logger_users_history():
+    agent_loop_module._recent_cycles.clear()
+    agent_loop_module._recent_cycles["user-one"] = [{
+        "symbol": "AAPLUSDT",
+        "market": "futures",
+        "status": "submitted",
+        "decision": {"action": "buy"},
+        "ticker": {"last_price": 100},
+        "order": {"qty": 2},
+    }]
+    agent_loop_module._recent_cycles["user-two"] = [{
+        "symbol": "AAPLUSDT",
+        "market": "spot",
+        "status": "submitted",
+        "decision": {"action": "buy"},
+        "ticker": {"last_price": 200},
+        "order": {"qty": 3},
+    }]
+
+    class EmptyCycleLogger:
+        def __init__(self, user_id):
+            self.user_id = user_id
+
+        def fetch_cycles(self):
+            return []
+
+    user_one_logger = EmptyCycleLogger("user-one")
+    user_two_logger = EmptyCycleLogger("user-two")
+
+    assert agent_loop_module._logged_futures_entry("AAPLUSDT", user_one_logger)["qty"] == 2
+    assert agent_loop_module._logged_spot_entry("AAPLUSDT", user_one_logger) is None
+    assert agent_loop_module._logged_spot_entry("AAPLUSDT", user_two_logger)["qty"] == 3
+    assert agent_loop_module._logged_futures_entry("AAPLUSDT", user_two_logger) is None
 
 
 def test_recent_balance_snapshots_are_scoped_by_user():

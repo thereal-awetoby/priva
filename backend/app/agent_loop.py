@@ -39,14 +39,15 @@ MODE = "autonomous"
 
 _loop_task: asyncio.Task | None = None
 _stop_event = asyncio.Event()
-_recent_cycles: list[dict[str, Any]] = []
+_recent_cycles: dict[str, list[dict[str, Any]]] = {}
 _recent_balance_snapshots: dict[str, list[dict[str, Any]]] = {}
 _profit_peaks: dict[tuple[str, str, str, float], float] = {}
 
 
-def _record_cycle(entry: dict[str, Any]) -> None:
-    _recent_cycles.append(entry)
-    del _recent_cycles[:-1000]
+def _record_cycle(entry: dict[str, Any], user_id: str) -> None:
+    user_cycles = _recent_cycles.setdefault(user_id, [])
+    user_cycles.append(entry)
+    del user_cycles[:-1000]
 
 
 def _extract_gemini_json(payload: Any) -> dict[str, Any]:
@@ -161,8 +162,8 @@ def _model_veto_gate(symbol: str, decision: dict[str, Any]) -> dict[str, Any]:
     return {"allowed": False, "decision": "VETO", "reason": str((parsed or {}).get("reason") or "gemini_veto")}
 
 
-def recent_cycles() -> list[dict[str, Any]]:
-    return list(_recent_cycles)
+def recent_cycles(user_id: str = "local-development") -> list[dict[str, Any]]:
+    return list(_recent_cycles.get(user_id, []))
 
 
 def recent_balance_snapshots(user_id: str) -> list[dict[str, Any]]:
@@ -267,9 +268,7 @@ def build_encrypted_intent(symbol: str, decision: dict[str, Any], risk_result: d
 
 
 def _logged_spot_entry(symbol: str, cycle_logger: Any | None) -> dict[str, Any] | None:
-    cycles = cycle_logger.fetch_cycles() if cycle_logger is not None and callable(getattr(cycle_logger, "fetch_cycles", None)) else recent_cycles()
-    if not cycles:
-        cycles = recent_cycles()
+    cycles = _cycles_for_position_fallback(cycle_logger)
     open_lots: list[dict[str, float | str]] = []
     for cycle in sorted(cycles, key=lambda item: item.get("created_at", "")):
         if cycle.get("symbol", "").upper() != symbol.upper() or cycle.get("market", "spot") != "spot":
@@ -292,9 +291,7 @@ def _logged_spot_entry(symbol: str, cycle_logger: Any | None) -> dict[str, Any] 
 
 
 def _logged_futures_entry(symbol: str, cycle_logger: Any | None) -> dict[str, Any] | None:
-    cycles = cycle_logger.fetch_cycles() if cycle_logger is not None and callable(getattr(cycle_logger, "fetch_cycles", None)) else recent_cycles()
-    if not cycles:
-        cycles = recent_cycles()
+    cycles = _cycles_for_position_fallback(cycle_logger)
     open_lots: list[dict[str, float | str]] = []
     for cycle in sorted(cycles, key=lambda item: item.get("created_at", "")):
         if cycle.get("symbol", "").upper() != symbol.upper() or cycle.get("market", "futures") != "futures":
@@ -322,6 +319,16 @@ def _logged_futures_entry(symbol: str, cycle_logger: Any | None) -> dict[str, An
         "unrealized_pnl": 0.0,
         "source": "cycle_log_fallback",
     }
+
+
+def _cycles_for_position_fallback(cycle_logger: Any | None) -> list[dict[str, Any]]:
+    user_id = getattr(cycle_logger, "user_id", None) or "local-development"
+    fetch_cycles = getattr(cycle_logger, "fetch_cycles", None)
+    if callable(fetch_cycles):
+        cycles = fetch_cycles()
+        if cycles:
+            return cycles
+    return recent_cycles(user_id)
 
 
 def _live_position(symbol: str, execution_client: Any, *, market: str = "futures", cycle_logger: Any | None = None) -> dict[str, Any] | None:
@@ -441,7 +448,8 @@ async def run_cycle(
             result_market if result_market in {"spot", "futures"} else configured_market,
         )
         result.setdefault("created_at", cycle_start.isoformat())
-        _record_cycle(result)
+        cycle_user_id = getattr(cycle_logger, "user_id", None) or user_id
+        _record_cycle(result, cycle_user_id)
         if cycle_logger is not None:
             result["persistence"] = cycle_logger.log_cycle(result)
             log_snapshot = getattr(cycle_logger, "log_balance_snapshot", None)
@@ -454,8 +462,8 @@ async def run_cycle(
                         session_id=getattr(cycle_logger, "session_id", None),
                     )
                     if snapshot is not None:
-                        user_id = getattr(cycle_logger, "user_id", None) or "local-development"
-                        user_snapshots = _recent_balance_snapshots.setdefault(user_id, [])
+                        snapshot_user_id = getattr(cycle_logger, "user_id", None) or "local-development"
+                        user_snapshots = _recent_balance_snapshots.setdefault(snapshot_user_id, [])
                         user_snapshots.append(snapshot)
                         del user_snapshots[:-1000]
                         log_snapshot(snapshot)
@@ -476,7 +484,8 @@ async def run_cycle(
             "risk_check": {"allowed": False, "reasons": [f"unsupported_symbol:{normalized_symbol}"]},
             "order": None,
         }
-        _record_cycle(result)
+        cycle_user_id = getattr(cycle_logger, "user_id", None) or user_id
+        _record_cycle(result, cycle_user_id)
         if cycle_logger is not None:
             result["persistence"] = cycle_logger.log_cycle(result)
         return result
@@ -495,11 +504,14 @@ async def run_cycle(
                     ticker.update(gap_context)
                 else:
                     ticker["status"] = "fallback"
-        decision = build_signal_from_ticker(
-            ticker,
-            strategy_id=selected_strategy,
-            user_id=user_id,
-        )
+        if selected_strategy is None:
+            decision = build_signal_from_ticker(ticker)
+        else:
+            decision = build_signal_from_ticker(
+                ticker,
+                strategy_id=selected_strategy,
+                user_id=user_id,
+            )
         decision.update({"symbol": symbol.upper(), "market_status": ticker.get("status", "unknown")})
 
         if ticker.get("status") != "live":
