@@ -432,6 +432,7 @@ def account_balance(user: AuthenticatedUser = Depends(current_user)) -> dict[str
     if futures.get("status") == "not_configured" and spot.get("status") == "not_configured":
         return {"status": "not_configured", "message": "Connect the Bitget demo account first."}
     spot_assets = spot.get("assets", []) if spot.get("status") == "ok" else []
+    logger.info("TEMP RAW SPOT ASSETS: %s", spot_assets)
     usdt_asset = next(
         (asset for asset in spot_assets if str(asset.get("coin", "")).upper() == "USDT"),
         {},
