@@ -85,6 +85,33 @@ def test_agent_cycle_blocks_unmapped_symbol_only_on_spot(monkeypatch):
     assert autonomous_result["market"] == "futures"
 
 
+def test_agent_cycle_blocks_when_model_vetoes_trade(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"verdict": "VETO", "reason": "risk is too high"}
+
+    monkeypatch.setattr("app.agent_loop.requests.post", lambda *args, **kwargs: FakeResponse())
+
+    result = asyncio.run(
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=FakeExecutionClient(),
+        )
+    )
+
+    assert result["status"] == "blocked"
+    assert result["decision"]["action"] in {"buy", "sell"}
+    assert result["risk_check"]["allowed"] is False
+    assert result["reason"] == "gemini_veto"
+
+
 def test_agent_cycle_records_strategy_mode():
     result = asyncio.run(
         run_cycle(

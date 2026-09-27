@@ -9,6 +9,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+import requests
+
 from app.balance_snapshots import fetch_combined_balance_snapshot
 from app.symbols import SPOT_SYMBOL_MAP, spot_symbol
 
@@ -45,6 +47,58 @@ _profit_peaks: dict[tuple[str, str, str, float], float] = {}
 def _record_cycle(entry: dict[str, Any]) -> None:
     _recent_cycles.append(entry)
     del _recent_cycles[:-1000]
+
+
+def _model_veto_gate(symbol: str, decision: dict[str, Any]) -> dict[str, Any]:
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return {"allowed": False, "decision": "VETO", "reason": "missing_gemini_key"}
+
+    base_url = (os.getenv("GEMINI_API_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+    model = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
+    prompt = (
+        "You are the final veto gate for a trading bot. Return only a JSON object with exactly two keys: "
+        "\"verdict\": \"ALLOW\" or \"VETO\" and \"reason\": a short string. "
+        "Never return markdown, never include extra keys. "
+        "ALLOW only if the trade is sensible and within the system risk posture. "
+        "VETO if the idea is weak, oversized, unclear, or likely to violate risk. "
+        f"Symbol: {symbol}. Action: {decision.get('action', 'hold')}. "
+        f"Size: {decision.get('size', 0)}. Leverage: {decision.get('leverage', 1)}. "
+        f"Reason: {decision.get('reason', 'no reason provided')}."
+    )
+
+    try:
+        response = requests.post(
+            f"{base_url}/models/{model}:generateContent",
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0},
+            },
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        return {"allowed": False, "decision": "VETO", "reason": f"gemini_request_failed:{exc}"}
+
+    if response.status_code >= 400:
+        return {"allowed": False, "decision": "VETO", "reason": f"gemini_http_{response.status_code}"}
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return {"allowed": False, "decision": "VETO", "reason": "gemini_invalid_json"}
+
+    verdict = str((payload or {}).get("verdict", "")).upper()
+    if verdict not in {"ALLOW", "VETO"}:
+        return {"allowed": False, "decision": "VETO", "reason": "gemini_missing_verdict"}
+
+    if verdict == "ALLOW":
+        return {"allowed": True, "decision": "ALLOW", "reason": str((payload or {}).get("reason") or "allow")}
+
+    return {"allowed": False, "decision": "VETO", "reason": str((payload or {}).get("reason") or "gemini_veto")}
 
 
 def recent_cycles() -> list[dict[str, Any]]:
@@ -473,6 +527,21 @@ async def run_cycle(
                     "order": None,
                 }
                 return persist(result)
+        veto = _model_veto_gate(symbol.upper(), decision)
+        if not veto["allowed"]:
+            result = {
+                "status": "blocked",
+                "symbol": symbol.upper(),
+                "mode": cycle_mode,
+                "decision": decision,
+                "ticker": ticker,
+                "risk_check": {"allowed": False, "reasons": ["gemini_veto"]},
+                "reason": "gemini_veto",
+                "model_gate": veto,
+                "order": None,
+            }
+            return persist(result)
+
         trade = {
             "symbol": symbol.upper(),
             "side": decision["action"],
