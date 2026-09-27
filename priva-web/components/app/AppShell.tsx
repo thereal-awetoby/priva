@@ -22,6 +22,8 @@ const crumbLabels: Record<string, string> = {
 export default function AppShell() {
   const [activeTab, setActiveTab] = useState("control");
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
+  const [signOutLoading, setSignOutLoading] = useState(false);
   const [workerStatus, setWorkerStatus] = useState<{ running?: boolean; workerError?: string; persistenceError?: string; error?: string } | null>(null);
   const router = useRouter();
 
@@ -68,6 +70,17 @@ export default function AppShell() {
     workerLabel = "Worker stopped";
   }
 
+  const confirmSignOut = async () => {
+    setSignOutLoading(true);
+    try {
+      await createClient().auth.signOut();
+      router.replace("/");
+    } catch (err: any) {
+      alert(`Couldn't sign out: ${err?.message ?? "unknown error"}`);
+      setSignOutLoading(false);
+    }
+  };
+
   return (
     <div className="app-root">
       <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
@@ -86,10 +99,7 @@ export default function AppShell() {
             <button
               className="sign-out-btn"
               type="button"
-              onClick={async () => {
-                await createClient().auth.signOut();
-                router.replace("/");
-              }}
+              onClick={() => setShowSignOutConfirm(true)}
             >
               Sign out
             </button>
@@ -107,6 +117,41 @@ export default function AppShell() {
 
       {showOnboarding && (
         <OnboardingModal onClose={() => setShowOnboarding(false)} />
+      )}
+
+      {showSignOutConfirm && (
+        <div className="modal-overlay" onClick={() => !signOutLoading && setShowSignOutConfirm(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="modal-close"
+              onClick={() => setShowSignOutConfirm(false)}
+              aria-label="Close"
+              disabled={signOutLoading}
+            >
+              Close ✕
+            </button>
+            <h2 className="modal-title">Sign out?</h2>
+            <p className="modal-sub">
+              You&apos;ll be returned to the landing page and will need to sign back in to access your workspace.
+            </p>
+            <div className="connection-actions">
+              <button
+                className="btn"
+                onClick={() => setShowSignOutConfirm(false)}
+                disabled={signOutLoading}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={confirmSignOut}
+                disabled={signOutLoading}
+              >
+                {signOutLoading ? "Signing out…" : "Sign out"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

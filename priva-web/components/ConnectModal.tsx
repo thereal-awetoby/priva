@@ -12,6 +12,7 @@ export default function ConnectModal({ isOpen, onClose }: ConnectModalProps) {
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -74,16 +75,49 @@ export default function ConnectModal({ isOpen, onClose }: ConnectModalProps) {
           </div>
           <div className="form-field">
             <label className="form-label" htmlFor="auth-password">Password</label>
-            <input
-              className="form-input"
-              id="auth-password"
-              type="password"
-              autoComplete={mode === "login" ? "current-password" : "new-password"}
-              minLength={6}
-              required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
+            <div className="password-field">
+              <input
+                className="form-input"
+                id="auth-password"
+                type={showPassword ? "text" : "password"}
+                autoComplete={mode === "login" ? "current-password" : "new-password"}
+                minLength={6}
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((current) => !current)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+                tabIndex={-1}
+              >
+                {showPassword ? (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path
+                      d="M1.5 8S3.8 3 8 3s6.5 5 6.5 5-2.3 5-6.5 5-6.5-5-6.5-5Z"
+                      stroke="currentColor"
+                      strokeWidth="1.2"
+                      strokeLinejoin="round"
+                    />
+                    <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.2" />
+                  </svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path
+                      d="M1.5 8S3.8 3 8 3s6.5 5 6.5 5-2.3 5-6.5 5-6.5-5-6.5-5Z"
+                      stroke="currentColor"
+                      strokeWidth="1.2"
+                      strokeLinejoin="round"
+                    />
+                    <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.2" />
+                    <path d="M2 14 14 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                )}
+              </button>
+            </div>
           </div>
           {message ? <p className="form-hint auth-message">{message}</p> : null}
           <div className="modal-ctas">

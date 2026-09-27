@@ -316,7 +316,7 @@
   }
   .status-dot{ width:6px; height:6px; background: var(--up); border-radius: 50%; }
   
-  .mode-switch{ display:flex; flex-wrap: wrap; border: 1px solid var(--rule); font-family: var(--font-ibm-plex-mono), monospace; font-size: 12px; }
+  .mode-switch{ display:flex; flex-wrap: wrap; border: 1px solid var(--rule); font-family: var(--font-ibm-plex-mono), monospace; font-size: 12px; width: fit-content; }
   .mode-switch button{ background:none; border:none; color: var(--ink-dim); padding: 8px 16px; cursor:pointer; font-family: inherit; font-size: inherit; white-space: nowrap; }
   .mode-switch button.active{ background: var(--accent); color: var(--accent-ink); }
   

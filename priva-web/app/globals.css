@@ -407,6 +407,7 @@ a{ color: inherit; }
     border: 1px solid var(--rule);
     font-family:var(--font-ibm-plex-mono), monospace;
     font-size: 12px;
+    width: fit-content;
   }
   .mode-switch button{
     background:none;
@@ -660,6 +661,29 @@ a{ color: inherit; }
 }
 .form-input::placeholder{ color: var(--ink-faint); }
 .form-input:focus{ outline: none; border-color: var(--accent); }
+
+.password-field{
+  position: relative;
+}
+.password-field .form-input{
+  padding-right: 40px;
+}
+.password-toggle{
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 0;
+}
+.password-toggle:hover{ color: var(--ink-dim); }
 
 .form-hint{
   font-family: var(--font-ibm-plex-mono), monospace;
