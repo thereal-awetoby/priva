@@ -229,6 +229,33 @@ def test_disconnected_users_cannot_access_balance_agent_or_trade(monkeypatch):
     ).status_code == 409
 
 
+def test_user_agent_loop_starts_runtime_on_running_event_loop(monkeypatch):
+    import asyncio
+    from app import main
+
+    started = []
+
+    def start_runtime(user_id, client):
+        asyncio.get_running_loop()
+        started.append(user_id)
+
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        main.current_user,
+        lambda: AuthenticatedUser("user-1"),
+    )
+    monkeypatch.setattr(main, "require_connected_client", lambda user: object())
+    monkeypatch.setattr(main.user_runtime_registry, "get", lambda user_id: None)
+    monkeypatch.setattr(main.user_runtime_registry, "start", start_runtime)
+    monkeypatch.setattr(main.user_runtime_registry, "status", lambda user_id: {"running": True})
+
+    response = TestClient(app).get("/user/agent-loop")
+
+    assert response.status_code == 200
+    assert response.json() == {"running": True}
+    assert started == ["user-1"]
+
+
 def test_risk_requests_reject_client_supplied_user_id():
     from pydantic import ValidationError
     from app.main import IntentEvaluationRequest, RiskCheckRequest

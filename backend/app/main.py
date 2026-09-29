@@ -755,7 +755,7 @@ def account_balance_history(user: AuthenticatedUser = Depends(current_user)) -> 
 
 
 @app.get("/user/agent-loop")
-def user_agent_loop_status(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+async def user_agent_loop_status(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     client = require_connected_client(user)
     if user_runtime_registry.get(user.id) is None:
         user_runtime_registry.start(user.id, client)
