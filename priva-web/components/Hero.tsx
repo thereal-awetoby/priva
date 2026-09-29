@@ -30,8 +30,7 @@ export default function Hero() {
           </h1>
           <p className="hero-sub">
             Priva executes your strategy autonomously and submits every order
-            as an encrypted intent. Your positions stay off the public book
-            until they&apos;re filled.
+            as an encrypted intent. What the ledger shows is a hash of the decision, not the book that produced it.
           </p>
           <div className="hero-ctas">
             <button
@@ -51,7 +50,7 @@ export default function Hero() {
         <div className="ticker">
           <div className="ticker-cell">
             <div className="ticker-label">Total P&amp;L</div>
-            <div className="ticker-value up">+$18,240.12</div>
+            <div className="ticker-value up">+$1,240.12</div>
           </div>
           <div className="ticker-cell">
             <div className="ticker-label">Today</div>
