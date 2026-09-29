@@ -56,12 +56,18 @@ export default function AppShell() {
     let active = true;
     let authRevision = 0;
     let previousUserId: string | null = null;
+    let sessionInitialized = false;
     let sessionEventReceived = false;
     const supabase = createClient();
 
     const applySession = (session: Session | null) => {
       const currentUser = session?.user ?? null;
       const currentUserId = currentUser?.id ?? null;
+      if (sessionInitialized && currentUserId === previousUserId) {
+        setEmail(currentUser?.email);
+        return;
+      }
+      sessionInitialized = true;
       const revision = ++authRevision;
       if (previousUserId && previousUserId !== currentUserId) {
         clearUserScopedStorage(previousUserId);
