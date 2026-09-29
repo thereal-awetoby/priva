@@ -79,11 +79,11 @@ The response also includes `starting_balance`, `daily_change`, and
 `daily_change_pct`; the baseline is the first observed balance for the current
 UTC day.
 
-During the security-only rollout, the existing authenticated connection route
-is `POST /connection/bitget`; it verifies credentials and requires encrypted,
-per-user Supabase persistence. `POST /connection/bitget/disconnect` removes the
-stored credentials. The next rollout replaces these endpoints with
-`/account/connect` and `/account/disconnect`.
+`GET /account/status` returns only whether the authenticated user's account is
+connected. `POST /account/connect` verifies credentials with a signed Bitget
+paper-trading request before encrypted per-user persistence. The response
+contains connection status and verified position mode only. `DELETE
+/account/disconnect` stops that user's worker and removes their credentials.
 
 User-scoped autonomous controls are available through:
 

@@ -267,13 +267,16 @@ def test_connection_handler_persists_combined_snapshot(monkeypatch):
     monkeypatch.setattr(main.user_runtime_registry, "start", lambda user_id, client: None)
 
     result = asyncio.run(
-        main.connect_bitget(
+        main.connect_account(
             main.BitgetConnectionRequest(api_key="key", api_secret="secret", passphrase="pass"),
             AuthenticatedUser("metrics-test-user"),
         )
     )
 
     assert result["status"] == "connected"
+    assert result["demo_verified"] is True
+    assert result["connected"] is True
+    assert not {"api_key", "api_secret", "passphrase"} & result.keys()
     assert len(logger.snapshots) == 1
     assert logger.snapshots[0]["futures_equity"] == 1200.0
     assert logger.snapshots[0]["spot_equity"] == 300.0
@@ -296,13 +299,34 @@ def test_connection_handler_does_not_persist_unconfigured_snapshot(monkeypatch):
     monkeypatch.setattr(main.user_runtime_registry, "start", lambda user_id, client: None)
 
     result = asyncio.run(
-        main.connect_bitget(
+        main.connect_account(
             main.BitgetConnectionRequest(api_key="key", api_secret="secret", passphrase="pass"),
             AuthenticatedUser("metrics-test-user"),
         )
     )
 
     assert result["status"] == "connected"
+    assert logger.snapshots == []
+
+
+def test_connection_handler_rejects_bitget_verification_failure(monkeypatch):
+    class Candidate(SnapshotExecutionClient):
+        def fetch_account_mode(self, symbol):
+            return {"status": "rejected", "message": "invalid demo credentials"}
+
+    logger = SnapshotLogger()
+    monkeypatch.setattr(main, "BitgetPaperExecutionClient", lambda session=None: Candidate())
+    monkeypatch.setattr(main, "cycle_logger_for", lambda user: logger)
+
+    with pytest.raises(main.HTTPException) as error:
+        asyncio.run(
+            main.connect_account(
+                main.BitgetConnectionRequest(api_key="key", api_secret="secret", passphrase="pass"),
+                AuthenticatedUser("metrics-test-user"),
+            )
+        )
+
+    assert error.value.status_code == 400
     assert logger.snapshots == []
 
 

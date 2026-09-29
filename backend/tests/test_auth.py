@@ -150,8 +150,9 @@ def test_every_protected_route_rejects_invalid_auth(monkeypatch):
         ("POST", "/user/market-settings", {"market": "futures"}),
         ("POST", "/user/execution-settings", {"markets": ["futures"], "modes": ["autonomous"]}),
         ("POST", "/user/agent-settings", {}),
-        ("POST", "/connection/bitget", {"api_key": "a", "api_secret": "b", "passphrase": "c"}),
-        ("POST", "/connection/bitget/disconnect", {}),
+        ("GET", "/account/status", None),
+        ("POST", "/account/connect", {"api_key": "a", "api_secret": "b", "passphrase": "c"}),
+        ("DELETE", "/account/disconnect", None),
         ("POST", "/user/backfill-trades", {"start_time": 1, "end_time": 2}),
         ("GET", "/auth/session", None),
         ("GET", "/status", None),
@@ -179,6 +180,12 @@ def test_every_protected_route_rejects_invalid_auth(monkeypatch):
     for method, path, body in protected_requests:
         response = client.request(method, path, json=body, headers={"Authorization": "Bearer invalid"})
         assert response.status_code == 401, f"{method} {path} returned {response.status_code}"
+
+
+def test_legacy_connection_routes_are_removed():
+    client = TestClient(app)
+    assert client.post("/connection/bitget", json={}).status_code == 404
+    assert client.post("/connection/bitget/disconnect", json={}).status_code == 404
 
 
 def test_app_lifespan_refuses_to_start_without_supabase(monkeypatch):
@@ -321,3 +328,16 @@ def test_builtin_strategy_configs_are_isolated_by_user():
 
     assert strategy_module._get_builtin_strategy_config("momentum_breakout", user_id="user-a")["threshold_pct"] == 3.0
     assert strategy_module._get_builtin_strategy_config("momentum_breakout", user_id="user-b")["threshold_pct"] == 7.0
+
+    signal_a = strategy_module.build_signal_from_ticker(
+        {"status": "live", "last_price": 104.0, "open_price": 100.0},
+        strategy_id="momentum_breakout",
+        user_id="user-a",
+    )
+    signal_b = strategy_module.build_signal_from_ticker(
+        {"status": "live", "last_price": 104.0, "open_price": 100.0},
+        strategy_id="momentum_breakout",
+        user_id="user-b",
+    )
+    assert signal_a["action"] == "buy"
+    assert signal_b["action"] == "hold"

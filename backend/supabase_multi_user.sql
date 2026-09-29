@@ -94,6 +94,8 @@ create policy user_bitget_credentials_owner_all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
+revoke all on table public.user_bitget_credentials from anon, authenticated;
+
 drop policy if exists user_agent_settings_owner_all on public.user_agent_settings;
 create policy user_agent_settings_owner_all
   on public.user_agent_settings

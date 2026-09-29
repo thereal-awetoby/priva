@@ -845,27 +845,27 @@ def update_user_agent_settings(payload: UserAgentSettingsRequest, user: Authenti
     return {"status": "updated", **settings, "persistence": persistence["status"]}
 
 
-@app.post("/connection/bitget")
-async def connect_bitget(payload: BitgetConnectionRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+@app.post("/account/connect")
+async def connect_account(payload: BitgetConnectionRequest, user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     values = (payload.api_key.strip(), payload.api_secret.strip(), payload.passphrase.strip())
     if not all(values):
-        return {"status": "rejected", "message": "All Bitget credential fields are required"}
+        raise HTTPException(status_code=400, detail="All Bitget credential fields are required")
 
     candidate = BitgetPaperExecutionClient()
     candidate.configure_credentials(*values)
     verification = candidate.fetch_account_mode(payload.symbol)
-    if verification.get("status") != "ok":
-        return {
-            "status": "rejected",
-            "message": verification.get("message", "Bitget credentials could not be verified"),
-        }
+    if verification.get("status") != "ok" or not verification.get("position_mode"):
+        raise HTTPException(
+            status_code=400,
+            detail=verification.get("message", "Bitget credentials were not verified in paper trading"),
+        )
 
     if not credential_vault.configured:
-        return {"status": "rejected", "message": "PRIVA_CREDENTIAL_ENCRYPTION_KEY is not configured"}
+        raise HTTPException(status_code=503, detail="Credential encryption is not configured")
     try:
         credential_vault.put(user.id, {"api_key": values[0], "api_secret": values[1], "passphrase": values[2]})
     except RuntimeError:
-        return {"status": "rejected", "message": "Credentials could not be encrypted"}
+        raise HTTPException(status_code=503, detail="Credentials could not be encrypted") from None
     user_logger = cycle_logger_for(user)
     position_mode = verification.get("position_mode")
     if not position_mode:
@@ -874,11 +874,11 @@ async def connect_bitget(payload: BitgetConnectionRequest, user: AuthenticatedUs
     settings_persistence = user_logger.save_user_settings(user.id, {"position_mode": position_mode})
     if settings_persistence["status"] != "saved":
         credential_vault.delete(user.id)
-        return {"status": "rejected", "message": "Account mode could not be persisted"}
+        raise HTTPException(status_code=503, detail="Verified account mode could not be persisted")
     persistence = user_logger.save_user_credentials(user.id, credential_vault.export(user.id) or "")
     if persistence["status"] != "saved":
         credential_vault.delete(user.id)
-        return {"status": "rejected", "message": "Credentials could not be persisted securely"}
+        raise HTTPException(status_code=503, detail="Credentials could not be persisted securely")
     connected_client = execution_client_for(user)
     connected_snapshot = fetch_combined_balance_snapshot(
         connected_client,
@@ -891,6 +891,8 @@ async def connect_bitget(payload: BitgetConnectionRequest, user: AuthenticatedUs
     runtime = user_runtime_registry.start(user.id, execution_client_for(user))
     return {
         "status": "connected",
+        "connected": True,
+        "demo_verified": True,
         "symbol": payload.symbol.upper(),
         "position_mode": verification.get("position_mode"),
         "credentials_stored": "encrypted",
@@ -898,14 +900,23 @@ async def connect_bitget(payload: BitgetConnectionRequest, user: AuthenticatedUs
     }
 
 
-@app.post("/connection/bitget/disconnect")
-async def disconnect_bitget(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+@app.get("/account/status")
+def account_status(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    connected = execution_client_for(user).configured
+    return {
+        "status": "connected" if connected else "not_configured",
+        "connected": connected,
+    }
+
+
+@app.delete("/account/disconnect")
+async def disconnect_account(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     await user_runtime_registry.stop(user.id)
     persistence = cycle_logger_for(user).delete_user_credentials(user.id)
     if persistence["status"] != "deleted":
         raise HTTPException(status_code=503, detail="Credentials could not be removed from secure storage")
     credential_vault.delete(user.id)
-    return {"status": "disconnected"}
+    return {"status": "disconnected", "connected": False}
 
 
 @app.post("/user/backfill-trades")

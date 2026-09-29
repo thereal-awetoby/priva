@@ -22,8 +22,9 @@ Use these endpoints from Builder A:
 - `POST /paper-trade` — submit a trade to the Bitget paper environment
 - `POST /strategies/{strategy_id}/backtest` — run a backtest and get metrics
 - `GET /auth/session` — verify the signed-in Supabase user
-- `POST /connection/bitget` — verify and connect the user's Bitget demo credentials
-- `POST /connection/bitget/disconnect` — clear the user's connected credentials
+- `GET /account/status` — return only the current user's connection status
+- `POST /account/connect` — verify and connect the user's Bitget demo credentials
+- `DELETE /account/disconnect` — stop the user's worker and remove their credentials
 - `GET /user/agent-loop` — authenticated worker status
 - `GET /user/agent-settings` — load that user's persisted settings
 - `POST /user/agent-settings` — save that user's strategy, risk, market, and exit settings
@@ -69,8 +70,9 @@ Authorization: Bearer <Supabase access token>
 
 - Do not collect or store LLM/provider API keys in the browser.
 - Bitget demo credentials may be collected in the connection form only to send
-  them over HTTPS to `POST /connection/bitget`; never store them in browser
-  storage or return them in UI state.
+  them over HTTPS to `POST /account/connect`; never store them in browser
+  storage or return them in UI state. The backend returns only status and the
+  verified position mode.
 - All provider-backed parsing is handled server-side by the backend.
 - The backend currently supports `use_gemini`; older `use_qwen` and `use_grok` payloads are tolerated for compatibility but should not be used as the target path.
 - Supported Bitget paper symbols are currently `AAPLUSDT` and `TSLAUSDT`.
@@ -92,7 +94,7 @@ The backend has already been verified for:
 - `GET /pnl` (including `win_rate_pct` and `max_drawdown_pct`)
 - `GET /activity-log` (including `mode` metadata)
 - `GET /auth/session` (with a valid Supabase access token)
-- `POST /connection/bitget` (credentials verified without returning secrets)
+- `POST /account/connect` (credentials verified without returning secrets)
 
 ## 5.1 Risk settings defaults and current logic
 

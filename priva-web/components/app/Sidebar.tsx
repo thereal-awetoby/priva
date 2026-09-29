@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiGet } from "@/lib/api";
 import { createClient } from "@/lib/supabase/client";
+import ConnectAccountForm from "@/components/app/ConnectAccountForm";
 
 type SidebarProps = {
   activeTab: string;
   onTabChange: (tab: string) => void;
+  onConnectionChange: (status: "connected" | "not_configured") => void;
 };
 
 const WORKSPACE_NAME_KEY = "priva_workspace_name";
@@ -68,14 +70,12 @@ const navItems = [
   },
 ];
 
-export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
+export default function Sidebar({ activeTab, onTabChange, onConnectionChange }: SidebarProps) {
   const [connection, setConnection] = useState<{ status?: string; position_mode?: string } | null>(null);
   const [isConnectOpen, setIsConnectOpen] = useState(false);
   const [isConfirmingDisconnect, setIsConfirmingDisconnect] = useState(false);
-  const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [credentials, setCredentials] = useState({ apiKey: "", apiSecret: "", passphrase: "" });
   const [workspaceName, setWorkspaceName] = useState("Unknown");
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
@@ -94,9 +94,9 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
       const timeout = window.setTimeout(() => controller.abort(), CONNECTION_CHECK_TIMEOUT_MS);
 
       try {
-        const payload = await apiGet<{ status?: string }>("/account/balance", { signal: controller.signal });
+        const payload = await apiGet<{ status?: string }>("/account/status", { signal: controller.signal });
         if (!active || checkVersion !== connectionCheckVersionRef.current) return;
-        if (payload.status === "ok" || payload.status === "not_configured") {
+        if (payload.status === "connected" || payload.status === "not_configured") {
           setConnection({ status: payload.status });
         } else {
           setConnection({ status: "unavailable" });
@@ -177,43 +177,19 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
     };
   }, []);
 
-  const connected = connection?.status === "ok";
-
-  const handleConnect = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setConnecting(true);
-    setConnectionError(null);
-    try {
-      const payload = await apiPost<{ status?: string; message?: string; position_mode?: string }>(
-        "/connection/bitget",
-        {
-          api_key: credentials.apiKey,
-          api_secret: credentials.apiSecret,
-          passphrase: credentials.passphrase,
-        },
-      );
-      if (payload.status !== "connected") {
-        throw new Error(payload.message ?? "Bitget credentials could not be verified");
-      }
-      connectionCheckVersionRef.current += 1;
-      setConnection({ status: "ok", position_mode: payload.position_mode });
-      setCredentials({ apiKey: "", apiSecret: "", passphrase: "" });
-      setIsConnectOpen(false);
-    } catch (error) {
-      setConnectionError(error instanceof Error ? error.message : "Unable to connect Bitget");
-    } finally {
-      setConnecting(false);
-    }
-  };
+  const connected = connection?.status === "connected";
 
   const handleDisconnect = async () => {
     setDisconnecting(true);
     try {
-      await apiPost("/connection/bitget/disconnect", {});
+      await apiDelete("/account/disconnect");
       connectionCheckVersionRef.current += 1;
       setConnection({ status: "not_configured" });
+      onConnectionChange("not_configured");
       setIsConfirmingDisconnect(false);
       setIsConnectOpen(false);
+    } catch (error) {
+      setConnectionError(error instanceof Error ? error.message : "Unable to disconnect Bitget");
     } finally {
       setDisconnecting(false);
     }
@@ -279,7 +255,7 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
             <div className="connection-row">
               <div className="connection-mark">B</div>
               <div>
-                <div className="connection-name">Bitget paper</div>
+                <div className="connection-name">{connected ? "Bitget demo" : "Connect account"}</div>
                 <div className="connection-sub">
                   {connected
                     ? connection?.position_mode
@@ -357,6 +333,7 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
                   Priva will no longer be able to place trades until you
                   reconnect a demo account.
                 </p>
+                {connectionError ? <p className="account-connect-error" role="alert">{connectionError}</p> : null}
                 <div className="connection-actions">
                   <button
                     className="btn"
@@ -379,69 +356,24 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
               <>
                 <h2 className="modal-title">Connect Bitget demo</h2>
                 <p className="modal-sub">
-                  Credentials are verified by the backend and held in memory
-                  only. Withdrawal access is not used.
+                  Connect the paper account associated with your Bitget login.
                 </p>
-                <form onSubmit={handleConnect}>
-                  <div className="form-field">
-                    <label className="form-label">API key</label>
-                    <input
-                      className="form-input"
-                      type="text"
-                      autoComplete="off"
-                      required
-                      value={credentials.apiKey}
-                      onChange={(event) =>
-                        setCredentials({ ...credentials, apiKey: event.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="form-field">
-                    <label className="form-label">API secret</label>
-                    <input
-                      className="form-input"
-                      type="password"
-                      autoComplete="off"
-                      required
-                      value={credentials.apiSecret}
-                      onChange={(event) =>
-                        setCredentials({ ...credentials, apiSecret: event.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="form-field">
-                    <label className="form-label">Passphrase</label>
-                    <input
-                      className="form-input"
-                      type="password"
-                      autoComplete="off"
-                      required
-                      value={credentials.passphrase}
-                      onChange={(event) =>
-                        setCredentials({ ...credentials, passphrase: event.target.value })
-                      }
-                    />
-                  </div>
-                  {connectionError ? (
-                    <p className="form-hint" style={{ color: "var(--down)" }}>
-                      {connectionError}
-                    </p>
-                  ) : null}
+                <ConnectAccountForm
+                  submitLabel={connected ? "Reconnect account" : "Connect demo account"}
+                  onConnected={(positionMode) => {
+                    connectionCheckVersionRef.current += 1;
+                    setConnection({ status: "connected", position_mode: positionMode });
+                    onConnectionChange("connected");
+                    setIsConnectOpen(false);
+                  }}
+                />
+                {connected ? (
                   <div className="connection-actions">
-                    <button className="btn btn-primary" type="submit" disabled={connecting}>
-                      {connecting ? "Verifying…" : "Connect demo account"}
+                    <button className="btn" type="button" onClick={() => setIsConfirmingDisconnect(true)}>
+                      Disconnect
                     </button>
-                    {connected ? (
-                      <button
-                        className="btn"
-                        type="button"
-                        onClick={() => setIsConfirmingDisconnect(true)}
-                      >
-                        Disconnect
-                      </button>
-                    ) : null}
                   </div>
-                </form>
+                ) : null}
               </>
             )}
           </div>

@@ -37,7 +37,7 @@ def _adaptive_leverage(signal_strength: float) -> float:
     return 1.0
 
 
-def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
+def _momentum_strategy(ticker: dict[str, Any], *, user_id: str | None = None) -> Decision:
     if ticker.get("status") != "live":
         return Decision("hold", 0.0, 1.0, "market feed unavailable; fallback mode active")
 
@@ -45,7 +45,7 @@ def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
     open_price = float(ticker.get("open_price", 0.0) or 0.0)
     if last_price <= 0 or open_price <= 0:
         return Decision("hold", 0.0, 1.0, "invalid market prices")
-    config = _get_builtin_strategy_config("momentum_breakout")
+    config = _get_builtin_strategy_config("momentum_breakout", user_id=user_id)
     threshold_pct = float(config.get("threshold_pct", 1.0) or 1.0)
     threshold = threshold_pct / 100.0
     if last_price > open_price and (last_price - open_price) / open_price >= threshold:
@@ -64,7 +64,7 @@ def _momentum_strategy(ticker: dict[str, Any]) -> Decision:
     return Decision(signal, 1.0 if signal != "hold" else 0.0, leverage, "simple price-vs-open momentum signal", rounded_strength)
 
 
-def _mean_reversion_strategy(ticker: dict[str, Any]) -> Decision:
+def _mean_reversion_strategy(ticker: dict[str, Any], *, user_id: str | None = None) -> Decision:
     if ticker.get("status") != "live":
         return Decision("hold", 0.0, 1.0, "market feed unavailable; fallback mode active")
 
@@ -73,7 +73,7 @@ def _mean_reversion_strategy(ticker: dict[str, Any]) -> Decision:
     if last_price <= 0 or open_price <= 0:
         return Decision("hold", 0.0, 1.0, "invalid market prices")
 
-    config = _get_builtin_strategy_config("mean_reversion")
+    config = _get_builtin_strategy_config("mean_reversion", user_id=user_id)
     threshold_pct = float(config.get("threshold_pct", 1.0) or 1.0)
     threshold = threshold_pct / 100.0
 
@@ -89,7 +89,7 @@ def _mean_reversion_strategy(ticker: dict[str, Any]) -> Decision:
     return Decision("hold", 0.0, 1.0, "mean reversion: price within neutral band", 0.0)
 
 
-def _overnight_gap_strategy(ticker: dict[str, Any]) -> Decision:
+def _overnight_gap_strategy(ticker: dict[str, Any], *, user_id: str | None = None) -> Decision:
     if ticker.get("status") != "live":
         return Decision("hold", 0.0, 1.0, "market feed unavailable; fallback mode active")
 
@@ -99,7 +99,7 @@ def _overnight_gap_strategy(ticker: dict[str, Any]) -> Decision:
     if last_price <= 0 or previous_close <= 0 or session_open <= 0:
         return Decision("hold", 0.0, 1.0, "overnight gap data unavailable")
 
-    config = _get_builtin_strategy_config("overnight_gap")
+    config = _get_builtin_strategy_config("overnight_gap", user_id=user_id)
     threshold_pct = float(config.get("threshold_pct", 1.0) or 1.0)
     gap_pct = ((session_open - previous_close) / previous_close) * 100
     strength = min(1.0, abs(gap_pct) / max(threshold_pct, 0.01))
@@ -378,7 +378,7 @@ def backtest_strategy(
             continue
         last_valid_price = price
         ticker = _build_ticker_from_candle(candle)
-        decision = strategy_function(ticker)
+        decision = strategy_function(ticker, user_id=user_id)
         target_side = decision.action if decision.action in {"buy", "sell"} else None
 
         if target_side is None:
@@ -886,7 +886,7 @@ def register_custom_strategy(
     trailing_profit_lock_pct = parsed_strategy.get("trailing_profit_lock_pct")
     market = parsed_strategy.get("market")
 
-    def custom_strategy(ticker: dict[str, Any]) -> Decision:
+    def custom_strategy(ticker: dict[str, Any], *, user_id: str | None = None) -> Decision:
         if ticker.get("status") != "live":
             return Decision("hold", 0.0, 1.0, "market feed unavailable; fallback mode active")
 
@@ -985,7 +985,7 @@ def build_signal_from_ticker(
     strategy_function = _strategy_function(selected_strategy_id, user_id)
     if strategy_function is None:
         raise ValueError(f"unknown strategy: {selected_strategy_id}")
-    decision = strategy_function(ticker)
+    decision = strategy_function(ticker, user_id=user_id)
     decision = _apply_builtin_strategy_config(selected_strategy_id, decision, user_id=user_id)
     if decision.market is None:
         decision = replace(

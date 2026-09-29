@@ -198,6 +198,7 @@ def test_supabase_migrations_define_owner_policies_for_user_tables():
         assert f"alter table public.{table} enable row level security" in sql
         assert f"create policy {table}_owner_all" in sql
     assert "auth.uid() = user_id" in sql
+    assert "revoke all on table public.user_bitget_credentials from anon, authenticated" in sql
 
 
 def test_supabase_logger_saves_custom_strategy(monkeypatch):
