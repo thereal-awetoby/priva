@@ -203,6 +203,7 @@ export default function AppShell() {
     <div className="app-root">
       <Sidebar
         activeTab={activeTab}
+        userId={userId}
         onTabChange={setActiveTab}
         onConnectionChange={(status) => setAccountState(status)}
       />

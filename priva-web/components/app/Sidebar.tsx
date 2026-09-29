@@ -8,6 +8,7 @@ import ConnectAccountForm from "@/components/app/ConnectAccountForm";
 
 type SidebarProps = {
   activeTab: string;
+  userId: string | null;
   onTabChange: (tab: string) => void;
   onConnectionChange: (status: "connected" | "not_configured") => void;
 };
@@ -70,13 +71,14 @@ const navItems = [
   },
 ];
 
-export default function Sidebar({ activeTab, onTabChange, onConnectionChange }: SidebarProps) {
+export default function Sidebar({ activeTab, userId, onTabChange, onConnectionChange }: SidebarProps) {
   const [connection, setConnection] = useState<{ status?: string; position_mode?: string } | null>(null);
   const [isConnectOpen, setIsConnectOpen] = useState(false);
   const [isConfirmingDisconnect, setIsConfirmingDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState("Unknown");
+  const [workspaceNameError, setWorkspaceNameError] = useState<string | null>(null);
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const connectionCheckVersionRef = useRef(0);
@@ -134,9 +136,13 @@ export default function Sidebar({ activeTab, onTabChange, onConnectionChange }: 
       editingWorkspaceUserIdRef.current = null;
       setIsEditingName(false);
       setNameInput("");
+      setWorkspaceNameError(null);
       setWorkspaceName("Unknown");
       if (!user) return;
 
+      const savedWorkspaceName = typeof user.user_metadata?.workspace_name === "string"
+        ? user.user_metadata.workspace_name.trim()
+        : "";
       const metadataName = [
         user.user_metadata?.full_name,
         user.user_metadata?.name,
@@ -145,8 +151,24 @@ export default function Sidebar({ activeTab, onTabChange, onConnectionChange }: 
       const accountName = metadataName || user.email?.split("@")[0] || "Unknown";
 
       try {
-        const savedName = localStorage.getItem(`${WORKSPACE_NAME_KEY}:${userId}`);
-        setWorkspaceName(savedName?.trim() || accountName);
+        const localName = localStorage.getItem(`${WORKSPACE_NAME_KEY}:${userId}`)?.trim();
+        if (savedWorkspaceName) {
+          setWorkspaceName(savedWorkspaceName);
+        } else if (localName) {
+          setWorkspaceName(localName);
+          window.setTimeout(() => {
+            void (async () => {
+              try {
+                const { error } = await supabase.auth.updateUser({ data: { workspace_name: localName } });
+                if (error) setWorkspaceNameError("Workspace name could not be synced to your account");
+              } catch {
+                setWorkspaceNameError("Workspace name could not be synced to your account");
+              }
+            })();
+          }, 0);
+        } else {
+          setWorkspaceName(accountName);
+        }
       } catch {
         setWorkspaceName(accountName);
       }
@@ -195,8 +217,7 @@ export default function Sidebar({ activeTab, onTabChange, onConnectionChange }: 
     }
   };
 
-  const saveName = () => {
-    const userId = workspaceUserIdRef.current;
+  const saveName = async () => {
     const editingUserId = editingWorkspaceUserIdRef.current;
     editingWorkspaceUserIdRef.current = null;
     setIsEditingName(false);
@@ -205,10 +226,30 @@ export default function Sidebar({ activeTab, onTabChange, onConnectionChange }: 
     const trimmed = nameInput.trim();
     const finalName = trimmed === "" ? "Unknown" : trimmed;
     setWorkspaceName(finalName);
+    setWorkspaceNameError(null);
+
+    if (!userId) {
+      setWorkspaceNameError("Workspace name could not be saved to your account");
+      return;
+    }
+
     try {
-      if (userId) localStorage.setItem(`${WORKSPACE_NAME_KEY}:${userId}`, finalName);
+      const { error } = await createClient().auth.updateUser({
+        data: { workspace_name: finalName },
+      });
+      if (error) {
+        setWorkspaceNameError("Workspace name could not be saved to your account");
+        return;
+      }
     } catch {
-      // localStorage unavailable — won't persist across reloads, that's fine
+      setWorkspaceNameError("Workspace name could not be saved to your account");
+      return;
+    }
+
+    try {
+      localStorage.setItem(`${WORKSPACE_NAME_KEY}:${userId}`, finalName);
+    } catch {
+      // Supabase metadata is the persistent source of truth.
     }
   };
 
@@ -293,13 +334,15 @@ export default function Sidebar({ activeTab, onTabChange, onConnectionChange }: 
                         ) : (
                           <div className="profile-name">{workspaceName}</div>
                         )}
-                        <div className="profile-sub">Private workspace</div>
+                        <div className="profile-sub" role={workspaceNameError ? "alert" : undefined}>
+                          {workspaceNameError || "Private workspace"}
+                        </div>
                       </div>
                       <button
                         className="profile-edit-btn"
                         type="button"
                         onClick={() => {
-                          editingWorkspaceUserIdRef.current = workspaceUserIdRef.current;
+                          editingWorkspaceUserIdRef.current = userId;
                           setNameInput(workspaceName === "Unknown" ? "" : workspaceName);
                           setIsEditingName(true);
                         }}
