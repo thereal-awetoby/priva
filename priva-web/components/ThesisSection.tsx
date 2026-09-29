@@ -1,6 +1,6 @@
 export default function ThesisSection() {
     return (
-      <section className="content-section">
+      <section className="content-section" id="thesis">
         <div className="wrap content-split">
           <div>
             <div className="content-eyebrow">The Priva thesis</div>

@@ -23,7 +23,7 @@ const rows = [
   
   export default function PrivacySection() {
     return (
-      <section className="content-section">
+      <section className="content-section" id="privacy">
         <div className="wrap content-split">
           <div>
             <div className="content-eyebrow">Why privacy matters</div>

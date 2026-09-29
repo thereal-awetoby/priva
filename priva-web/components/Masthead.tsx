@@ -6,16 +6,13 @@ export default function Masthead() {
           Pr<span>i</span>va
         </div>
         <nav className="links">
-          <a href="#dashboard">Dashboard</a>
-          <a href="#">Security</a>
-          <a href="#">Docs</a>
+          <a href="#thesis">Thesis</a>
+          <a href="#privacy">Privacy</a>
+          <a href="https://x.com/winsoonbob?s=11" target="_blank" rel="noopener noreferrer">
+            Demo
+          </a>
         </nav>
-                <a
-          className="btn btn-primary"
-          href="/app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
+        <a href="/app" className="btn btn-primary" target="_blank" rel="noopener noreferrer">
           Launch app
         </a>
       </div>
