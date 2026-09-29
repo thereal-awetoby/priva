@@ -685,6 +685,14 @@ a{ color: inherit; }
 }
 .password-toggle:hover{ color: var(--ink-dim); }
 
+/* Edge auto-injects its own reveal/clear icons into password inputs,
+   which stack visually with our custom eye toggle above. Hide them so
+   there's only ever one icon. */
+.password-field input::-ms-reveal,
+.password-field input::-ms-clear{
+  display: none;
+}
+
 .form-hint{
   font-family: var(--font-ibm-plex-mono), monospace;
   font-size: 11px;
