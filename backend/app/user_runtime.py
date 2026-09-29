@@ -12,7 +12,7 @@ from app.market_data import BitgetMarketDataService
 from app.paper_execution import BitgetPaperExecutionClient
 from app.risk_engine import RiskEngine
 from app.supabase_logging import SupabaseCycleLogger
-from app.strategy import configure_builtin_strategy, get_active_strategy_id, register_custom_strategy
+from app.strategy import configure_builtin_strategy, register_custom_strategy
 
 logger = logging.getLogger("priva.user_runtime")
 
@@ -164,6 +164,8 @@ class UserRuntimeRegistry:
         return self._runtimes.get(user_id)
 
     def start(self, user_id: str, execution_client: BitgetPaperExecutionClient) -> UserRuntime:
+        if not execution_client.configured:
+            raise ValueError("a connected Bitget paper account is required to start the agent")
         current = self._runtimes.get(user_id)
         if current and any(worker.task and not worker.task.done() for worker in (current.workers or {}).values()):
             return current
@@ -186,7 +188,7 @@ class UserRuntimeRegistry:
                     description=str(record.get("description") or "").strip() or None,
                 )
         settings = cycle_logger.fetch_user_settings(user_id)
-        strategy_id = str(settings.get("strategy_id") or get_active_strategy_id())
+        strategy_id = str(settings.get("strategy_id") or "momentum_breakout")
         strategy_config = settings.get("strategy_config")
         if isinstance(strategy_config, dict):
             try:

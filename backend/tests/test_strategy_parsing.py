@@ -7,14 +7,47 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def isolated_strategy_state():
+def isolated_strategy_state(monkeypatch):
     original_strategies = dict(strategy_module.STRATEGIES)
     original_catalog = dict(strategy_module._registered_strategy_catalog)
     original_custom_functions = dict(strategy_module._custom_strategy_functions)
     original_custom_catalog = dict(strategy_module._custom_strategy_catalog)
-    original_configs = {key: dict(value) for key, value in strategy_module._builtin_strategy_configs.items()}
-    original_symbols = dict(strategy_module._symbol_strategy_ids)
-    original_active = strategy_module._active_strategy_id
+    original_configs = {key: dict(value) for key, value in strategy_module._user_builtin_strategy_configs.items()}
+    original_symbols = dict(strategy_module._user_symbol_strategy_ids)
+    original_active = dict(strategy_module._active_strategy_ids)
+
+    class StrategyTestLogger:
+        configured = False
+
+        def __init__(self, user_id=None):
+            self.user_id = user_id
+
+        def fetch_user_settings(self, user_id):
+            return {}
+
+        def fetch_custom_strategies(self, user_id):
+            return []
+
+        def save_user_settings(self, user_id, settings):
+            return {"status": "saved"}
+
+        def save_custom_strategy(self, *args, **kwargs):
+            return {"status": "saved"}
+
+        def delete_custom_strategy(self, *args, **kwargs):
+            return {"status": "deleted"}
+
+    default_user = main.AuthenticatedUser("strategy-test-user")
+    monkeypatch.setattr(
+        main,
+        "normalize_user",
+        lambda user: user if isinstance(user, main.AuthenticatedUser) else default_user,
+    )
+    monkeypatch.setattr(main, "execution_client_for", lambda user: type("Client", (), {"configured": True})())
+    monkeypatch.setattr(main, "require_connected_client", lambda user: main.execution_client_for(user))
+    monkeypatch.setattr(main, "SupabaseCycleLogger", lambda user_id=None, **kwargs: StrategyTestLogger(user_id))
+    monkeypatch.setattr(main, "cycle_logger", StrategyTestLogger(default_user.id), raising=False)
+    monkeypatch.setattr(main, "cycle_logger_for", lambda user: main.cycle_logger)
     yield
     strategy_module.STRATEGIES.clear()
     strategy_module.STRATEGIES.update(original_strategies)
@@ -24,11 +57,12 @@ def isolated_strategy_state():
     strategy_module._custom_strategy_functions.update(original_custom_functions)
     strategy_module._custom_strategy_catalog.clear()
     strategy_module._custom_strategy_catalog.update(original_custom_catalog)
-    strategy_module._builtin_strategy_configs.clear()
-    strategy_module._builtin_strategy_configs.update({key: dict(value) for key, value in original_configs.items()})
-    strategy_module._symbol_strategy_ids.clear()
-    strategy_module._symbol_strategy_ids.update(original_symbols)
-    strategy_module._active_strategy_id = original_active
+    strategy_module._user_builtin_strategy_configs.clear()
+    strategy_module._user_builtin_strategy_configs.update({key: dict(value) for key, value in original_configs.items()})
+    strategy_module._user_symbol_strategy_ids.clear()
+    strategy_module._user_symbol_strategy_ids.update(original_symbols)
+    strategy_module._active_strategy_ids.clear()
+    strategy_module._active_strategy_ids.update(original_active)
 
 
 def test_parse_natural_language_strategy_supports_mean_reversion_text():
@@ -464,9 +498,6 @@ def test_symbol_strategy_mapping_selects_strategy_per_stock():
 
 
 def test_strategy_activation_applies_selected_symbols(monkeypatch):
-    monkeypatch.setattr(main.cycle_logger, "save_active_strategy", lambda strategy_id: {"status": "skipped"})
-    main.agent_loop.configure_watched_symbols(["AAPLUSDT", "TSLAUSDT"])
-
     result = main.activate_strategy(
         "mean_reversion",
         main.StrategyActivationRequest(symbols=["tslausdt"]),
@@ -474,17 +505,15 @@ def test_strategy_activation_applies_selected_symbols(monkeypatch):
 
     assert result["status"] == "activated"
     assert result["symbols"] == ["TSLAUSDT"]
-    assert main.agent_loop.WATCHED_SYMBOLS == ["TSLAUSDT"]
     activate_strategy("momentum_breakout")
 
 
 def test_strategy_activation_applies_builtin_risk_configuration(monkeypatch):
     configured = {}
-    monkeypatch.setattr(main.cycle_logger, "save_active_strategy", lambda strategy_id: {"status": "skipped"})
     monkeypatch.setattr(
         main,
         "configure_builtin_strategy",
-        lambda strategy_id, config: configured.update({"strategy_id": strategy_id, "config": config}),
+        lambda strategy_id, config, user_id=None: configured.update({"strategy_id": strategy_id, "config": config}),
     )
 
     result = main.activate_strategy(
@@ -627,7 +656,6 @@ def test_delete_strategy_preserves_users_active_custom_strategy(monkeypatch):
 
 
 def test_strategy_activation_rejects_unsupported_symbols_without_mutation(monkeypatch):
-    main.agent_loop.configure_watched_symbols(["AAPLUSDT"])
     activate_strategy("momentum_breakout")
 
     result = main.activate_strategy(
@@ -637,7 +665,6 @@ def test_strategy_activation_rejects_unsupported_symbols_without_mutation(monkey
 
     assert result["status"] == "rejected"
     assert get_active_strategy_id() == "momentum_breakout"
-    assert main.agent_loop.WATCHED_SYMBOLS == ["AAPLUSDT"]
 
 
 def test_parse_strategy_endpoint_registers_structured_strategy_for_activation():
@@ -651,12 +678,12 @@ def test_parse_strategy_endpoint_registers_structured_strategy_for_activation():
 
     assert parsed["status"] == "parsed"
     assert parsed["strategy_id"].startswith("custom_buy_open_")
-    assert parsed["strategy_id"] in list_strategy_catalog()
-    assert activate_strategy(parsed["strategy_id"]) is True
-    assert get_active_strategy_id() == parsed["strategy_id"]
+    assert parsed["strategy_id"] in list_strategy_catalog("strategy-test-user")
+    assert activate_strategy(parsed["strategy_id"], user_id="strategy-test-user") is True
+    assert get_active_strategy_id("strategy-test-user") == parsed["strategy_id"]
 
     ticker = {"status": "live", "last_price": 101.5, "open_price": 100.0}
-    signal = build_signal_from_ticker(ticker)
+    signal = build_signal_from_ticker(ticker, user_id="strategy-test-user")
     assert signal["action"] == "buy"
 
 
@@ -673,4 +700,4 @@ def test_parse_strategy_endpoint_preserves_custom_name_and_description():
 
     assert parsed["name"] == "Opening Push"
     assert parsed["description"] == "Buy strength above the opening price."
-    assert list_strategy_catalog()[parsed["strategy_id"]]["name"] == "Opening Push"
+    assert list_strategy_catalog("strategy-test-user")[parsed["strategy_id"]]["name"] == "Opening Push"

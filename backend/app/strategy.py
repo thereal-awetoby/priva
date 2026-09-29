@@ -203,40 +203,27 @@ STRATEGIES = {
 _registered_strategy_catalog = dict(STRATEGY_CATALOG)
 _custom_strategy_functions: dict[tuple[str, str], Any] = {}
 _custom_strategy_catalog: dict[tuple[str, str], dict[str, Any]] = {}
-_active_strategy_id = "momentum_breakout"
-_builtin_strategy_configs: dict[str, dict[str, Any]] = {}
+_active_strategy_ids: dict[str, str] = {}
 _user_builtin_strategy_configs: dict[tuple[str, str], dict[str, Any]] = {}
-_symbol_strategy_ids: dict[str, str] = {}
+_user_symbol_strategy_ids: dict[tuple[str, str], str] = {}
 
 
-def _set_builtin_strategy_config(strategy_id: str, config: dict[str, Any], *, user_id: str = "local-development") -> None:
+def _set_builtin_strategy_config(strategy_id: str, config: dict[str, Any], *, user_id: str | None = None) -> None:
     if strategy_id not in STRATEGIES:
         raise ValueError(f"unknown strategy: {strategy_id}")
 
     normalized = dict(config or {})
-    if user_id == "local-development":
-        existing = dict(_builtin_strategy_configs.get(strategy_id, {}) or {})
-        existing.update(normalized)
-        _builtin_strategy_configs[strategy_id] = existing
-        return
-
-    key = (user_id, strategy_id)
+    key = (user_id or "", strategy_id)
     existing = dict(_user_builtin_strategy_configs.get(key, {}) or {})
     existing.update(normalized)
     _user_builtin_strategy_configs[key] = existing
 
 
-def _get_builtin_strategy_config(strategy_id: str, *, user_id: str = "local-development") -> dict[str, Any]:
-    if user_id == "local-development":
-        return dict(_builtin_strategy_configs.get(strategy_id, {}) or {})
-    key = (user_id, strategy_id)
-    override = _user_builtin_strategy_configs.get(key, {})
-    if override:
-        return dict(override)
-    return dict(_builtin_strategy_configs.get(strategy_id, {}) or {})
+def _get_builtin_strategy_config(strategy_id: str, *, user_id: str | None = None) -> dict[str, Any]:
+    return dict(_user_builtin_strategy_configs.get((user_id or "", strategy_id), {}) or {})
 
 
-def _apply_builtin_strategy_config(strategy_id: str, decision: Decision, *, user_id: str = "local-development") -> Decision:
+def _apply_builtin_strategy_config(strategy_id: str, decision: Decision, *, user_id: str | None = None) -> Decision:
     config = _get_builtin_strategy_config(strategy_id, user_id=user_id)
     if not config:
         return decision
@@ -264,7 +251,7 @@ def _apply_builtin_strategy_config(strategy_id: str, decision: Decision, *, user
     )
 
 
-def configure_builtin_strategy(strategy_id: str, config: dict[str, Any], *, user_id: str = "local-development") -> None:
+def configure_builtin_strategy(strategy_id: str, config: dict[str, Any], *, user_id: str | None = None) -> None:
     if strategy_id not in STRATEGIES:
         raise ValueError(f"unknown strategy: {strategy_id}")
 
@@ -363,7 +350,7 @@ def backtest_strategy(
     candles: list[dict[str, Any]],
     initial_capital: float = 10000.0,
     *,
-    user_id: str = "local-development",
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     strategy_function = _strategy_function(strategy_id, user_id)
     if strategy_function is None:
@@ -824,28 +811,27 @@ def decision_to_dict(decision: Decision) -> dict[str, Any]:
     return {**asdict(decision), "status": "logged"}
 
 
-def get_active_strategy_id() -> str:
-    return _active_strategy_id
+def get_active_strategy_id(user_id: str | None = None) -> str:
+    return _active_strategy_ids.get(user_id or "", "momentum_breakout")
 
 
-def _strategy_function(strategy_id: str, user_id: str = "local-development") -> Any | None:
+def _strategy_function(strategy_id: str, user_id: str | None = None) -> Any | None:
     if strategy_id in STRATEGIES:
         return STRATEGIES[strategy_id]
-    return _custom_strategy_functions.get((user_id, strategy_id))
+    return _custom_strategy_functions.get((user_id or "", strategy_id))
 
 
-def activate_strategy(strategy_id: str, *, user_id: str = "local-development") -> bool:
-    global _active_strategy_id
+def activate_strategy(strategy_id: str, *, user_id: str | None = None) -> bool:
     if _strategy_function(strategy_id, user_id) is None:
         return False
-    _active_strategy_id = strategy_id
+    _active_strategy_ids[user_id or ""] = strategy_id
     return True
 
 
 def configure_symbol_strategies(
     strategy_by_symbol: dict[str, str],
     *,
-    user_id: str = "local-development",
+    user_id: str | None = None,
 ) -> dict[str, str]:
     normalized: dict[str, str] = {}
     for symbol, strategy_id in strategy_by_symbol.items():
@@ -854,20 +840,26 @@ def configure_symbol_strategies(
             raise ValueError(f"unknown strategy: {strategy_id}")
         if normalized_symbol:
             normalized[normalized_symbol] = strategy_id
-    _symbol_strategy_ids.clear()
-    _symbol_strategy_ids.update(normalized)
-    return dict(_symbol_strategy_ids)
+    owner_id = user_id or ""
+    for key in [key for key in _user_symbol_strategy_ids if key[0] == owner_id]:
+        del _user_symbol_strategy_ids[key]
+    _user_symbol_strategy_ids.update({(owner_id, symbol): strategy_id for symbol, strategy_id in normalized.items()})
+    return dict(normalized)
 
 
-def get_strategy_for_symbol(symbol: str) -> str:
-    return _symbol_strategy_ids.get(str(symbol).strip().upper(), _active_strategy_id)
+def get_strategy_for_symbol(symbol: str, user_id: str | None = None) -> str:
+    owner_id = user_id or ""
+    return _user_symbol_strategy_ids.get(
+        (owner_id, str(symbol).strip().upper()),
+        get_active_strategy_id(user_id),
+    )
 
 
 def register_custom_strategy(
     strategy_id: str,
     parsed_strategy: dict[str, Any],
     *,
-    user_id: str = "local-development",
+    user_id: str | None = None,
     name: str | None = None,
     description: str | None = None,
 ) -> None:
@@ -955,7 +947,7 @@ def register_custom_strategy(
             trailing_profit_lock_pct=trailing_profit_lock_pct,
         )
 
-    key = (user_id, strategy_id)
+    key = (user_id or "", strategy_id)
     _custom_strategy_functions[key] = custom_strategy
     _custom_strategy_catalog[key] = {
         "id": strategy_id,
@@ -965,19 +957,19 @@ def register_custom_strategy(
     }
 
 
-def unregister_custom_strategy(strategy_id: str, *, user_id: str = "local-development") -> bool:
-    key = (user_id, strategy_id)
+def unregister_custom_strategy(strategy_id: str, *, user_id: str | None = None) -> bool:
+    owner_id = user_id or ""
+    key = (owner_id, strategy_id)
     definition = _custom_strategy_catalog.get(key)
     if not definition or definition.get("type") != "structured":
         return False
     _custom_strategy_functions.pop(key, None)
     _custom_strategy_catalog.pop(key, None)
-    if user_id == "local-development":
-        for symbol, mapped_strategy_id in list(_symbol_strategy_ids.items()):
-            if mapped_strategy_id == strategy_id:
-                del _symbol_strategy_ids[symbol]
-    if user_id == "local-development" and _active_strategy_id == strategy_id:
-        activate_strategy("momentum_breakout")
+    for symbol_key, mapped_strategy_id in list(_user_symbol_strategy_ids.items()):
+        if symbol_key[0] == owner_id and mapped_strategy_id == strategy_id:
+            del _user_symbol_strategy_ids[symbol_key]
+    if _active_strategy_ids.get(owner_id) == strategy_id:
+        _active_strategy_ids[owner_id] = "momentum_breakout"
     return True
 
 
@@ -985,9 +977,11 @@ def build_signal_from_ticker(
     ticker: dict[str, Any],
     strategy_id: str | None = None,
     *,
-    user_id: str = "local-development",
+    user_id: str | None = None,
 ) -> dict[str, Any]:
-    selected_strategy_id = strategy_id or get_strategy_for_symbol(str(ticker.get("symbol", "")))
+    selected_strategy_id = strategy_id or get_strategy_for_symbol(
+        str(ticker.get("symbol", "")), user_id=user_id
+    )
     strategy_function = _strategy_function(selected_strategy_id, user_id)
     if strategy_function is None:
         raise ValueError(f"unknown strategy: {selected_strategy_id}")
@@ -1003,13 +997,13 @@ def build_signal_from_ticker(
     return decision_to_dict(decision)
 
 
-def list_strategy_catalog(user_id: str = "local-development") -> dict[str, dict[str, Any]]:
+def list_strategy_catalog(user_id: str | None = None) -> dict[str, dict[str, Any]]:
     catalog = dict(_registered_strategy_catalog)
     catalog.update(
         {
             strategy_id: definition
             for (owner_id, strategy_id), definition in _custom_strategy_catalog.items()
-            if owner_id == user_id
+            if owner_id == (user_id or "")
         }
     )
     return catalog

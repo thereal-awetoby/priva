@@ -52,25 +52,24 @@ python -m pytest -q
 
 The `/paper-trade` route runs the risk engine first, sets the requested futures
 leverage, then submits an authenticated spot or USDT-futures market order to
-Bitget's paper environment. Configure these secrets in Render's environment settings:
+Bitget's paper environment. Bitget credentials are supplied by each user and
+stored encrypted in Supabase; there are no shared `BITGET_API_*` environment
+credentials. The backend refuses to start without `SUPABASE_URL`,
+`SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`.
 
-- `BITGET_API_KEY`
-- `BITGET_API_SECRET`
-- `BITGET_API_PASSPHRASE`
-- `BITGET_POSITION_MODE` (use `hedge` for the configured futures account)
-- `AGENT_WATCHED_SYMBOLS` (use `AAPLUSDT,TSLAUSDT`)
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `PRIVA_AUTH_REQUIRED=true` to require Supabase sessions
-- `PRIVA_CREDENTIAL_ENCRYPTION_KEY` (the output of `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
+Set `PRIVA_CREDENTIAL_ENCRYPTION_KEY` to a generated Fernet key, for example:
 
-The encryption key must be the generated 44-character URL-safe base64 value,
-not the Python command itself. If the variable is missing or malformed, the
-service still starts but credential connection and persistence remain disabled.
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
 
-The client always sends Bitget's `paptrading: 1` header. Without all three
-secrets, the route returns `not_configured` and does not call the exchange.
+The key must be the generated 44-character URL-safe base64 value, not the
+Python command itself. Credential connection and persistence fail closed if
+encryption or the user-scoped database write is unavailable. Every protected
+request requires a valid Supabase bearer token. Account-dependent endpoints
+return `409` with `status: not_configured` until that authenticated user has
+connected an account. The Bitget execution client always sends
+`paptrading: 1`.
 
 `GET /account/balance` reads the connected demo account's futures equity and
 available USDT margin, plus spot USDT availability. It is read-only. Demo
@@ -80,17 +79,11 @@ The response also includes `starting_balance`, `daily_change`, and
 `daily_change_pct`; the baseline is the first observed balance for the current
 UTC day.
 
-For the single-workspace demo, users can connect credentials through
-`POST /connection/bitget`. The backend verifies them against Bitget before
-using them for the authenticated user's execution client. Credentials are
-never returned to the frontend or persisted in plaintext. `POST /connection/bitget/disconnect`
-clears the runtime credentials. The backend now provides Supabase
-authentication and an encrypted per-user runtime vault when the variables
-above are configured.
-
-Authenticated requests must include `Authorization: Bearer <Supabase access token>`.
-The connection route verifies credentials with Bitget before encrypting them in
-the per-user runtime vault. Secrets are never returned to the client.
+During the security-only rollout, the existing authenticated connection route
+is `POST /connection/bitget`; it verifies credentials and requires encrypted,
+per-user Supabase persistence. `POST /connection/bitget/disconnect` removes the
+stored credentials. The next rollout replaces these endpoints with
+`/account/connect` and `/account/disconnect`.
 
 User-scoped autonomous controls are available through:
 
@@ -239,48 +232,27 @@ Different strategies can be assigned to different symbols in the same request:
 }
 ```
 
-Symbols without an assignment use the globally activated strategy.
+Symbols without an assignment use that user's selected strategy.
 
-The selected strategy is persisted in Supabase and restored at startup. If
-Supabase is not configured, activation remains process-local.
-
-### Supabase strategy persistence
-
-Run this once in the Supabase SQL editor to persist the active strategy across
-Render restarts:
-
-```sql
-create table if not exists public.strategy_settings (
-	id text primary key,
-	strategy_id text not null,
-	updated_at timestamptz not null default now()
-);
-
-alter table public.strategy_settings enable row level security;
-
-alter table public.agent_cycles
-	add column if not exists session_id text;
-
-create index if not exists agent_cycles_session_id_idx
-	on public.agent_cycles (session_id);
-```
+The selected strategy is persisted in that user's Supabase settings. Strategy
+selection and overrides are isolated by authenticated user.
 
 For multi-user credential persistence and user-scoped cycle logs, also run
 [`supabase_multi_user.sql`](supabase_multi_user.sql) once in the Supabase SQL
 Editor. It creates the encrypted-credential, user-settings, and custom-strategy
 tables and adds `user_id` to `agent_cycles`. Custom strategy definitions,
 names, and descriptions are restored from `custom_strategies` after a Render
-restart. The backend uses the service-role key server-side; encrypted
-credentials must never be exposed through client policies.
-For existing deployments, also run
+restart. All user-owned tables have RLS owner policies, and backend service-role
+queries also apply explicit `user_id` filters.
+For existing deployments, run
 [`add_custom_strategies_owner_policy.sql`](add_custom_strategies_owner_policy.sql)
-to allow authenticated users to access only their own custom strategy rows.
+to add nullable position-mode state and apply owner policies to existing
+multi-user deployments. Connected accounts with a missing position mode are
+verified against Bitget before they can be used.
 
-The backend uses the singleton row `id = 'global'`. It loads that row at
-startup and upserts it when `/strategies/{strategy_id}/activate` succeeds.
-Each backend process also gets a `session_id`; realized PnL is calculated from
-cycles in the current session, while unrealized PnL comes from live Bitget
-positions.
+Strategy, risk, and execution settings are stored per authenticated user.
+Cycle and balance queries filter by both the authenticated `user_id` and, when
+applicable, the user's account fingerprint.
 
 ## Useful endpoints
 

@@ -218,15 +218,10 @@ Production desk already uses `https://priva-499h.onrender.com`.
 
 | Variable | Point |
 |---|---|
-| `BITGET_API_KEY` | Paper key |
-| `BITGET_API_SECRET` | Paper secret |
-| `BITGET_API_PASSPHRASE` | Paper passphrase |
-| `BITGET_POSITION_MODE` | `hedge` |
 | `AGENT_WATCHED_SYMBOLS` | `AAPLUSDT,TSLAUSDT` |
 | `SUPABASE_URL` | Project URL |
 | `SUPABASE_ANON_KEY` | Anon |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server only — never ship to the browser |
-| `PRIVA_AUTH_REQUIRED` | `true` in production |
 | `PRIVA_CREDENTIAL_ENCRYPTION_KEY` | Fernet, 44 chars |
 
 ```bash
@@ -238,6 +233,8 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 Public env only: API base (`https://priva-499h.onrender.com` in prod) and Supabase URL + anon key. Same project as the worker.
 
 Never put the service role key or Bitget secrets in `NEXT_PUBLIC_*`.
+Bitget API credentials are entered per user in the authenticated app and stored
+encrypted in Supabase; do not configure shared Bitget credentials in Render.
 
 ---
 

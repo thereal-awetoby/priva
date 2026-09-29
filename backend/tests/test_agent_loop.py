@@ -50,11 +50,12 @@ def test_recent_cycles_are_scoped_by_user():
     assert agent_loop_module.recent_cycles() == []
 
 
-def test_agent_loop_status_returns_only_the_authenticated_users_cycles():
+def test_agent_loop_status_returns_only_the_authenticated_users_cycles(monkeypatch):
     agent_loop_module._recent_cycles.clear()
     agent_loop_module._record_cycle({"symbol": "AAPLUSDT", "id": "one"}, "user-one")
     agent_loop_module._record_cycle({"symbol": "TSLAUSDT", "id": "two"}, "user-two")
 
+    monkeypatch.setattr(main_module, "require_connected_client", lambda user: None)
     result = main_module.agent_loop_status(AuthenticatedUser("user-two"))
 
     assert result["recent_cycles"] == [{"symbol": "TSLAUSDT", "id": "two"}]
@@ -869,7 +870,6 @@ def test_fixed_dollar_trailing_floor_remains_distinct_from_percentage_lock():
 
 
 def test_agent_cycle_closes_position_on_opposite_signal(monkeypatch):
-    monkeypatch.setattr("app.agent_loop.CLOSE_ON_SIGNAL_VIOLATION", True)
     monkeypatch.setattr("app.agent_loop.TAKE_PROFIT_PCT", 50.0)
     monkeypatch.setattr(
         "app.agent_loop.build_signal_from_ticker",
@@ -880,7 +880,13 @@ def test_agent_cycle_closes_position_on_opposite_signal(monkeypatch):
     )
 
     result = asyncio.run(
-        run_cycle("AAPLUSDT", market_service=FakeMarketService(), risk_engine=RiskEngine(), execution_client=execution)
+        run_cycle(
+            "AAPLUSDT",
+            market_service=FakeMarketService(),
+            risk_engine=RiskEngine(),
+            execution_client=execution,
+            close_on_signal_violation=True,
+        )
     )
 
     assert result["status"] == "closed"

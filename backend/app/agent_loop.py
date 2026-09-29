@@ -18,27 +18,15 @@ from app.strategy import build_pairs_signal, build_signal_from_ticker, get_activ
 
 logger = logging.getLogger("priva.agent_loop")
 logger.setLevel(logging.INFO)
-LOOP_INTERVAL_SECONDS = int(os.getenv("AGENT_LOOP_INTERVAL_SECONDS", "300"))
-MARKET_TYPE = os.getenv("AGENT_MARKET_TYPE", "futures").strip().lower()
-if MARKET_TYPE not in {"spot", "futures"}:
-    MARKET_TYPE = "futures"
-TAKE_PROFIT_PCT = float(os.getenv("AGENT_TAKE_PROFIT_PCT", "3.5"))
-STOP_LOSS_PCT = float(os.getenv("AGENT_STOP_LOSS_PCT", "2"))
-TRAILING_PROFIT_TRIGGER_USD = float(os.getenv("AGENT_TRAILING_PROFIT_TRIGGER_USD", "30"))
-TRAILING_PROFIT_FLOOR_USD = float(os.getenv("AGENT_TRAILING_PROFIT_FLOOR_USD", "20"))
-TRAILING_PROFIT_LOCK_PCT = float(os.getenv("AGENT_TRAILING_PROFIT_LOCK_PCT", "30"))
-CLOSE_ON_SIGNAL_VIOLATION = os.getenv("AGENT_CLOSE_ON_SIGNAL_VIOLATION", "true").lower() == "true"
-WATCHED_SYMBOLS = [
-    symbol.strip().upper()
-    for symbol in os.getenv("AGENT_WATCHED_SYMBOLS", "AAPLUSDT,TSLAUSDT").split(",")
-    if symbol.strip().upper() in {"AAPLUSDT", "TSLAUSDT"}
-]
+DEFAULT_MARKET_TYPE = "futures"
+TAKE_PROFIT_PCT = 3.5
+STOP_LOSS_PCT = 2.0
+TRAILING_PROFIT_TRIGGER_USD = 30.0
+TRAILING_PROFIT_FLOOR_USD = 20.0
+TRAILING_PROFIT_LOCK_PCT = 30.0
 ORDER_QTY = float(os.getenv("AGENT_ORDER_QTY", "1"))
 SUPPORTED_SYMBOLS = {"AAPLUSDT", "TSLAUSDT"}
-MODE = "autonomous"
 
-_loop_task: asyncio.Task | None = None
-_stop_event = asyncio.Event()
 _recent_cycles: dict[str, list[dict[str, Any]]] = {}
 _recent_balance_snapshots: dict[str, list[dict[str, Any]]] = {}
 _profit_peaks: dict[tuple[str, str, str, float], float] = {}
@@ -162,7 +150,7 @@ def _model_veto_gate(symbol: str, decision: dict[str, Any]) -> dict[str, Any]:
     return {"allowed": False, "decision": "VETO", "reason": str((parsed or {}).get("reason") or "gemini_veto")}
 
 
-def recent_cycles(user_id: str = "local-development") -> list[dict[str, Any]]:
+def recent_cycles(user_id: str = "") -> list[dict[str, Any]]:
     return list(_recent_cycles.get(user_id, []))
 
 
@@ -186,7 +174,7 @@ def _trailing_profit_exit_reason(
     entry_price = float(live_position.get("entry_price", 0) or 0)
     current_profit = float(live_position.get("unrealized_pnl", 0) or 0)
     key = (
-        str(getattr(cycle_logger, "user_id", "local-development")),
+        str(getattr(cycle_logger, "user_id", "") or ""),
         symbol.upper(),
         market,
         round(entry_price, 8),
@@ -202,58 +190,6 @@ def _trailing_profit_exit_reason(
     if current_profit <= protected_profit:
         return "trailing_profit_lock"
     return None
-
-
-def configure_watched_symbols(symbols: list[str]) -> list[str]:
-    global WATCHED_SYMBOLS
-    WATCHED_SYMBOLS = [symbol.upper() for symbol in symbols if symbol.upper() in SUPPORTED_SYMBOLS]
-    return list(WATCHED_SYMBOLS)
-
-
-def configure_mode(mode: str) -> str:
-    global MODE
-    normalized = str(mode).strip().lower()
-    if normalized not in {"autonomous", "strategy"}:
-        raise ValueError("mode must be autonomous or strategy")
-    MODE = normalized
-    return MODE
-
-
-def configure_market_type(market: str) -> str:
-    global MARKET_TYPE
-    normalized = str(market).strip().lower()
-    if normalized not in {"spot", "futures"}:
-        raise ValueError("market must be spot or futures")
-    MARKET_TYPE = normalized
-    return MARKET_TYPE
-
-
-def configure_exit_rules(
-    *,
-    take_profit_pct: float | None = None,
-    stop_loss_pct: float | None = None,
-    close_on_signal_violation: bool | None = None,
-) -> dict[str, Any]:
-    global TAKE_PROFIT_PCT, STOP_LOSS_PCT, CLOSE_ON_SIGNAL_VIOLATION
-    if take_profit_pct is not None:
-        if take_profit_pct <= 0:
-            raise ValueError("take_profit_pct must be greater than zero")
-        TAKE_PROFIT_PCT = float(take_profit_pct)
-    if stop_loss_pct is not None:
-        if stop_loss_pct <= 0:
-            raise ValueError("stop_loss_pct must be greater than zero")
-        STOP_LOSS_PCT = float(stop_loss_pct)
-    if close_on_signal_violation is not None:
-        CLOSE_ON_SIGNAL_VIOLATION = close_on_signal_violation
-    return get_exit_rules()
-
-
-def get_exit_rules() -> dict[str, Any]:
-    return {
-        "take_profit_pct": TAKE_PROFIT_PCT,
-        "stop_loss_pct": STOP_LOSS_PCT,
-        "close_on_signal_violation": CLOSE_ON_SIGNAL_VIOLATION,
-    }
 
 
 def build_encrypted_intent(symbol: str, decision: dict[str, Any], risk_result: dict[str, Any]) -> dict[str, Any]:
@@ -322,7 +258,9 @@ def _logged_futures_entry(symbol: str, cycle_logger: Any | None) -> dict[str, An
 
 
 def _cycles_for_position_fallback(cycle_logger: Any | None) -> list[dict[str, Any]]:
-    user_id = getattr(cycle_logger, "user_id", None) or "local-development"
+    if cycle_logger is None:
+        return []
+    user_id = str(getattr(cycle_logger, "user_id", None) or "")
     fetch_cycles = getattr(cycle_logger, "fetch_cycles", None)
     if callable(fetch_cycles):
         cycles = fetch_cycles()
@@ -437,10 +375,10 @@ async def run_cycle(
     stop_loss_pct: float | None = None,
     close_on_signal_violation: bool | None = None,
     mode: str | None = None,
-    user_id: str = "local-development",
+    user_id: str = "",
 ) -> dict[str, Any]:
     def persist(result: dict[str, Any]) -> dict[str, Any]:
-        configured_market = market_type or MARKET_TYPE
+        configured_market = market_type or DEFAULT_MARKET_TYPE
         decision_market = (result.get("decision") or {}).get("market")
         result_market = configured_market if configured_market != "autonomous" else decision_market
         result.setdefault(
@@ -449,7 +387,8 @@ async def run_cycle(
         )
         result.setdefault("created_at", cycle_start.isoformat())
         cycle_user_id = getattr(cycle_logger, "user_id", None) or user_id
-        _record_cycle(result, cycle_user_id)
+        if cycle_user_id:
+            _record_cycle(result, str(cycle_user_id))
         if cycle_logger is not None:
             result["persistence"] = cycle_logger.log_cycle(result)
             log_snapshot = getattr(cycle_logger, "log_balance_snapshot", None)
@@ -462,11 +401,12 @@ async def run_cycle(
                         session_id=getattr(cycle_logger, "session_id", None),
                     )
                     if snapshot is not None:
-                        snapshot_user_id = getattr(cycle_logger, "user_id", None) or "local-development"
-                        user_snapshots = _recent_balance_snapshots.setdefault(snapshot_user_id, [])
-                        user_snapshots.append(snapshot)
-                        del user_snapshots[:-1000]
-                        log_snapshot(snapshot)
+                        snapshot_user_id = getattr(cycle_logger, "user_id", None)
+                        if snapshot_user_id:
+                            user_snapshots = _recent_balance_snapshots.setdefault(str(snapshot_user_id), [])
+                            user_snapshots.append(snapshot)
+                            del user_snapshots[:-1000]
+                            log_snapshot(snapshot)
                 except Exception as exc:
                     logger.warning("Balance snapshot failed: %s", exc)
         return result
@@ -478,14 +418,15 @@ async def run_cycle(
         result = {
             "status": "blocked",
             "symbol": normalized_symbol,
-            "market": market_type or MARKET_TYPE,
+            "market": market_type or DEFAULT_MARKET_TYPE,
             "mode": mode or ("strategy" if strategy_id else "autonomous"),
             "decision": {"action": "hold", "symbol": normalized_symbol},
             "risk_check": {"allowed": False, "reasons": [f"unsupported_symbol:{normalized_symbol}"]},
             "order": None,
         }
         cycle_user_id = getattr(cycle_logger, "user_id", None) or user_id
-        _record_cycle(result, cycle_user_id)
+        if cycle_user_id:
+            _record_cycle(result, str(cycle_user_id))
         if cycle_logger is not None:
             result["persistence"] = cycle_logger.log_cycle(result)
         return result
@@ -493,7 +434,7 @@ async def run_cycle(
         ticker = await asyncio.to_thread(market_service.fetch_spot_ticker, symbol)
         ticker = {**ticker, "symbol": symbol.upper()}
         selected_strategy = (strategy_by_symbol or {}).get(symbol.upper(), strategy_id)
-        cycle_mode = mode or ("strategy" if selected_strategy else MODE)
+        cycle_mode = mode or ("strategy" if selected_strategy else "autonomous")
         if selected_strategy == "overnight_gap":
             fetch_gap_context = getattr(market_service, "fetch_daily_gap_context", None)
             if not callable(fetch_gap_context):
@@ -504,12 +445,12 @@ async def run_cycle(
                     ticker.update(gap_context)
                 else:
                     ticker["status"] = "fallback"
-        if selected_strategy is None:
+        if selected_strategy is None and not user_id:
             decision = build_signal_from_ticker(ticker)
         else:
             decision = build_signal_from_ticker(
                 ticker,
-                strategy_id=selected_strategy,
+                strategy_id=selected_strategy or get_active_strategy_id(user_id),
                 user_id=user_id,
             )
         decision.update({"symbol": symbol.upper(), "market_status": ticker.get("status", "unknown")})
@@ -526,7 +467,7 @@ async def run_cycle(
             }
             return persist(result)
 
-        configured_market = market_type or MARKET_TYPE
+        configured_market = market_type or DEFAULT_MARKET_TYPE
         if decision["action"] == "hold":
             markets_to_check = ["futures", "spot"] if configured_market == "autonomous" else [configured_market]
             for exit_market in markets_to_check:
@@ -718,7 +659,7 @@ async def run_cycle(
                     exit_reason = "stop_loss"
                 else:
                     exit_reason = _trailing_profit_exit_reason(symbol, selected_market, live_position, decision, cycle_logger)
-                if exit_reason is None and (CLOSE_ON_SIGNAL_VIOLATION if close_on_signal_violation is None else close_on_signal_violation) and opposite_signal:
+                if exit_reason is None and (True if close_on_signal_violation is None else close_on_signal_violation) and opposite_signal:
                     exit_reason = "signal_violation"
 
                 if exit_reason:
@@ -967,57 +908,3 @@ async def run_pair_cycle(
     if cycle_logger is not None and callable(getattr(cycle_logger, "log_cycle", None)):
         result["persistence"] = cycle_logger.log_cycle(result)
     return result
-
-
-async def agent_loop(*, market_service: Any, risk_engine: Any, execution_client: Any, cycle_logger: Any | None = None) -> None:
-    logger.info("Agent loop starting: interval=%ss symbols=%s", LOOP_INTERVAL_SECONDS, WATCHED_SYMBOLS)
-    while not _stop_event.is_set():
-        if MODE == "strategy" and get_active_strategy_id() == "pairs_trading" and len(WATCHED_SYMBOLS) >= 2:
-            await run_pair_cycle(
-                WATCHED_SYMBOLS[0],
-                WATCHED_SYMBOLS[1],
-                market_service=market_service,
-                risk_engine=risk_engine,
-                execution_client=execution_client,
-                cycle_logger=cycle_logger,
-                market_type=MARKET_TYPE,
-            )
-        else:
-            for symbol in WATCHED_SYMBOLS:
-                if _stop_event.is_set():
-                    break
-                await run_cycle(
-                    symbol,
-                    market_service=market_service,
-                    risk_engine=risk_engine,
-                    execution_client=execution_client,
-                    cycle_logger=cycle_logger,
-                    mode=MODE,
-                )
-        try:
-            await asyncio.wait_for(_stop_event.wait(), timeout=LOOP_INTERVAL_SECONDS)
-        except asyncio.TimeoutError:
-            pass
-    logger.info("Agent loop stopped")
-
-
-def start(*, market_service: Any, risk_engine: Any, execution_client: Any, cycle_logger: Any | None = None) -> None:
-    global _loop_task
-    if _loop_task is None or _loop_task.done():
-        _stop_event.clear()
-        _loop_task = asyncio.create_task(
-            agent_loop(
-                market_service=market_service,
-                risk_engine=risk_engine,
-                execution_client=execution_client,
-                cycle_logger=cycle_logger,
-            )
-        )
-
-
-def stop() -> None:
-    _stop_event.set()
-
-
-def is_running() -> bool:
-    return _loop_task is not None and not _loop_task.done() and not _stop_event.is_set()

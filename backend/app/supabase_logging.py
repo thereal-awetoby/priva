@@ -25,6 +25,8 @@ class SupabaseCycleLogger:
     def log_cycle(self, cycle: dict[str, Any]) -> dict[str, Any]:
         if not self.configured:
             return {"status": "not_configured"}
+        if not self.user_id:
+            return {"status": "error", "message": "authenticated user scope is required"}
 
         order_result = cycle.get("order_result") or cycle.get("order")
         if cycle.get("reason") or cycle.get("margin_check"):
@@ -49,8 +51,7 @@ class SupabaseCycleLogger:
         }
         if cycle.get("created_at"):
             record["created_at"] = cycle["created_at"]
-        if self.user_id:
-            record["user_id"] = self.user_id
+        record["user_id"] = self.user_id
         response = None
         try:
             response = self.session.post(
@@ -75,6 +76,8 @@ class SupabaseCycleLogger:
     def log_balance_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         if not self.configured:
             return {"status": "not_configured"}
+        if not self.user_id:
+            return {"status": "error", "message": "authenticated user scope is required"}
 
         record = {
             "session_id": self.session_id,
@@ -87,8 +90,7 @@ class SupabaseCycleLogger:
             record["spot_equity"] = float(snapshot["spot_equity"] or 0)
         if snapshot.get("account_key"):
             record["account_key"] = str(snapshot["account_key"])
-        if self.user_id:
-            record["user_id"] = self.user_id
+        record["user_id"] = self.user_id
         try:
             response = self.session.post(
                 f"{self.url}/rest/v1/balance_snapshots",
@@ -115,7 +117,7 @@ class SupabaseCycleLogger:
         created_after: str | None = None,
         account_key: str | None = None,
     ) -> list[dict[str, Any]]:
-        if not self.configured:
+        if not self.configured or not self.user_id:
             return []
         try:
             page_size = 1000
@@ -132,8 +134,7 @@ class SupabaseCycleLogger:
                     params["session_id"] = f"eq.{session_id}"
                 if created_after:
                     params["created_at"] = f"gte.{created_after}"
-                if self.user_id:
-                    params["user_id"] = f"eq.{self.user_id}"
+                params["user_id"] = f"eq.{self.user_id}"
                 if account_key:
                     params["account_key"] = f"eq.{account_key}"
                 response = self.session.get(
@@ -159,7 +160,7 @@ class SupabaseCycleLogger:
             return []
 
     def fetch_cycles(self, *, limit: int | None = None, session_id: str | None = None) -> list[dict[str, Any]]:
-        if not self.configured:
+        if not self.configured or not self.user_id:
             return []
 
         try:
@@ -175,8 +176,7 @@ class SupabaseCycleLogger:
                 }
                 if session_id:
                     params["session_id"] = f"eq.{session_id}"
-                if self.user_id:
-                    params["user_id"] = f"eq.{self.user_id}"
+                params["user_id"] = f"eq.{self.user_id}"
                 response = self.session.get(
                     f"{self.url}/rest/v1/agent_cycles",
                     headers={
@@ -200,8 +200,8 @@ class SupabaseCycleLogger:
             return []
 
     def has_open_position(self, symbol: str, market: str | None = None) -> bool:
-        if not self.configured:
-            return False
+        if not self.configured or not self.user_id:
+            return True
 
         try:
             params = {
@@ -212,8 +212,7 @@ class SupabaseCycleLogger:
             }
             if market:
                 params["market"] = f"eq.{market.lower()}"
-            if self.user_id:
-                params["user_id"] = f"eq.{self.user_id}"
+            params["user_id"] = f"eq.{self.user_id}"
             response = self.session.get(
                 f"{self.url}/rest/v1/agent_cycles",
                 headers={
@@ -230,55 +229,11 @@ class SupabaseCycleLogger:
             logger.warning("Supabase position check failed: %s", exc)
             return True
 
-    def fetch_active_strategy(self) -> str | None:
-        if not self.configured:
-            return None
-
-        try:
-            response = self.session.get(
-                f"{self.url}/rest/v1/strategy_settings",
-                headers={
-                    "apikey": self.service_role_key,
-                    "Authorization": f"Bearer {self.service_role_key}",
-                },
-                params={"select": "strategy_id", "id": "eq.global", "limit": 1},
-                timeout=15,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if isinstance(payload, list) and payload:
-                strategy_id = payload[0].get("strategy_id")
-                return str(strategy_id) if strategy_id else None
-        except (requests.RequestException, ValueError) as exc:
-            logger.warning("Supabase strategy read failed: %s", exc)
-        return None
-
-    def save_active_strategy(self, strategy_id: str) -> dict[str, Any]:
-        if not self.configured:
-            return {"status": "not_configured"}
-
-        try:
-            response = self.session.post(
-                f"{self.url}/rest/v1/strategy_settings",
-                headers={
-                    "apikey": self.service_role_key,
-                    "Authorization": f"Bearer {self.service_role_key}",
-                    "Content-Type": "application/json",
-                    "Prefer": "resolution=merge-duplicates,return=minimal",
-                },
-                params={"on_conflict": "id"},
-                json={"id": "global", "strategy_id": strategy_id},
-                timeout=15,
-            )
-            response.raise_for_status()
-            return {"status": "saved"}
-        except requests.RequestException as exc:
-            logger.warning("Supabase strategy write failed: %s", exc)
-            return {"status": "error", "message": str(exc)}
-
     def save_user_credentials(self, user_id: str, encrypted_credentials: str) -> dict[str, Any]:
         if not self.configured:
             return {"status": "not_configured"}
+        if not self.user_id or self.user_id != user_id:
+            return {"status": "error", "message": "authenticated user scope mismatch"}
         try:
             response = self.session.post(
                 f"{self.url}/rest/v1/user_bitget_credentials",
@@ -299,7 +254,7 @@ class SupabaseCycleLogger:
             return {"status": "error", "message": str(exc)}
 
     def fetch_user_credentials(self, user_id: str) -> str | None:
-        if not self.configured:
+        if not self.configured or not self.user_id or self.user_id != user_id:
             return None
         try:
             response = self.session.get(
@@ -321,6 +276,8 @@ class SupabaseCycleLogger:
     def delete_user_credentials(self, user_id: str) -> dict[str, Any]:
         if not self.configured:
             return {"status": "not_configured"}
+        if not self.user_id or self.user_id != user_id:
+            return {"status": "error", "message": "authenticated user scope mismatch"}
         try:
             response = self.session.delete(
                 f"{self.url}/rest/v1/user_bitget_credentials",
@@ -337,29 +294,11 @@ class SupabaseCycleLogger:
             logger.warning("Supabase credential delete failed: %s", exc)
             return {"status": "error", "message": str(exc)}
 
-    def fetch_connected_users(self) -> list[dict[str, Any]]:
-        if not self.configured:
-            return []
-        try:
-            response = self.session.get(
-                f"{self.url}/rest/v1/user_bitget_credentials",
-                headers={
-                    "apikey": self.service_role_key,
-                    "Authorization": f"Bearer {self.service_role_key}",
-                },
-                params={"select": "user_id,encrypted_credentials"},
-                timeout=15,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            return payload if isinstance(payload, list) else []
-        except (requests.RequestException, ValueError) as exc:
-            logger.warning("Supabase connected-user read failed: %s", exc)
-            return []
-
     def save_user_settings(self, user_id: str, settings: dict[str, Any]) -> dict[str, Any]:
         if not self.configured:
             return {"status": "not_configured"}
+        if not self.user_id or self.user_id != user_id:
+            return {"status": "error", "message": "authenticated user scope mismatch"}
         try:
             response = self.session.post(
                 f"{self.url}/rest/v1/user_agent_settings",
@@ -380,7 +319,7 @@ class SupabaseCycleLogger:
             return {"status": "error", "message": str(exc)}
 
     def fetch_user_settings(self, user_id: str) -> dict[str, Any]:
-        if not self.configured:
+        if not self.configured or not self.user_id or self.user_id != user_id:
             return {}
         try:
             response = self.session.get(
@@ -409,6 +348,8 @@ class SupabaseCycleLogger:
     ) -> dict[str, Any]:
         if not self.configured:
             return {"status": "not_configured"}
+        if not self.user_id or self.user_id != user_id:
+            return {"status": "error", "message": "authenticated user scope mismatch"}
         try:
             response = self.session.post(
                 f"{self.url}/rest/v1/custom_strategies",
@@ -435,7 +376,7 @@ class SupabaseCycleLogger:
             return {"status": "error", "message": str(exc)}
 
     def fetch_custom_strategies(self, user_id: str) -> list[dict[str, Any]]:
-        if not self.configured:
+        if not self.configured or not self.user_id or self.user_id != user_id:
             return []
         try:
             response = self.session.get(
@@ -457,6 +398,8 @@ class SupabaseCycleLogger:
     def delete_custom_strategy(self, user_id: str, strategy_id: str) -> dict[str, Any]:
         if not self.configured:
             return {"status": "not_configured"}
+        if not self.user_id or self.user_id != user_id:
+            return {"status": "error", "message": "authenticated user scope mismatch"}
         try:
             response = self.session.delete(
                 f"{self.url}/rest/v1/custom_strategies",
