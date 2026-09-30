@@ -19,15 +19,101 @@ Open the [desk](https://priva-rho.vercel.app). Sign in. You should see a **worke
 | Handbook ask | Where it lives |
 |---|---|
 | Agent is the decision-maker | `backend/app/agent_loop.py` — 5-minute cycle, no human in the loop |
-| Event → decision → execution | Read → Decide → Risk → Hash → Send. Any gate fails → nothing is sent |
+| Event → decision → execution | Read → Decide → (model veto) → Risk → Hash → Send. Any gate fails → nothing is sent |
 | Runnable demo | https://priva-rho.vercel.app |
 | Paper log | Activity panel + CSV export. Mode + intent hash on each row |
 | Risk control | `$25k` position · `$1.5k` daily loss · `5x` · AAPL/TSLA allow-list · trade-only keys · kill switch |
 | Honest privacy | Hash of the intent. Fill still visible to the venue |
 
+**One cycle (the Agentic unit).** Every five minutes the worker:
+
+1. **Read** live Bitget marks for AAPL / TSLA
+2. **Decide** from the autonomous book or the activated strategy
+3. **Veto** — Gemini ALLOW / VETO on the proposed send (fail-closed)
+4. **Risk** — size, daily loss, leverage, allow-list
+5. **Hash** — SHA-256 fingerprint of the intent
+6. **Send or refuse** — Bitget paper (`paptrading: 1`). If any gate fails, nothing is sent. The row is still logged.
+
+Hold is not a no-op. On hold, the worker still checks open spot and futures against take-profit and stop-loss.
+
 Observed paper tape used in the demo (AAPL/TSLA only): equity ~$19,855 · PnL **−$116** · win rate ~48.5% · max DD ~−0.65%. Short window. No Sharpe. We would rather show a small honest loss than a backtest with no agent attached.
 
-Then read **Thesis**. Skip `priva-web/README.md` — leftover create-next-app boilerplate. Skip `SESSION_HANDOFF*` and `BUILDER_A_HANDOFF.md` — internal notes, not the spec.
+Then read **Thesis**. Skip `priva-web/README.md` if it is still the create-next-app leftover.
+
+---
+
+## For users
+
+Priva only talks to **Bitget Demo Trading**. Live keys will not work. The worker can place paper orders. It cannot withdraw.
+
+### 1. Open Bitget Demo
+
+1. Sign in at [bitget.com](https://www.bitget.com).
+2. Top nav → **Futures**.
+3. In the menu, open **Demo trading** (demo trading with zero funding risk).
+4. Confirm the header shows the green **Demo** badge. If it says Live, you are in the wrong venue.
+
+### 2. Fund the paper account (optional)
+
+Demo starts with paper USD / USDT. You can top it up:
+
+1. In the demo terminal, open the briefcase / **Assets**.
+2. Open **Adjust demo trading funds**.
+3. Add USDT (and USD if you want the spot side funded).
+
+A ~$20,000 paper balance is enough to match the desk you see in the demo.
+
+### 3. Create a **demo** API key
+
+Do this **inside Demo**, not on the live API-keys page.
+
+1. Top-right profile → **API management**.
+2. You should land on a page that says **Create new demo trade API key** (not a live key).
+3. Create one key. Set a passphrase. Save:
+
+   - API key
+   - API secret
+   - Passphrase
+
+4. Permissions: **trade only**. No withdrawals. No transfers.
+
+If the button says anything other than demo / paper, stop. That key must never be pasted into Priva.
+
+### 4. Open Priva and connect
+
+1. Go to [priva-rho.vercel.app](https://priva-rho.vercel.app).
+2. **Create an account** (email + password) or sign in.
+3. Open the **Confirm your email address** mail from Supabase Auth. Click **Confirm email address**. Until that link is used, sign-in stays blocked.
+4. You land on **Connect your Bitget demo account**.
+5. Paste API key, API secret, passphrase.
+6. Save. The desk stays locked until the paper key verifies.
+
+Priva stores those credentials encrypted in a vault. The worker never holds your full exchange private key. Withdrawal permission is never requested.
+
+### 5. Run the desk
+
+| Screen | What to do |
+|---|---|
+| Control Center | Confirm **Worker running**, **Paper trading only**. Watch spot + futures equity. |
+| Risk & access | Set caps first. Defaults: `$25,000` position · `$1,500` daily loss · `5x` · AAPL + TSLA only. |
+| Strategy Lab | Leave **Autonomous**, or activate a built-in book, or write English / JSON and activate. |
+| Activity | This is the tape. Turn on **Show holds & evaluations**. Export CSV when you want a replay. |
+
+Kill switch is one control: it stops the worker and can flash-close open futures.
+
+### 6. Read one row
+
+A useful Activity row has: time, mode (autonomous / strategy), symbol, decision, risk ALLOW or BLOCK, intent hash, sent or not sent.
+
+`symbol not available on this market` is a mapping miss, not a risk block. Filter those out when you read the tape. Logical names on the desk are `AAPLUSDT` / `TSLAUSDT`. Bitget spot tokens are `RAAPLUSDT` / `RTSLAUSDT`.
+
+### What Priva will not do
+
+- Use a live Bitget key
+- Withdraw or transfer
+- Hide the fill from Bitget
+- Trade names outside the allow-list
+- Run the loop if the demo key fails verification
 
 ---
 
@@ -53,6 +139,11 @@ Autonomy without a wall is only faster risk. Privacy that pretends the exchange 
        | pass
        v
   +---------+   fail
+  |  Veto   |-----------> not sent     Gemini ALLOW / VETO, fail-closed
+  +----+----+
+       | pass
+       v
+  +---------+   fail
   |  Risk   |-----------> not sent
   +----+----+
        | pass
@@ -65,8 +156,6 @@ Autonomy without a wall is only faster risk. Privacy that pretends the exchange 
   |  Send   |  Bitget paper, paptrading: 1
   +---------+
 ```
-
-Hold is not a no-op. On a hold cycle the worker still checks open spot and futures against take-profit and stop-loss.
 
 ---
 
@@ -83,8 +172,6 @@ Not “all traders.”
 | Frequency | One cycle / five minutes. Not HFT. Not click-trading. |
 | Market | Bitget tokenized U.S. stocks, spot + perps, `AAPLUSDT` / `TSLAUSDT` |
 | Job to be done | Connect a paper key, set the wall, pick Autonomous or a named book, leave. Export the tape. |
-
-What this segment still lacks elsewhere: a scheduled agent, a hard wall in front of every send, and a privacy sentence that does not overclaim.
 
 ---
 
@@ -118,6 +205,8 @@ What this segment still lacks elsewhere: a scheduled agent, a hard wall in front
 | Decision logic | Fill, qty, price — visible to the venue |
 | Full user private key | Short intent hash in Activity |
 
+The landing line is: the agent trades on its own; the rule set stays inside; the ledger shows a hash, not the book that produced it.
+
 Credentials sit in a Fernet vault (`PRIVA_CREDENTIAL_ENCRYPTION_KEY`). The worker never holds the user’s full exchange private key.
 
 ---
@@ -135,9 +224,9 @@ Observed on the running demo account. Not a backtest. Not out-of-sample.
 | Universe | AAPLUSDT, TSLAUSDT |
 | Live funds | none |
 
-Some demo TSLA names rejected. There is no Sharpe on this window because the window does not deserve one.
+Some demo TSLA names rejected (`symbol not available on this market`). Those are mapping misses, not risk vetoes. There is no Sharpe on this window because the window does not deserve one.
 
-Agentic track artifact is the **competition paper log**, not a 60-day OOS report. That log is Activity → Export CSV.
+The Agentic track artifact is the **competition paper log**, not a 60-day OOS report. That log is Activity → Export CSV.
 
 ---
 
@@ -149,10 +238,11 @@ priva-web  (Next.js, Vercel)
     |  Bearer <Supabase access token>
     v
 backend   (FastAPI, Render)
-    |-- agent_loop.py        5-minute worker
+    |-- agent_loop.py        5-minute worker + veto gate
     |-- strategy.py          books + English/JSON parse
     |-- risk_engine.py       caps, allow-list, kill
     |-- paper_execution.py   Bitget paper client
+    |-- user_runtime.py      per-user worker
     |-- auth.py              Supabase
     v
 Bitget demo  +  Supabase (auth, cycle log, encrypted keys)
@@ -164,6 +254,7 @@ Bitget demo  +  Supabase (auth, cycle log, encrypted keys)
 | `backend/app/risk_engine.py` | Wall |
 | `backend/app/paper_execution.py` | Paper send |
 | `backend/app/strategy.py` | Books + parse + activate |
+| `backend/app/symbols.py` | `AAPLUSDT` → `RAAPLUSDT`, `TSLAUSDT` → `RTSLAUSDT` |
 | `backend/app/auth.py` | Session |
 | `priva-web/` | Desk UI |
 
@@ -180,7 +271,7 @@ Bitget demo  +  Supabase (auth, cycle log, encrypted keys)
 
 ---
 
-## Quick start
+## Quick start (builders)
 
 ### Worker
 
@@ -218,16 +309,12 @@ Production desk already uses `https://priva-499h.onrender.com`.
 
 | Variable | Point |
 |---|---|
-| `BITGET_API_KEY` | Paper key |
-| `BITGET_API_SECRET` | Paper secret |
-| `BITGET_API_PASSPHRASE` | Paper passphrase |
-| `BITGET_POSITION_MODE` | `hedge` |
 | `AGENT_WATCHED_SYMBOLS` | `AAPLUSDT,TSLAUSDT` |
 | `SUPABASE_URL` | Project URL |
 | `SUPABASE_ANON_KEY` | Anon |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server only — never ship to the browser |
-| `PRIVA_AUTH_REQUIRED` | `true` in production |
 | `PRIVA_CREDENTIAL_ENCRYPTION_KEY` | Fernet, 44 chars |
+| `GEMINI_API_KEY` | Veto gate. Missing key fail-closes to VETO |
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -238,6 +325,8 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 Public env only: API base (`https://priva-499h.onrender.com` in prod) and Supabase URL + anon key. Same project as the worker.
 
 Never put the service role key or Bitget secrets in `NEXT_PUBLIC_*`.
+Bitget API credentials are entered per user in the authenticated app and stored
+encrypted in Supabase; do not configure shared Bitget credentials in Render.
 
 ---
 
