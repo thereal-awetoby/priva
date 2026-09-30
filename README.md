@@ -66,11 +66,11 @@ Do this **inside Demo**, not on the live API-keys page.
    - API secret
    - Passphrase
 
-3. Permissions: **trade only**. No withdrawals. No transfers.
+Permissions: **trade only**. No withdrawals. No transfers.
 <img width="1080" height="1080" alt="image" src="https://github.com/user-attachments/assets/39b1b9c0-bd26-4877-b69e-f53ec34a12f5" />
 
 
-### 4. Fund the paper account (optional)
+### 3. Fund the paper account (optional)
 
 Demo starts with paper USD / USDT. You can top it up:
 
