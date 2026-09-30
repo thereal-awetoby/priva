@@ -26,13 +26,14 @@ type DeskRow =
   | { kind: "holds"; count: number; symbols: string[]; lastAt: string; key: string };
 
 function activityLabel(entry: ActivityEntry): string {
-  const raw = `${entry.display_label ?? ""} ${entry.display_detail ?? ""} ${entry.action ?? ""}`.toLowerCase();
-  if (entry.risk_check?.allowed === false || raw.includes("blocked")) return "blocked";
   const action = String(entry.action ?? "").toLowerCase();
-  if (action === "buy") return "buy";
-  if (action === "sell") return "sell";
+  const raw = `${entry.display_label ?? ""} ${entry.display_detail ?? ""} ${entry.status ?? ""}`.toLowerCase();
+  if (action === "buy" || action === "sell") {
+    if (entry.risk_check?.allowed === false || raw.includes("blocked")) return `${action} · blocked`;
+    return action;
+  }
   if (String(entry.status ?? "").toLowerCase() === "closed") return "closed";
-  if (action === "hold" || raw.includes("no signal") || raw.includes("evaluating")) {
+  if (action === "hold" || raw.includes("no signal") || raw.includes("evaluating") || raw.includes("blocked")) {
     return "hold · no setup";
   }
   return String(entry.display_label ?? entry.action ?? "cycle");
@@ -43,11 +44,15 @@ function isQuietHold(entry: ActivityEntry): boolean {
   const status = String(entry.status ?? "").toLowerCase();
   const label = `${entry.display_label ?? ""} ${entry.display_detail ?? ""}`.toLowerCase();
 
-  if (entry.risk_check?.allowed === false) return false;
+  // Real risk events: a buy/sell that was refused. Keep those visible.
   if (action === "buy" || action === "sell") return false;
-  if (status === "submitted" || status === "closed" || status === "blocked") return false;
+  if (status === "submitted" || status === "closed") return false;
+
+  // Everything else on this desk is cycle noise: hold, no setup, skipped, blocked-hold.
   if (action === "hold") return true;
   if (entry.category === "evaluation") return true;
+  if (status === "blocked") return true;
+  if (label.includes("blocked")) return true;
   if (label.includes("no signal") || label.includes("no trade signal") || label.includes("evaluating")) {
     return true;
   }
