@@ -12,18 +12,18 @@ Bitget AI Base Camp S2 · **Agentic Trading** · **Open Theme** · paper only (`
 
 ---
 
-## For judges (90 seconds)
+## Overview
 
-Open the [desk](https://priva-rho.vercel.app). Sign in. You should see a **worker**, not a chat box.
+Open the [desk](https://priva-rho.vercel.app). Sign in. The running process is a **worker**, not a chat box.
 
-| Handbook ask | Where it lives |
+| | |
 |---|---|
-| Agent is the decision-maker | `backend/app/agent_loop.py` — 5-minute cycle, no human in the loop |
-| Event → decision → execution | Read → Decide → (model veto) → Risk → Hash → Send. Any gate fails → nothing is sent |
-| Runnable demo | https://priva-rho.vercel.app |
-| Paper log | Activity panel + CSV export. Mode + intent hash on each row |
-| Risk control | `$25k` position · `$1.5k` daily loss · `5x` · AAPL/TSLA allow-list · trade-only keys · kill switch |
-| Honest privacy | Hash of the intent. Fill still visible to the venue |
+| Decision-maker | `backend/app/agent_loop.py` — 5-minute cycle, no human in the loop |
+| Cycle | Read → Decide → (model veto) → Risk → Hash → Send. Any gate fails → nothing is sent |
+| Demo | https://priva-rho.vercel.app |
+| Paper log | [`priva-activity-csv-2026-09-30.csv`](./priva-activity-csv-2026-09-30.csv) (raw) · [`priva_completed_trades.csv`](./priva_completed_trades.csv) (32 scored closes) |
+| Risk | `$25k` position · `$1.5k` daily loss · `5x` · AAPL/TSLA allow-list · trade-only keys · kill switch |
+| Privacy | Hash of the intent. Fill still visible to the venue |
 
 **One cycle (the Agentic unit).** Every five minutes the worker:
 
@@ -36,9 +36,13 @@ Open the [desk](https://priva-rho.vercel.app). Sign in. You should see a **worke
 
 Hold is not a no-op. On hold, the worker still checks open spot and futures against take-profit and stop-loss.
 
-Observed paper tape used in the demo (AAPL/TSLA only): equity ~$19,855 · PnL **−$116** · win rate ~48.5% · max DD ~−0.65%. Short window. No Sharpe. We would rather show a small honest loss than a backtest with no agent attached.
+Example row from the raw tape:
 
-Then read **Thesis**. Skip `priva-web/README.md` if it is still the create-next-app leftover.
+`2026-09-29T12:45:08` · `TSLAUSDT` · sell · autonomous · **blocked** · `gemini veto`
+
+Read mark → decide sell → veto → nothing sent → row logged.
+
+Observed paper tape (AAPL/TSLA only): equity ~$19,855 · desk PnL **−$116** · **32** logged closes · **23** with a PnL figure summing to **−$125.73**. Short window. No Sharpe.
 
 ---
 
@@ -52,7 +56,8 @@ Priva only talks to **Bitget Demo Trading**. Live keys will not work. The worker
 2. Top nav → **Futures**.
 3. In the menu, open **Demo trading** (demo trading with zero funding risk).
 4. Confirm the header shows the green **Demo** badge. If it says Live, you are in the wrong venue.
-<img width="1080" height="1080" alt="image" src="https://github.com/user-attachments/assets/717b0d50-b8ea-495e-bc1a-fe04dc437d5d" />
+
+<img width="1080" height="1080" alt="Open Bitget Demo trading" src="https://github.com/user-attachments/assets/717b0d50-b8ea-495e-bc1a-fe04dc437d5d" />
 
 ### 2. Create a **demo** API key
 
@@ -66,9 +71,11 @@ Do this **inside Demo**, not on the live API-keys page.
    - API secret
    - Passphrase
 
-Permissions: **trade only**. No withdrawals. No transfers.
-<img width="1080" height="1080" alt="image" src="https://github.com/user-attachments/assets/39b1b9c0-bd26-4877-b69e-f53ec34a12f5" />
+4. Permissions: **trade only**. No withdrawals. No transfers.
 
+If the button says anything other than demo / paper, stop. That key must never be pasted into Priva.
+
+<img width="1080" height="1080" alt="Create a Bitget demo API key" src="https://github.com/user-attachments/assets/39b1b9c0-bd26-4877-b69e-f53ec34a12f5" />
 
 ### 3. Fund the paper account (optional)
 
@@ -79,12 +86,8 @@ Demo starts with paper USD / USDT. You can top it up:
 3. Add USDT (and USD if you want the spot side funded).
 
 A ~$20,000 paper balance is enough to match the desk you see in the demo.
-<img width="1080" height="1080" alt="image" src="https://github.com/user-attachments/assets/5ea8902b-e360-4a70-9a15-565d3c1a461a" />
 
-
-
-
-If the button says anything other than demo / paper, stop. That key must never be pasted into Priva.
+<img width="1080" height="1080" alt="Adjust Bitget demo trading funds" src="https://github.com/user-attachments/assets/5ea8902b-e360-4a70-9a15-565d3c1a461a" />
 
 ### 4. Open Priva and connect
 
@@ -96,10 +99,9 @@ If the button says anything other than demo / paper, stop. That key must never b
 6. Save. The desk stays locked until the paper key verifies.
 
 Priva stores those credentials encrypted in a vault. The worker never holds your full exchange private key. Withdrawal permission is never requested.
-<img width="1080" height="1080" alt="image" src="https://github.com/user-attachments/assets/bf776c90-4c19-43a2-8af8-1de59f738f11" />
-<img width="1050" height="788" alt="image" src="https://github.com/user-attachments/assets/b7680658-1831-412b-b384-adf1b382000d" />
 
-
+<img width="1080" height="1080" alt="Priva sign in and confirm email" src="https://github.com/user-attachments/assets/bf776c90-4c19-43a2-8af8-1de59f738f11" />
+<img width="1050" height="788" alt="Connect Bitget demo account in Priva" src="https://github.com/user-attachments/assets/b7680658-1831-412b-b384-adf1b382000d" />
 
 ### 5. Run the desk
 
@@ -229,15 +231,21 @@ Observed on the running demo account. Not a backtest. Not out-of-sample.
 | | Observed |
 |---|---|
 | Paper equity | ~$19,855 |
-| Realized PnL | **−$116** |
+| Desk realized PnL | **−$116** |
+| Scored closes | 32 open→close pairs |
+| Closes with a PnL figure | 23 |
+| Sum of those 23 | **−$125.73** |
 | Win rate | ~48.5% |
 | Max drawdown | ~−0.65% |
 | Universe | AAPLUSDT, TSLAUSDT |
 | Live funds | none |
 
-Some demo TSLA names rejected (`symbol not available on this market`). Those are mapping misses, not risk vetoes. There is no Sharpe on this window because the window does not deserve one.
+Some demo TSLA / AAPL names rejected (`symbol not available`, `Parameter … does not exist`). Those are mapping misses, not risk vetoes. Holds (`No trade signal`) mean the cycle ran and chose not to send. There is no Sharpe on this window.
 
-The Agentic track artifact is the **competition paper log**, not a 60-day OOS report. That log is Activity → Export CSV.
+Paper log:
+
+- [`priva-activity-csv-2026-09-30.csv`](./priva-activity-csv-2026-09-30.csv) — raw export
+- [`priva_completed_trades.csv`](./priva_completed_trades.csv) — 32 scored closes
 
 ---
 
@@ -374,10 +382,8 @@ POST /kill-switch
 - Live funds
 - Withdrawals or transfers
 - A universe past AAPL and TSLA
-- A claim that Bitget cannot see the order
+- Hidden orders on Bitget
 - A 60-day out-of-sample Sharpe
-
-If the paper worker keeps running through the deadline, the CSV gets longer. That is the only metric that should move.
 
 ---
 
