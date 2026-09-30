@@ -18,8 +18,8 @@ Open the [desk](https://priva-rho.vercel.app). Sign in. The running process is a
 
 | | |
 |---|---|
-| Decision-maker | `backend/app/agent_loop.py` — 5-minute cycle, no human in the loop |
-| Cycle | Read → Decide → (model veto) → Risk → Hash → Send. Any gate fails → nothing is sent |
+| Decision-maker | Gemini chooses hold, buy, or sell each cycle (`backend/app/agent_loop.py`). Risk can still refuse. |
+| Cycle | Read → Model decides → Risk → Hash → Send. Any gate fails → nothing is sent |
 | Demo | https://priva-rho.vercel.app |
 | Paper log | [`priva-activity-csv-2026-09-30.csv`](./priva-activity-csv-2026-09-30.csv) (raw) · [`priva_completed_trades.csv`](./priva_completed_trades.csv) (32 scored closes) |
 | Risk | `$25k` position · `$1.5k` daily loss · `5x` · AAPL/TSLA allow-list · trade-only keys · kill switch |
@@ -28,19 +28,18 @@ Open the [desk](https://priva-rho.vercel.app). Sign in. The running process is a
 **One cycle (the Agentic unit).** Every five minutes the worker:
 
 1. **Read** live Bitget marks for AAPL / TSLA
-2. **Decide** from the autonomous book or the activated strategy
-3. **Veto** — Gemini ALLOW / VETO on the proposed send (fail-closed)
-4. **Risk** — size, daily loss, leverage, allow-list
-5. **Hash** — SHA-256 fingerprint of the intent
-6. **Send or refuse** — Bitget paper (`paptrading: 1`). If any gate fails, nothing is sent. The row is still logged.
+2. **Model decides** — Gemini returns hold, buy, or sell. The built-in book is a hint only
+3. **Risk** — size, daily loss, leverage, allow-list
+4. **Hash** — SHA-256 fingerprint of the intent
+5. **Send or refuse** — Bitget paper (`paptrading: 1`). If Gemini is down, the cycle holds. If risk fails, nothing is sent. The row is still logged.
 
 Hold is not a no-op. On hold, the worker still checks open spot and futures against take-profit and stop-loss.
 
-Example row from the raw tape:
+Example row from the raw tape (pre-change veto era):
 
 `2026-09-29T12:45:08` · `TSLAUSDT` · sell · autonomous · **blocked** · `gemini veto`
 
-Read mark → decide sell → veto → nothing sent → row logged.
+New cycles log `decision.source = model` instead of a veto gate.
 
 Observed paper tape (AAPL/TSLA only): equity ~$19,855 · desk PnL **−$116** · **32** logged closes · **23** with a PnL figure summing to **−$125.73**. Short window. No Sharpe.
 
@@ -109,14 +108,14 @@ Priva stores those credentials encrypted in a vault. The worker never holds your
 |---|---|
 | Control Center | Confirm **Worker running**, **Paper trading only**. Watch spot + futures equity. |
 | Risk & access | Set caps first. Defaults: `$25,000` position · `$1,500` daily loss · `5x` · AAPL + TSLA only. |
-| Strategy Lab | Leave **Autonomous**, or activate a built-in book, or write English / JSON and activate. |
+| Strategy Lab | Leave **Autonomous**, or activate a built-in book, or write English / JSON and activate. The book is a hint. Gemini still chooses the send. Risk still gates. |
 | Activity | This is the tape. Turn on **Show holds & evaluations**. Export CSV when you want a replay. |
 
 Kill switch is one control: it stops the worker and can flash-close open futures.
 
 ### 6. Read one row
 
-A useful Activity row has: time, mode (autonomous / strategy), symbol, decision, risk ALLOW or BLOCK, intent hash, sent or not sent.
+A useful Activity row has: time, mode (autonomous / strategy), symbol, model decision, risk ALLOW or BLOCK, intent hash, sent or not sent.
 
 `symbol not available on this market` is a mapping miss, not a risk block. Filter those out when you read the tape. Logical names on the desk are `AAPLUSDT` / `TSLAUSDT`. Bitget spot tokens are `RAAPLUSDT` / `RTSLAUSDT`.
 
@@ -140,21 +139,18 @@ Priva’s bet: an unattended agent is only safe if those three are fixed in one 
 2. **Gated.** Size, daily loss, leverage, allow-list — checked before every send.
 3. **Quiet.** Strategy code never leaves the process. Activity stores a fingerprint of the decision. Change the logged intent and the hash no longer matches.
 
+Gemini chooses hold, buy, or sell. The risk engine can still refuse. If Gemini is down, the cycle holds.
+
 Autonomy without a wall is only faster risk. Privacy that pretends the exchange cannot see the order is a lie. Priva does neither.
 
 ```
   marks (AAPL / TSLA)
         |
         v
-  +---------+   fail     +----------+
-  |  Decide |----------->| not sent |--> log + wait
+  +---------+   hold     +----------+
+  |  Model  |----------->| not sent |--> log + wait
   +----+----+            +----------+
-       | pass
-       v
-  +---------+   fail
-  |  Veto   |-----------> not sent     Gemini ALLOW / VETO, fail-closed
-  +----+----+
-       | pass
+       | buy / sell
        v
   +---------+   fail
   |  Risk   |-----------> not sent
@@ -195,14 +191,14 @@ Not “all traders.”
 | Screen | What you should notice |
 |---|---|
 | Control Center | Worker running, next cycle, spot + futures equity, kill switch, Autonomous / Strategy |
-| Strategy Lab | Four built-in books + custom English or JSON. Activate. Same risk spine. |
+| Strategy Lab | Four built-in books + custom English or JSON. Activate. Same risk spine. Book is a hint to the model. |
 | Risk & access | Caps are not suggestions. Trade only. No withdrawals. No transfers. |
 | Activity | Mode-separated tape. Intent hash on sends. CSV export is the replay. |
 
 **Modes**
 
-- **Autonomous** — built-in books (momentum breakout, mean reversion, overnight gap, AAPL/TSLA pairs).
-- **Strategy** — the book the user activated. The model does not get a side door around risk.
+- **Autonomous** — built-in books as hints (momentum breakout, mean reversion, overnight gap, AAPL/TSLA pairs). Gemini chooses the action.
+- **Strategy** — the book the user activated is still a hint. The model does not get a side door around risk.
 
 **Default caps**
 
@@ -240,7 +236,7 @@ Observed on the running demo account. Not a backtest. Not out-of-sample.
 | Universe | AAPLUSDT, TSLAUSDT |
 | Live funds | none |
 
-Some demo TSLA / AAPL names rejected (`symbol not available`, `Parameter … does not exist`). Those are mapping misses, not risk vetoes. Holds (`No trade signal`) mean the cycle ran and chose not to send. There is no Sharpe on this window.
+Some early demo TSLA / AAPL names rejected (`symbol not available`, `Parameter … does not exist`). Those are old mapping misses, not risk blocks. Holds mean the cycle ran and chose not to send. There is no Sharpe on this window.
 
 Paper log:
 
@@ -257,8 +253,8 @@ priva-web  (Next.js, Vercel)
     |  Bearer <Supabase access token>
     v
 backend   (FastAPI, Render)
-    |-- agent_loop.py        5-minute worker + veto gate
-    |-- strategy.py          books + English/JSON parse
+    |-- agent_loop.py        5-minute worker + Gemini decide
+    |-- strategy.py          books + English/JSON parse (hints)
     |-- risk_engine.py       caps, allow-list, kill
     |-- paper_execution.py   Bitget paper client
     |-- user_runtime.py      per-user worker
@@ -269,7 +265,7 @@ Bitget demo  +  Supabase (auth, cycle log, encrypted keys)
 
 | Path | Role |
 |---|---|
-| `backend/app/agent_loop.py` | Cycle |
+| `backend/app/agent_loop.py` | Cycle + model decision |
 | `backend/app/risk_engine.py` | Wall |
 | `backend/app/paper_execution.py` | Paper send |
 | `backend/app/strategy.py` | Books + parse + activate |
@@ -333,7 +329,7 @@ Production desk already uses `https://priva-499h.onrender.com`.
 | `SUPABASE_ANON_KEY` | Anon |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server only — never ship to the browser |
 | `PRIVA_CREDENTIAL_ENCRYPTION_KEY` | Fernet, 44 chars |
-| `GEMINI_API_KEY` | Veto gate. Missing key fail-closes to VETO |
+| `GEMINI_API_KEY` | Model decision. Missing key → hold |
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

@@ -238,7 +238,7 @@ function ExportModal({
         </button>
         <h2 className="modal-title">Export your activity</h2>
         <p className="modal-sub">
-          Opens, closes, risk blocks, and model vetoes. Holds and venue mapping misses stay out.
+          Opens, closes, risk blocks, and model decisions. Holds and venue mapping misses stay out.
         </p>
 
         <div className="form-field">
