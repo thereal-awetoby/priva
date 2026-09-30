@@ -16,7 +16,8 @@ create table if not exists public.user_agent_settings (
   close_on_signal_violation boolean not null default true,
   execution_profiles jsonb not null default '["autonomous:futures"]'::jsonb,
   enabled boolean not null default false,
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  position_mode text
 );
 
 create table if not exists public.custom_strategies (
@@ -52,7 +53,8 @@ alter table public.user_agent_settings
   add column if not exists max_leverage numeric not null default 5,
   add column if not exists risk_enabled boolean not null default true,
   add column if not exists allowed_symbols jsonb not null default '[]'::jsonb,
-  add column if not exists pnl_reset_at timestamptz;
+  add column if not exists pnl_reset_at timestamptz,
+  add column if not exists position_mode text;
 
 alter table public.user_agent_settings
   add column if not exists execution_profiles jsonb not null default '["autonomous:futures"]'::jsonb;
@@ -79,6 +81,40 @@ alter table public.balance_snapshots enable row level security;
 drop policy if exists custom_strategies_owner_all on public.custom_strategies;
 create policy custom_strategies_owner_all
   on public.custom_strategies
+  for all
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists user_bitget_credentials_owner_all on public.user_bitget_credentials;
+create policy user_bitget_credentials_owner_all
+  on public.user_bitget_credentials
+  for all
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+revoke all on table public.user_bitget_credentials from anon, authenticated;
+
+drop policy if exists user_agent_settings_owner_all on public.user_agent_settings;
+create policy user_agent_settings_owner_all
+  on public.user_agent_settings
+  for all
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists agent_cycles_owner_all on public.agent_cycles;
+create policy agent_cycles_owner_all
+  on public.agent_cycles
+  for all
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists balance_snapshots_owner_all on public.balance_snapshots;
+create policy balance_snapshots_owner_all
+  on public.balance_snapshots
   for all
   to authenticated
   using (auth.uid() = user_id)

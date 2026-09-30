@@ -1,4 +1,5 @@
 from app.supabase_logging import SupabaseCycleLogger
+from pathlib import Path
 
 
 class FakeResponse:
@@ -38,7 +39,7 @@ def test_supabase_logger_inserts_cycle(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
     session = FakeSession()
 
-    result = SupabaseCycleLogger(session=session).log_cycle(
+    result = SupabaseCycleLogger(session=session, user_id="user-1").log_cycle(
         {
             "symbol": "AAPLUSDT",
             "status": "submitted",
@@ -55,6 +56,7 @@ def test_supabase_logger_inserts_cycle(monkeypatch):
     assert kwargs["headers"]["Authorization"] == "Bearer secret"
     assert kwargs["json"]["symbol"] == "AAPLUSDT"
     assert kwargs["json"]["order_result"]["order_id"] == "order-1"
+    assert kwargs["json"]["user_id"] == "user-1"
     assert kwargs["json"]["session_id"]
 
 
@@ -63,7 +65,7 @@ def test_supabase_logger_persists_block_reason_and_margin_check(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
     session = FakeSession()
 
-    SupabaseCycleLogger(session=session).log_cycle(
+    SupabaseCycleLogger(session=session, user_id="user-1").log_cycle(
         {
             "symbol": "AAPLUSDT",
             "status": "blocked",
@@ -83,10 +85,11 @@ def test_supabase_logger_reads_cycles(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
     session = FakeSession([{"symbol": "AAPLUSDT", "status": "submitted"}])
 
-    cycles = SupabaseCycleLogger(session=session).fetch_cycles(limit=10)
+    cycles = SupabaseCycleLogger(session=session, user_id="user-1").fetch_cycles(limit=10)
 
     assert cycles == [{"symbol": "AAPLUSDT", "status": "submitted"}]
     assert session.calls[0][1]["params"]["limit"] == 10
+    assert session.calls[0][1]["params"]["user_id"] == "eq.user-1"
 
 
 def test_supabase_logger_filters_cycles_by_session(monkeypatch):
@@ -94,9 +97,10 @@ def test_supabase_logger_filters_cycles_by_session(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
     session = FakeSession([])
 
-    SupabaseCycleLogger(session=session).fetch_cycles(session_id="session-1")
+    SupabaseCycleLogger(session=session, user_id="user-1").fetch_cycles(session_id="session-1")
 
     assert session.calls[0][1]["params"]["session_id"] == "eq.session-1"
+    assert session.calls[0][1]["params"]["user_id"] == "eq.user-1"
 
 
 def test_supabase_logger_persists_balance_account_key(monkeypatch):
@@ -159,33 +163,42 @@ def test_supabase_logger_detects_open_position(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
     session = FakeSession([{"id": 1}])
 
-    assert SupabaseCycleLogger(session=session).has_open_position("AAPLUSDT", market="spot") is True
+    assert SupabaseCycleLogger(session=session, user_id="user-1").has_open_position("AAPLUSDT", market="spot") is True
     assert session.calls[0][1]["params"]["symbol"] == "eq.AAPLUSDT"
     assert session.calls[0][1]["params"]["market"] == "eq.spot"
+    assert session.calls[0][1]["params"]["user_id"] == "eq.user-1"
 
 
-def test_supabase_logger_reads_active_strategy(monkeypatch):
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
-    session = FakeSession([{"strategy_id": "mean_reversion"}])
-
-    strategy_id = SupabaseCycleLogger(session=session).fetch_active_strategy()
-
-    assert strategy_id == "mean_reversion"
-    assert session.calls[0][1]["params"]["id"] == "eq.global"
-
-
-def test_supabase_logger_saves_active_strategy(monkeypatch):
+def test_supabase_logger_rejects_cross_user_reads_and_mutations(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
     session = FakeSession()
+    logger = SupabaseCycleLogger(session=session, user_id="user-a")
 
-    result = SupabaseCycleLogger(session=session).save_active_strategy("mean_reversion")
+    assert logger.fetch_user_settings("user-b") == {}
+    assert logger.fetch_user_credentials("user-b") is None
+    assert logger.fetch_custom_strategies("user-b") == []
+    assert logger.save_user_settings("user-b", {"risk_enabled": False})["status"] == "error"
+    assert logger.save_user_credentials("user-b", "ciphertext")["status"] == "error"
+    assert logger.delete_user_credentials("user-b")["status"] == "error"
+    assert logger.save_custom_strategy("user-b", "strategy", {}, "Other user's strategy")["status"] == "error"
+    assert logger.delete_custom_strategy("user-b", "strategy")["status"] == "error"
+    assert session.calls == []
 
-    url, kwargs = session.calls[0]
-    assert result["status"] == "saved"
-    assert url.endswith("/rest/v1/strategy_settings")
-    assert kwargs["json"] == {"id": "global", "strategy_id": "mean_reversion"}
+
+def test_supabase_migrations_define_owner_policies_for_user_tables():
+    sql = (Path(__file__).parents[1] / "supabase_multi_user.sql").read_text(encoding="utf-8")
+    for table in (
+        "user_bitget_credentials",
+        "user_agent_settings",
+        "custom_strategies",
+        "agent_cycles",
+        "balance_snapshots",
+    ):
+        assert f"alter table public.{table} enable row level security" in sql
+        assert f"create policy {table}_owner_all" in sql
+    assert "auth.uid() = user_id" in sql
+    assert "revoke all on table public.user_bitget_credentials from anon, authenticated" in sql
 
 
 def test_supabase_logger_saves_custom_strategy(monkeypatch):
@@ -193,7 +206,7 @@ def test_supabase_logger_saves_custom_strategy(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
     session = FakeSession()
 
-    result = SupabaseCycleLogger(session=session).save_custom_strategy(
+    result = SupabaseCycleLogger(session=session, user_id="user-1").save_custom_strategy(
         "user-1",
         "custom_opening_push",
         {"kind": "custom", "action": "buy", "comparison": "open"},
@@ -215,7 +228,7 @@ def test_supabase_logger_reads_custom_strategies(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "secret")
     session = FakeSession([{"strategy_id": "custom_opening_push", "definition": {}}])
 
-    strategies = SupabaseCycleLogger(session=session).fetch_custom_strategies("user-1")
+    strategies = SupabaseCycleLogger(session=session, user_id="user-1").fetch_custom_strategies("user-1")
 
     assert strategies[0]["strategy_id"] == "custom_opening_push"
     assert session.calls[0][1]["params"]["user_id"] == "eq.user-1"

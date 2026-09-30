@@ -19,7 +19,6 @@ class SupabaseAuth:
     def __init__(self) -> None:
         self.url = os.getenv("SUPABASE_URL", "").rstrip("/")
         self.anon_key = os.getenv("SUPABASE_ANON_KEY", "")
-        self.required = os.getenv("PRIVA_AUTH_REQUIRED", "false").lower() == "true"
         self.session = requests
 
     @property
@@ -44,25 +43,21 @@ class SupabaseAuth:
             return None
 
     def current_user(self, authorization: str | None) -> AuthenticatedUser:
+        if not self.configured:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Supabase authentication is not configured",
+            )
         if not authorization:
-            if self.required and self.configured:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
-            return AuthenticatedUser("local-development")
-
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
         scheme, _, token = authorization.partition(" ")
         if scheme.lower() != "bearer" or not token:
-            if self.required and self.configured:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
-            return AuthenticatedUser("local-development")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
 
-        if self.configured:
-            user = self.user_from_token(token)
-            if user is not None:
-                return user
-
-        if self.required and self.configured:
+        user = self.user_from_token(token)
+        if user is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Supabase session")
-        return AuthenticatedUser("local-development")
+        return user
 
 
 supabase_auth = SupabaseAuth()

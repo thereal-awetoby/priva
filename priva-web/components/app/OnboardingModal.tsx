@@ -45,13 +45,13 @@ const steps = [
   },
 ];
 
-export default function OnboardingModal({ onClose }: { onClose: () => void }) {
+export default function OnboardingModal({ onClose, userId }: { onClose: () => void; userId: string }) {
   const [step, setStep] = useState(0);
   const isLast = step === steps.length - 1;
 
   const finish = () => {
     try {
-      localStorage.setItem(STORAGE_KEY, "true");
+      localStorage.setItem(`${STORAGE_KEY}:${userId}`, "true");
     } catch {
       // localStorage unavailable — not critical, modal just reappears next visit
     }
@@ -104,9 +104,10 @@ export default function OnboardingModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function hasSeenOnboarding(): boolean {
+export function hasSeenOnboarding(userId: string): boolean {
+  if (!userId) return false;
   try {
-    return localStorage.getItem(STORAGE_KEY) === "true";
+    return localStorage.getItem(`${STORAGE_KEY}:${userId}`) === "true";
   } catch {
     return false;
   }

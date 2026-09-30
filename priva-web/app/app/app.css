@@ -934,3 +934,144 @@
     font-family: var(--font-ibm-plex-mono), monospace;
     font-size: 15px;
   }
+
+  .account-connect-screen{
+    min-height: 100vh;
+    color: var(--ink);
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(to right, color-mix(in srgb, var(--rule) 32%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in srgb, var(--rule) 24%, transparent) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+  .account-connect-header{
+    min-height: 72px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+    padding: 14px 5vw;
+    border-bottom: 1px solid var(--rule);
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+  }
+  .account-connect-header .wordmark{
+    font-family: var(--font-libre-caslon), Georgia, serif;
+    font-size: 22px;
+  }
+  .account-connect-header .wordmark span{ color: var(--accent); font-style: italic; }
+  .account-connect-user{
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    color: var(--ink-faint);
+    font-family: var(--font-ibm-plex-mono), monospace;
+    font-size: 11px;
+  }
+  .account-connect-layout{
+    width: min(1120px, calc(100% - 48px));
+    min-height: calc(100vh - 73px);
+    margin: 0 auto;
+    padding: 72px 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
+    gap: clamp(40px, 8vw, 112px);
+    align-items: center;
+  }
+  .account-connect-intro{ max-width: 570px; }
+  .account-connect-kicker{
+    margin: 0 0 22px;
+    color: var(--accent);
+    font-family: var(--font-ibm-plex-mono), monospace;
+    font-size: 11px;
+  }
+  .account-connect-intro h1{
+    max-width: 540px;
+    margin: 0;
+    font-size: 54px;
+    font-weight: 400;
+    line-height: 1.12;
+  }
+  .account-connect-description{
+    max-width: 490px;
+    margin: 22px 0 34px;
+    color: var(--ink-dim);
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  .account-connect-proof{
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 13px 0;
+    border-top: 1px solid var(--rule);
+    color: var(--ink-dim);
+    font-size: 13px;
+  }
+  .account-connect-proof-mark{
+    color: var(--accent);
+    font-family: var(--font-ibm-plex-mono), monospace;
+    font-size: 10px;
+  }
+  .account-connect-panel{
+    padding: 28px;
+    border: 1px solid var(--rule);
+    background: var(--bg-sunken);
+  }
+  .account-connect-panel-heading{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 20px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .account-connect-panel-heading h2,
+  .account-connect-unavailable h2{
+    margin: 0 0 3px;
+    font-size: 16px;
+    font-weight: 400;
+  }
+  .account-connect-panel-heading p,
+  .account-connect-unavailable p{
+    margin: 0;
+    color: var(--ink-faint);
+    font-family: var(--font-ibm-plex-mono), monospace;
+    font-size: 11px;
+  }
+  .account-connect-hint,
+  .account-connect-notice{
+    margin: 8px 0 0;
+    color: var(--ink-faint);
+    font-family: var(--font-ibm-plex-mono), monospace;
+    font-size: 10.5px;
+    line-height: 1.65;
+  }
+  .account-connect-notice{
+    padding: 12px;
+    border-left: 2px solid var(--accent);
+    background: var(--bg-raised);
+    color: var(--ink-dim);
+  }
+  .account-connect-error{
+    margin: 12px 0 0;
+    color: var(--down);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .account-connect-submit{ width: 100%; margin-top: 20px; }
+  .account-connect-unavailable .btn{ margin-top: 20px; }
+
+  @media (max-width: 760px){
+    .account-connect-header{ padding-inline: 20px; }
+    .account-connect-user > span{ display: none; }
+    .account-connect-layout{
+      width: min(100% - 32px, 520px);
+      min-height: auto;
+      padding: 42px 0 56px;
+      grid-template-columns: 1fr;
+      gap: 30px;
+    }
+    .account-connect-intro h1{ font-size: 36px; }
+    .account-connect-description{ margin: 16px 0 22px; }
+    .account-connect-panel{ padding: 20px; }
+  }

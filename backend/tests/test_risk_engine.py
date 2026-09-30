@@ -1,4 +1,5 @@
 from app import main as main_app
+from app.auth import AuthenticatedUser
 from app.risk_engine import RiskEngine
 
 
@@ -110,6 +111,7 @@ def test_update_settings_reconfigures_risk_limits_and_allowed_symbols():
 
 
 def test_intent_evaluation_returns_allow_capped_when_usage_is_high(monkeypatch):
+    monkeypatch.setattr(main_app, "require_connected_client", lambda user: None)
     monkeypatch.setattr(
         main_app.market_service,
         "get_market_snapshot",
@@ -137,7 +139,7 @@ def test_intent_evaluation_returns_allow_capped_when_usage_is_high(monkeypatch):
         current_daily_pnl=0,
     )
 
-    result = main_app.evaluate_intent(payload)
+    result = main_app.evaluate_intent(payload, AuthenticatedUser("risk-test-user"))
 
     assert result["status"] == "ok"
     assert result["verdict"] == "ALLOW_CAPPED"
@@ -146,6 +148,7 @@ def test_intent_evaluation_returns_allow_capped_when_usage_is_high(monkeypatch):
 
 
 def test_intent_evaluation_rejects_when_daily_loss_limit_is_hit(monkeypatch):
+    monkeypatch.setattr(main_app, "require_connected_client", lambda user: None)
     monkeypatch.setattr(
         main_app.market_service,
         "get_market_snapshot",
@@ -173,7 +176,7 @@ def test_intent_evaluation_rejects_when_daily_loss_limit_is_hit(monkeypatch):
         current_daily_pnl=-2000,
     )
 
-    result = main_app.evaluate_intent(payload)
+    result = main_app.evaluate_intent(payload, AuthenticatedUser("risk-test-user"))
 
     assert result["status"] == "rejected"
     assert result["verdict"] == "REJECT"

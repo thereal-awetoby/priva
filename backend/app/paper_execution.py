@@ -4,7 +4,6 @@ import base64
 import hashlib
 import hmac
 import json
-import os
 import time
 from typing import Any
 from urllib.parse import urlencode
@@ -86,11 +85,10 @@ class BitgetPaperExecutionClient:
         return aliases.get(raw, raw)
 
     def __init__(self, *, session: Any = requests) -> None:
-        self.api_key = os.getenv("BITGET_API_KEY", "")
-        self.api_secret = os.getenv("BITGET_API_SECRET", "")
-        self.passphrase = os.getenv("BITGET_API_PASSPHRASE", "")
-        configured_mode = os.getenv("BITGET_POSITION_MODE", "one_way")
-        self.position_mode = self.normalize_position_mode(configured_mode) or "one_way"
+        self.api_key = ""
+        self.api_secret = ""
+        self.passphrase = ""
+        self.position_mode = "one_way"
         self.session = session
 
     @property
@@ -103,10 +101,19 @@ class BitgetPaperExecutionClient:
             return None
         return hashlib.sha256(self.api_key.strip().encode()).hexdigest()
 
-    def configure_credentials(self, api_key: str, api_secret: str, passphrase: str) -> None:
+    def configure_credentials(
+        self,
+        api_key: str,
+        api_secret: str,
+        passphrase: str,
+        *,
+        position_mode: str | None = None,
+    ) -> None:
         self.api_key = api_key.strip()
         self.api_secret = api_secret.strip()
         self.passphrase = passphrase.strip()
+        if position_mode:
+            self.position_mode = self.normalize_position_mode(position_mode) or "one_way"
 
     def clear_credentials(self) -> None:
         self.api_key = ""
@@ -218,7 +225,7 @@ class BitgetPaperExecutionClient:
             return {
                 "status": "not_configured",
                 "market": market,
-                "message": "Set BITGET_API_KEY, BITGET_API_SECRET, and BITGET_API_PASSPHRASE in the hosting environment.",
+                "message": "Connect a Bitget paper account first.",
             }
 
         if market not in {"spot", "futures"}:
@@ -338,7 +345,7 @@ class BitgetPaperExecutionClient:
         if not self.configured:
             return {
                 "status": "not_configured",
-                "message": "Set BITGET_API_KEY, BITGET_API_SECRET, and BITGET_API_PASSPHRASE in the hosting environment.",
+                "message": "Connect a Bitget paper account first.",
             }
 
         normalized_side = self.normalize_position_side(position_side)

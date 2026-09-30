@@ -51,24 +51,27 @@ function pnlText(entry: EventItem): string | null {
   return entry.pnl != null ? Number(entry.pnl).toFixed(2) : "";
 }
 
-export default function NotificationBell() {
+export default function NotificationBell({ userId }: { userId: string }) {
   const [entries, setEntries] = useState<EventItem[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [lastSeen, setLastSeen] = useState<number>(0);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const storageKey = `${SEEN_KEY}:${userId}`;
 
   useEffect(() => {
+    setEntries([]);
+    setLastSeen(0);
     apiGet<any>("/activity-log")
       .then((data) => setEntries(data.entries ?? []))
       .catch(() => setEntries([]));
 
     try {
-      const stored = localStorage.getItem(SEEN_KEY);
+      const stored = localStorage.getItem(storageKey);
       if (stored) setLastSeen(Number(stored));
     } catch {
       // localStorage unavailable — badge will just always show total count
     }
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -101,7 +104,7 @@ export default function NotificationBell() {
       const now = Date.now();
       setLastSeen(now);
       try {
-        localStorage.setItem(SEEN_KEY, String(now));
+        localStorage.setItem(storageKey, String(now));
       } catch {
         // localStorage unavailable — fine, just won't persist across reloads
       }

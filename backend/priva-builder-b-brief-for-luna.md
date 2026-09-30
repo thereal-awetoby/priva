@@ -23,23 +23,24 @@ per-user runtime vault for Bitget demo credentials. Authenticated users can
 connect, verify, inspect, and disconnect their own Bitget account through:
 
 - `GET /auth/session`
-- `POST /connection/bitget`
-- `POST /connection/bitget/disconnect`
+- `GET /account/status`
+- `POST /account/connect`
+- `DELETE /account/disconnect`
 - `POST /paper-trade`
 - `GET /user/agent-loop`
 - `GET /user/agent-settings`
 - `POST /user/agent-settings`
 
-The backend reads `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
-`PRIVA_AUTH_REQUIRED`, and `PRIVA_CREDENTIAL_ENCRYPTION_KEY`. The frontend
-must send the Supabase access token as `Authorization: Bearer ...` and must
-never persist Bitget secrets.
+The backend requires `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
+`SUPABASE_SERVICE_ROLE_KEY`, and `PRIVA_CREDENTIAL_ENCRYPTION_KEY` at runtime.
+Protected requests always require a valid Supabase access token in
+`Authorization: Bearer ...`; there is no local-development identity fallback.
 
-Authenticated users now receive separate runtime workers, Bitget clients, risk
+Authenticated users receive separate runtime workers, Bitget clients, risk
 engines, persisted strategy/risk/exit settings, and user-filtered cycle logs.
-Credentials require the multi-user migration and service-role configuration to
-restore after restart. The frontend still needs to adopt the authenticated
-user-scoped endpoints before multi-user dashboard isolation is production-ready.
+The process-wide worker and global strategy-settings row have been removed.
+The frontend gates its dashboard on the per-user account status and requires
+each user to connect their own Bitget paper account before accessing controls.
 
 The multi-user Supabase migration is in `backend/supabase_multi_user.sql` and
 must be run before enabling durable credential restoration. It adds encrypted

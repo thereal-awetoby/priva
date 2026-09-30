@@ -1,9 +1,71 @@
 import asyncio
+import pytest
+from cryptography.fernet import Fernet
 
 from app import main
 from app.agent_loop import run_cycle
 from app.auth import AuthenticatedUser
 from app.balance_snapshots import fetch_combined_balance_snapshot
+
+
+_cycle_logger_factory = main.cycle_logger_for
+
+
+class MetricsCycleLogger:
+    def __init__(self, user_id):
+        self.user_id = user_id
+        self.session_id = "metrics-test-session"
+        self.configured = True
+        self.settings = {}
+
+    def fetch_cycles(self, **kwargs):
+        return []
+
+    def fetch_balance_snapshots(self, **kwargs):
+        return []
+
+    def fetch_user_settings(self, user_id):
+        return dict(self.settings)
+
+    def fetch_custom_strategies(self, user_id):
+        return []
+
+    def has_open_position(self, symbol, market=None):
+        return False
+
+    def log_cycle(self, cycle):
+        return {"status": "logged"}
+
+    def log_balance_snapshot(self, snapshot):
+        return {"status": "logged"}
+
+    def save_user_settings(self, user_id, settings):
+        self.settings.update(settings)
+        return {"status": "saved"}
+
+    def save_user_credentials(self, user_id, encrypted_credentials):
+        return {"status": "saved"}
+
+    def delete_user_credentials(self, user_id):
+        return {"status": "deleted"}
+
+    def save_custom_strategy(self, *args, **kwargs):
+        return {"status": "saved"}
+
+    def delete_custom_strategy(self, *args, **kwargs):
+        return {"status": "deleted"}
+
+
+@pytest.fixture(autouse=True)
+def mock_authenticated_route_dependencies(monkeypatch):
+    user = AuthenticatedUser("metrics-test-user")
+    monkeypatch.setattr(main, "normalize_user", lambda value: value if isinstance(value, AuthenticatedUser) else user)
+    monkeypatch.setattr(main, "paper_execution_client", EmptyExecutionClient(), raising=False)
+    monkeypatch.setattr(main, "execution_client_for", lambda current_user: main.paper_execution_client)
+    monkeypatch.setattr(main, "require_connected_client", lambda current_user: main.execution_client_for(current_user))
+    monkeypatch.setattr(main, "cycle_logger", MetricsCycleLogger(user.id), raising=False)
+    monkeypatch.setattr(main, "cycle_logger_for", lambda current_user: main.cycle_logger)
+    monkeypatch.setattr(main, "risk_engine", main.RiskEngine(), raising=False)
 
 
 def test_cors_allowed_origins_include_configured_vercel_domains(monkeypatch):
@@ -20,12 +82,8 @@ def test_cors_allowed_origins_include_configured_vercel_domains(monkeypatch):
     ]
 
 
-def test_cycle_logger_scopes_authenticated_users_when_auth_is_optional(monkeypatch):
-    monkeypatch.setattr(main.supabase_auth, "required", False)
-
-    logger = main.cycle_logger_for(AuthenticatedUser("new-user-id"))
-
-    assert logger is not main.cycle_logger
+def test_cycle_logger_scopes_authenticated_users():
+    logger = _cycle_logger_factory(AuthenticatedUser("new-user-id"))
     assert logger.user_id == "new-user-id"
 
 
@@ -128,6 +186,7 @@ class SnapshotExecutionClient:
 
 class SnapshotLogger:
     def __init__(self):
+        self.user_id = "metrics-test-user"
         self.snapshots = []
 
     def log_cycle(self, result):
@@ -139,6 +198,12 @@ class SnapshotLogger:
 
     def has_open_position(self, symbol, market=None):
         return False
+
+    def save_user_credentials(self, user_id, encrypted_credentials):
+        return {"status": "saved"}
+
+    def save_user_settings(self, user_id, settings):
+        return {"status": "saved"}
 
 
 def test_combined_balance_snapshot_contains_both_markets():
@@ -196,17 +261,22 @@ def test_connection_handler_persists_combined_snapshot(monkeypatch):
     monkeypatch.setattr(main, "BitgetPaperExecutionClient", lambda session=None: Candidate())
     monkeypatch.setattr(main, "execution_client_for", lambda user: execution)
     monkeypatch.setattr(main, "cycle_logger_for", lambda user: logger)
-    monkeypatch.setattr(main, "paper_execution_client", execution)
-    monkeypatch.setattr(main.supabase_auth, "required", False)
+    monkeypatch.setattr(main, "paper_execution_client", execution, raising=False)
+    monkeypatch.setattr(main.credential_vault, "fernet", Fernet(Fernet.generate_key()))
+    monkeypatch.setattr(main.credential_vault, "_credentials", {})
+    monkeypatch.setattr(main.user_runtime_registry, "start", lambda user_id, client: None)
 
     result = asyncio.run(
-        main.connect_bitget(
+        main.connect_account(
             main.BitgetConnectionRequest(api_key="key", api_secret="secret", passphrase="pass"),
-            AuthenticatedUser("local-development"),
+            AuthenticatedUser("metrics-test-user"),
         )
     )
 
     assert result["status"] == "connected"
+    assert result["demo_verified"] is True
+    assert result["connected"] is True
+    assert not {"api_key", "api_secret", "passphrase"} & result.keys()
     assert len(logger.snapshots) == 1
     assert logger.snapshots[0]["futures_equity"] == 1200.0
     assert logger.snapshots[0]["spot_equity"] == 300.0
@@ -223,17 +293,40 @@ def test_connection_handler_does_not_persist_unconfigured_snapshot(monkeypatch):
     monkeypatch.setattr(main, "BitgetPaperExecutionClient", lambda session=None: Candidate())
     monkeypatch.setattr(main, "execution_client_for", lambda user: execution)
     monkeypatch.setattr(main, "cycle_logger_for", lambda user: logger)
-    monkeypatch.setattr(main, "paper_execution_client", execution)
-    monkeypatch.setattr(main.supabase_auth, "required", False)
+    monkeypatch.setattr(main, "paper_execution_client", execution, raising=False)
+    monkeypatch.setattr(main.credential_vault, "fernet", Fernet(Fernet.generate_key()))
+    monkeypatch.setattr(main.credential_vault, "_credentials", {})
+    monkeypatch.setattr(main.user_runtime_registry, "start", lambda user_id, client: None)
 
     result = asyncio.run(
-        main.connect_bitget(
+        main.connect_account(
             main.BitgetConnectionRequest(api_key="key", api_secret="secret", passphrase="pass"),
-            AuthenticatedUser("local-development"),
+            AuthenticatedUser("metrics-test-user"),
         )
     )
 
     assert result["status"] == "connected"
+    assert logger.snapshots == []
+
+
+def test_connection_handler_rejects_bitget_verification_failure(monkeypatch):
+    class Candidate(SnapshotExecutionClient):
+        def fetch_account_mode(self, symbol):
+            return {"status": "rejected", "message": "invalid demo credentials"}
+
+    logger = SnapshotLogger()
+    monkeypatch.setattr(main, "BitgetPaperExecutionClient", lambda session=None: Candidate())
+    monkeypatch.setattr(main, "cycle_logger_for", lambda user: logger)
+
+    with pytest.raises(main.HTTPException) as error:
+        asyncio.run(
+            main.connect_account(
+                main.BitgetConnectionRequest(api_key="key", api_secret="secret", passphrase="pass"),
+                AuthenticatedUser("metrics-test-user"),
+            )
+        )
+
+    assert error.value.status_code == 400
     assert logger.snapshots == []
 
 
@@ -270,7 +363,7 @@ def test_account_balance_history_exposes_equity_curve_summary(monkeypatch):
     monkeypatch.setattr(main.cycle_logger, "fetch_balance_snapshots", lambda **kwargs: [])
     monkeypatch.setattr(main.agent_loop, "recent_balance_snapshots", lambda user_id=None: [])
     main._balance_history.clear()
-    main._balance_history["local-development"] = [
+    main._balance_history["metrics-test-user"] = [
         {"timestamp": "2026-09-20T00:00:00Z", "balance": 1000.0, "equity": 1000.0},
         {"timestamp": "2026-09-23T13:42:00Z", "balance": 1000.0, "equity": 1000.0},
         {"timestamp": "2026-09-23T13:52:00Z", "balance": 1100.0, "equity": 1100.0},
@@ -693,33 +786,25 @@ def test_status_reports_live_cycle_and_risk_usage(monkeypatch):
 
 
 def test_agent_settings_can_switch_autonomous_market():
-    original_market = main.agent_loop.MARKET_TYPE
-    try:
-        assert main.agent_settings()["market"] == original_market
-        result = main.update_agent_settings(main.AgentSettingsRequest(market="spot"))
-        assert result["status"] == "updated"
-        assert result["market"] == "spot"
-        assert main.agent_settings()["market"] == "spot"
-    finally:
-        main.agent_loop.configure_market_type(original_market)
+    assert main.agent_settings()["market"] == "futures"
+    result = main.update_agent_settings(main.AgentSettingsRequest(market="spot"))
+    assert result["status"] == "updated"
+    assert result["market"] == "spot"
+    assert main.agent_settings()["market"] == "spot"
 
 
 def test_agent_settings_updates_exit_rules():
-    original = main.agent_loop.get_exit_rules()
-    try:
-        result = main.update_agent_settings(
-            main.AgentSettingsRequest(
-                market="futures",
-                take_profit_pct=6.0,
-                stop_loss_pct=2.5,
-                close_on_signal_violation=False,
-            )
+    result = main.update_agent_settings(
+        main.AgentSettingsRequest(
+            market="futures",
+            take_profit_pct=6.0,
+            stop_loss_pct=2.5,
+            close_on_signal_violation=False,
         )
-        assert result["take_profit_pct"] == 6.0
-        assert result["stop_loss_pct"] == 2.5
-        assert result["close_on_signal_violation"] is False
-    finally:
-        main.agent_loop.configure_exit_rules(**original)
+    )
+    assert result["take_profit_pct"] == 6.0
+    assert result["stop_loss_pct"] == 2.5
+    assert result["close_on_signal_violation"] is False
 
 
 def test_activity_log_exposes_trade_open_time(monkeypatch):

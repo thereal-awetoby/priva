@@ -12,8 +12,8 @@ import base64
 import hashlib
 import hmac
 import json
-import os
 import time
+from getpass import getpass
 
 import requests
 
@@ -22,25 +22,11 @@ PATH = "/api/v2/mix/account/account"
 
 
 def main() -> None:
-    api_key = os.getenv("BITGET_API_KEY", "")
-    api_secret = os.getenv("BITGET_API_SECRET", "")
-    passphrase = os.getenv("BITGET_API_PASSPHRASE", "")
-
-    missing = [
-        name
-        for name, val in [
-            ("BITGET_API_KEY", api_key),
-            ("BITGET_API_SECRET", api_secret),
-            ("BITGET_API_PASSPHRASE", passphrase),
-        ]
-        if not val
-    ]
-    if missing:
-        print(f"Missing env vars: {', '.join(missing)}")
-        print("Set them in your shell before running this script, e.g.:")
-        print('  export BITGET_API_KEY="..."')
-        print('  export BITGET_API_SECRET="..."')
-        print('  export BITGET_API_PASSPHRASE="..."')
+    api_key = input("Bitget demo API key: ").strip()
+    api_secret = getpass("Bitget demo API secret: ").strip()
+    passphrase = getpass("Bitget demo API passphrase: ").strip()
+    if not api_key or not api_secret or not passphrase:
+        print("All three Bitget demo credential fields are required.")
         return
 
     query = "?symbol=AAPLUSDT&marginCoin=USDT&productType=USDT-FUTURES"

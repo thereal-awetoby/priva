@@ -1,8 +1,18 @@
 import json
+import os
 
 import requests
 
-from app.paper_execution import BitgetPaperExecutionClient, describe_rejection
+from app.paper_execution import BitgetPaperExecutionClient as BaseBitgetPaperExecutionClient, describe_rejection
+
+
+class BitgetPaperExecutionClient(BaseBitgetPaperExecutionClient):
+    def __init__(self, *, session=requests, position_mode=None):
+        super().__init__(session=session)
+        self.configure_credentials("test-api-key", "test-api-secret", "test-passphrase")
+        configured_mode = position_mode or os.getenv("BITGET_POSITION_MODE")
+        if configured_mode:
+            self.position_mode = self.normalize_position_mode(configured_mode) or "one_way"
 
 
 class FakeResponse:
@@ -222,13 +232,13 @@ def test_paper_client_normalizes_nested_fill_history(monkeypatch):
 
 def test_paper_client_fails_closed_without_credentials(monkeypatch):
     for key in ("BITGET_API_KEY", "BITGET_API_SECRET", "BITGET_API_PASSPHRASE"):
-        monkeypatch.delenv(key, raising=False)
-
+        monkeypatch.setenv(key, "must-not-be-used")
     session = FakeSession()
-    client = BitgetPaperExecutionClient(session=session)
+    client = BaseBitgetPaperExecutionClient(session=session)
 
     result = client.place_market_order({"symbol": "AAPLUSDT", "side": "buy", "qty": 5})
 
+    assert client.configured is False
     assert result["status"] == "not_configured"
     assert session.calls == []
 
