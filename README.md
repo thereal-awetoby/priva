@@ -52,18 +52,9 @@ Priva only talks to **Bitget Demo Trading**. Live keys will not work. The worker
 2. Top nav → **Futures**.
 3. In the menu, open **Demo trading** (demo trading with zero funding risk).
 4. Confirm the header shows the green **Demo** badge. If it says Live, you are in the wrong venue.
+<img width="1080" height="1080" alt="image" src="https://github.com/user-attachments/assets/717b0d50-b8ea-495e-bc1a-fe04dc437d5d" />
 
-### 2. Fund the paper account (optional)
-
-Demo starts with paper USD / USDT. You can top it up:
-
-1. In the demo terminal, open the briefcase / **Assets**.
-2. Open **Adjust demo trading funds**.
-3. Add USDT (and USD if you want the spot side funded).
-
-A ~$20,000 paper balance is enough to match the desk you see in the demo.
-
-### 3. Create a **demo** API key
+### 2. Create a **demo** API key
 
 Do this **inside Demo**, not on the live API-keys page.
 
@@ -75,7 +66,23 @@ Do this **inside Demo**, not on the live API-keys page.
    - API secret
    - Passphrase
 
-4. Permissions: **trade only**. No withdrawals. No transfers.
+3. Permissions: **trade only**. No withdrawals. No transfers.
+<img width="1080" height="1080" alt="image" src="https://github.com/user-attachments/assets/39b1b9c0-bd26-4877-b69e-f53ec34a12f5" />
+
+
+### 4. Fund the paper account (optional)
+
+Demo starts with paper USD / USDT. You can top it up:
+
+1. In the demo terminal, open the briefcase / **Assets**.
+2. Open **Adjust demo trading funds**.
+3. Add USDT (and USD if you want the spot side funded).
+
+A ~$20,000 paper balance is enough to match the desk you see in the demo.
+<img width="1080" height="1080" alt="image" src="https://github.com/user-attachments/assets/5ea8902b-e360-4a70-9a15-565d3c1a461a" />
+
+
+
 
 If the button says anything other than demo / paper, stop. That key must never be pasted into Priva.
 
@@ -89,6 +96,10 @@ If the button says anything other than demo / paper, stop. That key must never b
 6. Save. The desk stays locked until the paper key verifies.
 
 Priva stores those credentials encrypted in a vault. The worker never holds your full exchange private key. Withdrawal permission is never requested.
+<img width="1080" height="1080" alt="image" src="https://github.com/user-attachments/assets/bf776c90-4c19-43a2-8af8-1de59f738f11" />
+<img width="1050" height="788" alt="image" src="https://github.com/user-attachments/assets/b7680658-1831-412b-b384-adf1b382000d" />
+
+
 
 ### 5. Run the desk
 
