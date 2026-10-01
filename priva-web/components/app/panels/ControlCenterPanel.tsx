@@ -23,7 +23,15 @@ type HoverInfo = { value: number; time: string } | null;
 
 type DeskRow =
   | { kind: "event"; entry: ActivityEntry; key: string }
-  | { kind: "holds"; count: number; symbols: string[]; lastAt: string; key: string };
+  | { kind: "holds"; count: number; symbols: string[]; lastAt: string; key: string }
+  | { kind: "blocked"; count: number; symbols: string[]; lastAt: string; key: string };
+
+function isBlockedAttempt(entry: ActivityEntry): boolean {
+  const action = String(entry.action ?? "").toLowerCase();
+  const raw = `${entry.display_label ?? ""} ${entry.display_detail ?? ""} ${entry.status ?? ""}`.toLowerCase();
+  if (action !== "buy" && action !== "sell") return false;
+  return entry.risk_check?.allowed === false || raw.includes("blocked");
+}
 
 function activityLabel(entry: ActivityEntry): string {
   const action = String(entry.action ?? "").toLowerCase();
@@ -68,14 +76,28 @@ function buildDeskActivity(entries: ActivityEntry[], mode: string): DeskRow[] {
         new Date(a.timestamp ?? a.created_at ?? 0).getTime()
     );
 
-  const events = scoped.filter((entry) => !isQuietHold(entry));
+  const fills = scoped.filter((entry) => !isQuietHold(entry) && !isBlockedAttempt(entry));
+  const blocked = scoped.filter(isBlockedAttempt);
   const holds = scoped.filter(isQuietHold);
 
-  const rows: DeskRow[] = events.map((entry) => ({
+  const rows: DeskRow[] = fills.slice(0, 5).map((entry) => ({
     kind: "event",
     entry,
     key: String(entry.id ?? `${entry.symbol}-${entry.timestamp}-${entry.action}`),
   }));
+
+  if (blocked.length) {
+    const symbols = Array.from(
+      new Set(blocked.map((entry) => cleanSymbol(String(entry.symbol ?? ""))).filter(Boolean))
+    );
+    rows.push({
+      kind: "blocked",
+      count: blocked.length,
+      symbols,
+      lastAt: String(blocked[0].timestamp ?? blocked[0].created_at ?? blocked[0].closed_at ?? ""),
+      key: `blocked-summary-${mode}`,
+    });
+  }
 
   if (holds.length) {
     const symbols = Array.from(
@@ -90,7 +112,7 @@ function buildDeskActivity(entries: ActivityEntry[], mode: string): DeskRow[] {
     });
   }
 
-  return rows.slice(0, 8);
+  return rows;
 }
 
 function aggregateByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe): EquityPoint[] {
@@ -937,8 +959,12 @@ export default function ControlCenterPanel() {
             </p>
           ) : (
             deskActivity.map((row) => {
-              if (row.kind === "holds") {
+              if (row.kind === "holds" || row.kind === "blocked") {
                 const activityTime = formatActivityTime(row.lastAt);
+                const noun = row.kind === "blocked" ? "blocked" : "hold";
+                const detail = row.kind === "blocked"
+                  ? `${row.count} refused · risk`
+                  : `${row.count} cycles · no setup`;
                 return (
                   <div className="log-row" key={row.key}>
                     <time
@@ -949,11 +975,8 @@ export default function ControlCenterPanel() {
                       {activityTime.display}
                     </time>
                     <span>
-                      {row.symbols.join(" · ") || "watched names"} — hold
-                      <span className="log-status">
-                        {" "}
-                        ({row.count} cycles · no setup)
-                      </span>
+                      {row.symbols.join(" · ") || "watched names"} — {noun}
+                      <span className="log-status"> ({detail})</span>
                     </span>
                   </div>
                 );
