@@ -97,10 +97,94 @@ def _extract_gemini_json(payload: Any) -> dict[str, Any]:
     return {}
 
 
+
+def _model_decide(
+    symbol: str,
+    ticker: dict[str, Any],
+    book: dict[str, Any],
+    cycle_mode: str,
+) -> dict[str, Any]:
+    """Gemini picks hold | buy | sell. Risk engine still has the last word."""
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return {
+            "action": "hold",
+            "reason": "no_gemini_api_key_configured",
+            "source": "model",
+        }
+
+    base_url = (os.getenv("GEMINI_API_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+    model = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
+    prompt = (
+        "You decide the next paper trade for a bounded US-stock agent. "
+        "Return ONLY JSON with keys: "
+        "action (hold|buy|sell), market (spot|futures), size (number), "
+        "leverage (1 to 5), reason (short string). "
+        "No markdown. If unsure, action=hold. "
+        "Do not exceed leverage 5. Prefer hold over a weak idea. "
+        f"Symbol: {symbol}. Mode: {cycle_mode}. "
+        f"Last: {ticker.get('last_price')}. "
+        f"Book hint action: {book.get('action')}. "
+        f"Book hint reason: {book.get('reason')}. "
+        f"Book hint size: {book.get('size')}. "
+        f"Book hint leverage: {book.get('leverage', 1)}."
+    )
+
+    fail = {"action": "hold", "reason": "gemini_unavailable", "source": "model"}
+    try:
+        response = requests.post(
+            f"{base_url}/models/{model}:generateContent",
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0},
+            },
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        return {**fail, "reason": f"gemini_request_failed:{exc}"}
+
+    if response.status_code >= 400:
+        return {**fail, "reason": f"gemini_http_{response.status_code}"}
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return {**fail, "reason": "gemini_invalid_json"}
+
+    parsed = _extract_gemini_json(payload) or {}
+    action = str(parsed.get("action") or "hold").lower()
+    if action not in {"hold", "buy", "sell"}:
+        return {**fail, "reason": "gemini_bad_action"}
+
+    market = str(parsed.get("market") or book.get("market") or "futures").lower()
+    if market not in {"spot", "futures"}:
+        market = "futures"
+
+    try:
+        size = float(parsed.get("size") or book.get("size") or 0)
+    except (TypeError, ValueError):
+        size = float(book.get("size") or 0)
+    try:
+        leverage = float(parsed.get("leverage") or book.get("leverage") or 1)
+    except (TypeError, ValueError):
+        leverage = 1.0
+    leverage = max(1.0, min(leverage, 5.0))
+
+    return {
+        "action": action,
+        "market": market,
+        "size": size,
+        "leverage": leverage,
+        "reason": str(parsed.get("reason") or "model_decision"),
+        "source": "model",
+    }
+
+
 def _model_veto_gate(symbol: str, decision: dict[str, Any]) -> dict[str, Any]:
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        return {"allowed": True, "decision": "ALLOW", "reason": "no_gemini_api_key_configured"}
+        return {"allowed": False, "decision": "VETO", "reason": "no_gemini_api_key_configured"}
 
     base_url = (os.getenv("GEMINI_API_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
     model = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
@@ -453,6 +537,7 @@ async def run_cycle(
                 strategy_id=selected_strategy or get_active_strategy_id(user_id),
                 user_id=user_id,
             )
+        book = dict(decision)
         decision.update({"symbol": symbol.upper(), "market_status": ticker.get("status", "unknown")})
 
         if ticker.get("status") != "live":
@@ -468,6 +553,19 @@ async def run_cycle(
             return persist(result)
 
         configured_market = market_type or DEFAULT_MARKET_TYPE
+        model = _model_decide(symbol.upper(), ticker, book, cycle_mode)
+        decision["action"] = model["action"]
+        decision["reason"] = model.get("reason") or decision.get("reason")
+        decision["source"] = "model"
+        decision["signal_strength"] = decision.get("signal_strength") or 0
+        if model.get("market"):
+            decision["market"] = model["market"]
+        if model.get("size") not in (None, ""):
+            decision["size"] = model["size"]
+        if model.get("leverage") not in (None, ""):
+            decision["leverage"] = model["leverage"]
+        decision["book_hint"] = book.get("action")
+        decision["model_decision"] = model
         if decision["action"] == "hold":
             markets_to_check = ["futures", "spot"] if configured_market == "autonomous" else [configured_market]
             for exit_market in markets_to_check:
@@ -547,21 +645,6 @@ async def run_cycle(
                     "order": None,
                 }
                 return persist(result)
-        veto = _model_veto_gate(symbol.upper(), decision)
-        if not veto["allowed"]:
-            result = {
-                "status": "blocked",
-                "symbol": symbol.upper(),
-                "mode": cycle_mode,
-                "decision": decision,
-                "ticker": ticker,
-                "risk_check": {"allowed": False, "reasons": ["gemini_veto"]},
-                "reason": "gemini_veto",
-                "model_gate": veto,
-                "order": None,
-            }
-            return persist(result)
-
         trade = {
             "symbol": symbol.upper(),
             "side": decision["action"],

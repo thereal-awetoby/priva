@@ -33,6 +33,100 @@ type DashboardData = {
 type ChartTimeframe = "minute" | "hourly" | "daily" | "weekly" | "monthly";
 type HoverInfo = { value: number; time: string } | null;
 
+type DeskRow =
+  | { kind: "event"; entry: ActivityEntry; key: string }
+  | { kind: "holds"; count: number; symbols: string[]; lastAt: string; key: string }
+  | { kind: "blocked"; count: number; symbols: string[]; lastAt: string; key: string };
+
+function isBlockedAttempt(entry: ActivityEntry): boolean {
+  const action = String(entry.action ?? "").toLowerCase();
+  const raw = `${entry.display_label ?? ""} ${entry.display_detail ?? ""} ${entry.status ?? ""}`.toLowerCase();
+  if (action !== "buy" && action !== "sell") return false;
+  return entry.risk_check?.allowed === false || raw.includes("blocked");
+}
+
+function activityLabel(entry: ActivityEntry): string {
+  const action = String(entry.action ?? "").toLowerCase();
+  const raw = `${entry.display_label ?? ""} ${entry.display_detail ?? ""} ${entry.status ?? ""}`.toLowerCase();
+  if (action === "buy" || action === "sell") {
+    if (entry.risk_check?.allowed === false || raw.includes("blocked")) return `${action} · blocked`;
+    return action;
+  }
+  if (String(entry.status ?? "").toLowerCase() === "closed") return "closed";
+  if (action === "hold" || raw.includes("no signal") || raw.includes("evaluating") || raw.includes("blocked")) {
+    return "hold · no setup";
+  }
+  return String(entry.display_label ?? entry.action ?? "cycle");
+}
+
+function isQuietHold(entry: ActivityEntry): boolean {
+  const action = String(entry.action ?? "").toLowerCase();
+  const status = String(entry.status ?? "").toLowerCase();
+  const label = `${entry.display_label ?? ""} ${entry.display_detail ?? ""}`.toLowerCase();
+
+  // Real risk events: a buy/sell that was refused. Keep those visible.
+  if (action === "buy" || action === "sell") return false;
+  if (status === "submitted" || status === "closed") return false;
+
+  // Everything else on this desk is cycle noise: hold, no setup, skipped, blocked-hold.
+  if (action === "hold") return true;
+  if (entry.category === "evaluation") return true;
+  if (status === "blocked") return true;
+  if (label.includes("blocked")) return true;
+  if (label.includes("no signal") || label.includes("no trade signal") || label.includes("evaluating")) {
+    return true;
+  }
+  return false;
+}
+
+function buildDeskActivity(entries: ActivityEntry[], mode: string): DeskRow[] {
+  const scoped = entries
+    .filter((entry) => (entry.mode ?? "autonomous") === mode)
+    .sort(
+      (a, b) =>
+        new Date(b.timestamp ?? b.created_at ?? 0).getTime() -
+        new Date(a.timestamp ?? a.created_at ?? 0).getTime()
+    );
+
+  const fills = scoped.filter((entry) => !isQuietHold(entry) && !isBlockedAttempt(entry));
+  const blocked = scoped.filter(isBlockedAttempt);
+  const holds = scoped.filter(isQuietHold);
+
+  const rows: DeskRow[] = fills.slice(0, 5).map((entry) => ({
+    kind: "event",
+    entry,
+    key: String(entry.id ?? `${entry.symbol}-${entry.timestamp}-${entry.action}`),
+  }));
+
+  if (blocked.length) {
+    const symbols = Array.from(
+      new Set(blocked.map((entry) => cleanSymbol(String(entry.symbol ?? ""))).filter(Boolean))
+    );
+    rows.push({
+      kind: "blocked",
+      count: blocked.length,
+      symbols,
+      lastAt: String(blocked[0].timestamp ?? blocked[0].created_at ?? blocked[0].closed_at ?? ""),
+      key: `blocked-summary-${mode}`,
+    });
+  }
+
+  if (holds.length) {
+    const symbols = Array.from(
+      new Set(holds.map((entry) => cleanSymbol(String(entry.symbol ?? ""))).filter(Boolean))
+    );
+    rows.push({
+      kind: "holds",
+      count: holds.length,
+      symbols,
+      lastAt: String(holds[0].timestamp ?? holds[0].created_at ?? ""),
+      key: `hold-summary-${mode}`,
+    });
+  }
+
+  return rows;
+}
+
 function aggregateByTimeframe(points: EquityPoint[], timeframe: ChartTimeframe): EquityPoint[] {
   const validPoints = points
     .map((point) => ({ point, time: new Date(point.timestamp ?? point.created_at ?? 0).getTime() }))
@@ -611,7 +705,7 @@ export default function ControlCenterPanel() {
   if (error) {
     return (
       <div className="strategy-empty">
-        Couldn&apos;t load live data ({error}).
+        Couldn't load live data ({error}).
       </div>
     );
   }
@@ -621,10 +715,7 @@ export default function ControlCenterPanel() {
   const watchLine = watchedSymbols.length ? `Watching ${watchedSymbols.join(" & ")}` : "Watching";
   const lastCycle = statusData?.last_cycle ? new Date(statusData.last_cycle).getTime() : null;
   const intervalSeconds = statusData?.cycle_interval_seconds;
-  const filteredActivity = activity
-    .filter((entry) => (entry.mode ?? "autonomous") === activityMode)
-    .sort((a, b) => new Date(b.timestamp ?? b.created_at ?? 0).getTime() - new Date(a.timestamp ?? a.created_at ?? 0).getTime())
-    .slice(0, 8);
+  const deskActivity = buildDeskActivity(activity, activityMode);
 
   return (
     <div>
@@ -717,13 +808,13 @@ export default function ControlCenterPanel() {
 
       <div className="perf-row">
         <div className="perf-cell">
-          <div className="perf-label">Total P&amp;L</div>
+          <div className="perf-label">Total P&L</div>
           <div className={`perf-value ${pnl?.total_pnl >= 0 ? "up" : "down"}`}>
             {pnl?.total_pnl >= 0 ? "+" : ""}${pnl?.total_pnl?.toFixed(2)}
           </div>
         </div>
         <div className="perf-cell">
-          <div className="perf-label">Realized P&amp;L</div>
+          <div className="perf-label">Realized P&L</div>
           <div className="perf-value">${pnl?.realized_pnl?.toFixed(2)}</div>
         </div>
         <div className="perf-cell">
@@ -818,7 +909,7 @@ export default function ControlCenterPanel() {
                 <th>Side</th>
                 <th>Qty</th>
                 <th>Notional</th>
-                <th>P&amp;L</th>
+                <th>P&L</th>
                 <th>Leverage</th>
                 <th></th>
               </tr>
@@ -875,24 +966,48 @@ export default function ControlCenterPanel() {
           Recent activity — <span>{activityMode === "autonomous" ? "Autonomous" : "Strategy"}</span>
         </div>
         <div className="activity-log">
-          {filteredActivity.length === 0 ? (
+          {deskActivity.length === 0 ? (
             <p className="panel-lead" style={{ textAlign: "center" }}>
               No activity yet.
             </p>
           ) : (
-            filteredActivity.map((entry) => {
+            deskActivity.map((row) => {
+              if (row.kind === "holds" || row.kind === "blocked") {
+                const activityTime = formatActivityTime(row.lastAt);
+                const noun = row.kind === "blocked" ? "blocked" : "hold";
+                const detail = row.kind === "blocked"
+                  ? `${row.count} refused · risk`
+                  : `${row.count} cycles · no setup`;
+                return (
+                  <div className="log-row" key={row.key}>
+                    <time
+                      className="log-time"
+                      dateTime={row.lastAt || undefined}
+                      title={activityTime.title}
+                    >
+                      {activityTime.display}
+                    </time>
+                    <span>
+                      {row.symbols.join(" · ") || "watched names"} — {noun}
+                      <span className="log-status"> ({detail})</span>
+                    </span>
+                  </div>
+                );
+              }
+
+              const entry = row.entry;
               const eventTimestamp = entry.status === "closed"
                 ? entry.closed_at
                 : entry.opened_at ?? entry.timestamp;
               const activityTime = formatActivityTime(eventTimestamp);
               return (
-                <div className="log-row" key={entry.id ?? `${entry.symbol}-${entry.timestamp}`}>
+                <div className="log-row" key={row.key}>
                   <time className="log-time" dateTime={eventTimestamp ?? undefined} title={activityTime.title}>
                     {activityTime.display}
                   </time>
                   <span>
-                    {cleanSymbol(entry.symbol)} — {entry.action}
-                    <span className="log-status"> ({entry.display_label})</span>
+                    {cleanSymbol(String(entry.symbol ?? ""))} — {entry.action}
+                    <span className="log-status"> ({activityLabel(entry)})</span>
                   </span>
                 </div>
               );

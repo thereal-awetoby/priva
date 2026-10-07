@@ -157,6 +157,22 @@ function buildCsv(rows: EventItem[]): string {
   return [header.join(","), ...lines].join("\r\n");
 }
 
+function isJudgeNoise(e: EventItem): boolean {
+  const status = (e.status ?? "").toLowerCase();
+  const action = (e.action ?? "").toLowerCase();
+  const detail = `${e.display_detail ?? ""} ${e.display_label ?? ""}`.toLowerCase();
+
+  if (action === "hold" || e.category === "evaluation") return true;
+  if (status === "skipped_existing_position") return true;
+  if (detail.includes("no trade signal")) return true;
+  if (detail.includes("position already open")) return true;
+  if (detail.includes("symbol not available")) return true;
+  if (detail.includes("parameter") && detail.includes("does not exist")) return true;
+  if (detail.includes("less than the minimum amount")) return true;
+  if (detail.includes("order amount exceeds")) return true;
+  return false;
+}
+
 function ExportModal({
   entries,
   onClose,
@@ -184,6 +200,7 @@ function ExportModal({
   const rows = useMemo(() => {
     return entries
       .filter((e) => {
+        if (isJudgeNoise(e)) return false;
         const matchesSymbol =
           selectedSymbols.length === 0 ||
           selectedSymbols.includes(cleanSymbol(e.symbol ?? ""));
@@ -221,7 +238,7 @@ function ExportModal({
         </button>
         <h2 className="modal-title">Export your activity</h2>
         <p className="modal-sub">
-          Pick what you want in the file — everything else stays out.
+          Opens, closes, risk blocks, and model decisions. Holds and venue mapping misses stay out.
         </p>
 
         <div className="form-field">
