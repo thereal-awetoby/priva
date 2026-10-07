@@ -255,6 +255,7 @@ GET  /risk-settings
 POST /risk-settings
 POST /risk-check
 POST /paper-trade
+GET  /dashboard
 GET  /account/balance
 GET  /account/balance-history
 GET  /pnl

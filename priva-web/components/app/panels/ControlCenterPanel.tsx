@@ -18,6 +18,18 @@ type EquityPoint = {
   spot_equity_carried?: boolean;
 };
 
+type DashboardData = {
+  positions: { positions?: Position[] };
+  pnl: Record<string, unknown>;
+  risk_usage: Record<string, unknown>;
+  activity: { entries?: ActivityEntry[] };
+  kill_switch: { enabled?: boolean };
+  balance: Record<string, unknown>;
+  balance_history: { points?: EquityPoint[] };
+  agent_settings: { execution_profiles?: string[]; market?: string };
+  status: Record<string, unknown>;
+};
+
 type ChartTimeframe = "minute" | "hourly" | "daily" | "weekly" | "monthly";
 type HoverInfo = { value: number; time: string } | null;
 
@@ -469,19 +481,20 @@ export default function ControlCenterPanel() {
 
   const loadData = (attempt = 0) => {
     const loadVersion = ++loadVersionRef.current;
-    Promise.all([
-      apiGet<any>("/positions"),
-      apiGet<any>("/pnl"),
-      apiGet<any>("/risk-usage"),
-      apiGet<any>("/activity-log"),
-      apiGet<any>("/kill-switch"),
-      apiGet<any>("/account/balance"),
-      apiGet<any>("/account/balance-history"),
-      apiGet<any>("/user/agent-settings"),
-      apiGet<any>("/status"),
-    ])
-      .then(([positionsData, pnlData, riskData, activityData, killData, balanceData, historyData, settingsData, statusResponse]) => {
+    apiGet<DashboardData>("/dashboard")
+      .then((dashboardData) => {
         if (loadVersion !== loadVersionRef.current) return;
+        const {
+          positions: positionsData,
+          pnl: pnlData,
+          risk_usage: riskData,
+          activity: activityData,
+          kill_switch: killData,
+          balance: balanceData,
+          balance_history: historyData,
+          agent_settings: settingsData,
+          status: statusResponse,
+        } = dashboardData;
         setPositions(positionsData.positions ?? []);
         setPnl(pnlData);
         setRiskUsage(riskData);

@@ -342,6 +342,58 @@ def test_pnl_uses_live_positions_and_zero_realized_without_cycles(monkeypatch):
     assert result["source"] == "bitget_and_supabase"
 
 
+def test_dashboard_reuses_cycles_and_preserves_complete_balance_history(monkeypatch):
+    user = AuthenticatedUser("metrics-test-user")
+    cycle_fetches = []
+    balance_reads = []
+    history_reads = []
+    complete_history = {
+        "status": "ok",
+        "points": [{"timestamp": f"2026-09-23T13:{index % 60:02d}:00Z"} for index in range(1201)],
+        "starting_balance": 1000.0,
+        "latest_balance": 1200.0,
+        "point_count": 1201,
+    }
+
+    monkeypatch.setattr(
+        main.cycle_logger,
+        "fetch_cycles",
+        lambda **kwargs: cycle_fetches.append(kwargs) or [],
+    )
+    monkeypatch.setattr(main.agent_loop, "recent_cycles", lambda user_id: [])
+    monkeypatch.setattr(
+        main,
+        "account_balance",
+        lambda current_user: balance_reads.append(current_user.id) or {"balance": 1200.0},
+    )
+    monkeypatch.setattr(
+        main,
+        "account_balance_history",
+        lambda current_user: history_reads.append(current_user.id) or complete_history,
+    )
+
+    result = main.dashboard(user)
+
+    assert len(cycle_fetches) == 1
+    assert balance_reads == [user.id]
+    assert history_reads == [user.id]
+    assert result["balance"] == {"balance": 1200.0}
+    assert result["balance_history"] == complete_history
+    assert result["balance_history"]["point_count"] == 1201
+    assert len(result["balance_history"]["points"]) == 1201
+    assert set(result) == {
+        "positions",
+        "pnl",
+        "risk_usage",
+        "activity",
+        "kill_switch",
+        "balance",
+        "balance_history",
+        "agent_settings",
+        "status",
+    }
+
+
 def test_account_balance_reports_daily_change_percent(monkeypatch):
     main._daily_balance_baselines.clear()
     client = BalanceExecutionClient(1000.0)
