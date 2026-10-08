@@ -1025,6 +1025,14 @@ def health() -> dict[str, Any]:
 def status(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user = normalize_user(user)
     require_connected_client(user)
+    return _status_for_user(user)
+
+
+def _status_for_user(
+    user: AuthenticatedUser,
+    *,
+    risk_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     user_id = user.id
     runtime_status = user_runtime_registry.status(user_id)
     worker_statuses = runtime_status.get("workers", {}).values()
@@ -1035,7 +1043,9 @@ def status(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     interval_seconds = runtime_status.get("cycle_interval_seconds")
     daily_loss_usage_pct = None
     try:
-        daily_loss_usage_pct = risk_usage(user).get("usage_percent", {}).get("daily_loss")
+        if risk_data is None:
+            risk_data = risk_usage(user)
+        daily_loss_usage_pct = risk_data.get("usage_percent", {}).get("daily_loss")
     except Exception:
         logger.warning("Status daily loss usage unavailable", exc_info=True)
     return {
@@ -1054,8 +1064,16 @@ def status(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
 def positions(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user = normalize_user(user)
     require_connected_client(user)
+    return _positions_for_user(user)
+
+
+def _positions_for_user(
+    user: AuthenticatedUser,
+    *,
+    cycles: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     user_logger = cycle_logger_for(user)
-    ledger_cycles: list[dict[str, Any]] | None = None
+    ledger_cycles = cycles
 
     def annotate_live_position(position: dict[str, Any]) -> dict[str, Any]:
         nonlocal ledger_cycles
@@ -1270,13 +1288,23 @@ async def reset_trading_session(
 def pnl(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user = normalize_user(user)
     require_connected_client(user)
+    return _pnl_for_user(user)
+
+
+def _pnl_for_user(
+    user: AuthenticatedUser,
+    *,
+    cycles: list[dict[str, Any]] | None = None,
+    live_positions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     user_logger = cycle_logger_for(user)
-    cycles = cycles_after_reset(user_logger.fetch_cycles(), user)
+    cycles = cycles_after_reset(cycles if cycles is not None else user_logger.fetch_cycles(), user)
     logged_pnl = calculate_unrealized_pnl(
         cycles,
         mark_fetcher=market_service.fetch_spot_ticker,
     ) if cycles else {"realized_pnl": 0.0}
-    live_positions = positions(user)["positions"]
+    if live_positions is None:
+        live_positions = positions(user)["positions"]
     unrealized_pnl = round(
         sum(float(position.get("unrealized_pnl", 0) or 0) for position in live_positions),
         4,
@@ -1314,7 +1342,17 @@ def pnl(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
 def risk_usage(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
     user = normalize_user(user)
     require_connected_client(user)
-    live_positions = positions(user)["positions"]
+    return _risk_usage_for_user(user)
+
+
+def _risk_usage_for_user(
+    user: AuthenticatedUser,
+    *,
+    live_positions: list[dict[str, Any]] | None = None,
+    pnl_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if live_positions is None:
+        live_positions = positions(user)["positions"]
     position_size = round(
         sum(float(position.get("notional_usd", 0) or 0) for position in live_positions),
         4,
@@ -1323,7 +1361,9 @@ def risk_usage(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any
         (float(position.get("leverage", 0) or 0) for position in live_positions),
         default=0.0,
     )
-    current_daily_loss = max(0.0, -float(pnl(user)["daily_pnl"]))
+    if pnl_data is None:
+        pnl_data = pnl(user)
+    current_daily_loss = max(0.0, -float(pnl_data["daily_pnl"]))
     user_risk_engine = _risk_engine_for_user(user.id)
     max_position_size = float(user_risk_engine.max_position_size)
     max_daily_loss = float(user_risk_engine.max_daily_loss)
@@ -1546,6 +1586,10 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
     cycles = user_logger.fetch_cycles()
     if not cycles:
         cycles = agent_loop.recent_cycles(user.id)
+    return _activity_log_for_cycles(cycles)
+
+
+def _activity_log_for_cycles(cycles: list[dict[str, Any]]) -> dict[str, Any]:
     cycles = [
         cycle
         for cycle in cycles
@@ -1561,6 +1605,44 @@ def activity_log(user: AuthenticatedUser = Depends(current_user)) -> dict[str, A
         }
 
     return {"entries": []}
+
+
+@app.get("/dashboard")
+def dashboard(user: AuthenticatedUser = Depends(current_user)) -> dict[str, Any]:
+    user = normalize_user(user)
+    require_connected_client(user)
+
+    user_logger = cycle_logger_for(user)
+    cycles = user_logger.fetch_cycles()
+    if not cycles:
+        cycles = agent_loop.recent_cycles(user.id)
+
+    positions_data = _positions_for_user(user, cycles=cycles)
+    pnl_data = _pnl_for_user(
+        user,
+        cycles=cycles,
+        live_positions=positions_data["positions"],
+    )
+    risk_data = _risk_usage_for_user(
+        user,
+        live_positions=positions_data["positions"],
+        pnl_data=pnl_data,
+    )
+    status_data = _status_for_user(user, risk_data=risk_data)
+    balance_data = account_balance(user)
+    balance_history_data = account_balance_history(user)
+
+    return {
+        "positions": positions_data,
+        "pnl": pnl_data,
+        "risk_usage": risk_data,
+        "activity": _activity_log_for_cycles(cycles),
+        "kill_switch": get_kill_switch(user),
+        "balance": balance_data,
+        "balance_history": balance_history_data,
+        "agent_settings": user_agent_settings(user),
+        "status": status_data,
+    }
 
 
 @app.get("/strategies")

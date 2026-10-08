@@ -15,6 +15,7 @@ Camp trading project for tokenized U.S. stock futures.
 - Four built-in strategy definitions, including a dedicated two-leg pairs cycle
 - Built-in strategy config overrides for `position_size`, `leverage`, TP/SL, and threshold values
 - `GET /pnl` metrics for `win_rate_pct` and `max_drawdown_pct`
+- `GET /dashboard` aggregates Control Center data without truncating balance history
 - `GET /activity-log` metadata including `mode`
 - Separate Autonomous and Strategy activity classification in cycle logs
 - Spot/futures symbol normalization for risk allowlists
@@ -38,6 +39,7 @@ Then open:
 - http://127.0.0.1:8001/positions
 - http://127.0.0.1:8001/pnl
 - http://127.0.0.1:8001/risk-usage
+- http://127.0.0.1:8001/dashboard
 - http://127.0.0.1:8001/account/balance
 - http://127.0.0.1:8001/agent-loop
 - http://127.0.0.1:8001/strategies
@@ -72,9 +74,11 @@ connected an account. The Bitget execution client always sends
 `paptrading: 1`.
 
 `GET /account/balance` reads the connected demo account's futures equity and
-available USDT margin, plus spot USDT availability. It is read-only. Demo
-funds must be added through Bitget's demo-trading interface or supported demo
-funding workflow; normal trading API credentials cannot mint account balance.
+available USDT margin, plus spot USDT availability, and records the returned
+balance as an equity-history snapshot. It does not place trades or change
+account settings. Demo funds must be added through Bitget's demo-trading
+interface or supported demo funding workflow; normal trading API credentials
+cannot mint account balance.
 The response also includes `starting_balance`, `daily_change`, and
 `daily_change_pct`; the baseline is the first observed balance for the current
 UTC day.

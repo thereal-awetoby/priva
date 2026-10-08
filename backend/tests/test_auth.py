@@ -156,6 +156,7 @@ def test_every_protected_route_rejects_invalid_auth(monkeypatch):
         ("POST", "/user/backfill-trades", {"start_time": 1, "end_time": 2}),
         ("GET", "/auth/session", None),
         ("GET", "/status", None),
+        ("GET", "/dashboard", None),
         ("GET", "/positions", None),
         ("POST", "/positions/AAPLUSDT/close", {"position_side": "buy"}),
         ("POST", "/user/reset-trading-session", {"confirm": True}),

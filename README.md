@@ -375,12 +375,21 @@ GET /risk-settings
 POST /risk-settings
 POST /risk-check
 POST /paper-trade
+<<<<<<< HEAD
 GET /dashboard
 GET /account/balance
 GET /account/balance-history
 GET /pnl
 GET /activity-log
 GET /user/agent-loop
+=======
+GET  /dashboard
+GET  /account/balance
+GET  /account/balance-history
+GET  /pnl
+GET  /activity-log
+GET  /user/agent-loop
+>>>>>>> 46e6573202b328f55033d3f2cbf07b0653002240
 POST /user/agent-settings
 POST /kill-switch
 ```
