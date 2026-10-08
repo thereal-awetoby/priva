@@ -21,7 +21,7 @@ Open the [desk](https://priva-rho.vercel.app). Sign in. The running process is a
 | Decision-maker | Gemini chooses hold, buy, or sell each cycle (`backend/app/agent_loop.py`). Risk can still refuse. |
 | Cycle | Read → Model decides → Risk → Hash → Send. Any gate fails → nothing is sent |
 | Demo | https://priva-rho.vercel.app |
-| Paper log | [`priva-activity-csv-2026-09-30.csv`](./priva-activity-csv-2026-09-30.csv) (raw) · [`priva_completed_trades.csv`](./priva_completed_trades.csv) (32 scored closes) |
+| Paper log | [`priva-activity-csv-2026-09-30.csv`](./priva-activity-csv-2026-09-30.csv) (snapshot) · [`priva-activity-csv-2026-10-08.csv`](./priva-activity-csv-2026-10-08.csv) (full tape to 8 Oct) · [`priva_completed_trades.csv`](./priva_completed_trades.csv) · [`priva_completed_trades_2026-10-08.csv`](./priva_completed_trades_2026-10-08.csv) |
 | Risk | `$25k` position · `$1.5k` daily loss · `5x` · AAPL/TSLA allow-list · trade-only keys · kill switch |
 | Privacy | Hash of the intent. Fill still visible to the venue |
 
@@ -41,7 +41,7 @@ Example row from the raw tape (pre-change veto era):
 
 New cycles log `decision.source = model` instead of a veto gate.
 
-Observed paper tape (AAPL/TSLA only): equity ~$19,855 · desk PnL **−$116** · **32** logged closes · **23** with a PnL figure summing to **−$125.73**. Short window. No Sharpe.
+Observed paper tape (AAPL/TSLA only, **major test account**): equity ~$19,804 · desk total PnL **−$135.32** · realized **−$135.06** · win rate **49.54%** · max drawdown **−0.73%**. Short window. No Sharpe. This account was used for heavy build and debug (risk probes, mapping misses, Gemini veto era), so the red PnL is expected test cost, not a live performance claim.
 
 ---
 
@@ -222,26 +222,39 @@ Credentials sit in a Fernet vault (`PRIVA_CREDENTIAL_ENCRYPTION_KEY`). The worke
 
 ## Paper numbers
 
-Observed on the running demo account. Not a backtest. Not out-of-sample.
+Observed on the **main demo test account**. Not a backtest. Not out-of-sample. Desk UI as of 8 Oct 2026.
+
+This account carried the heavy build work (risk probes, symbol mapping, Gemini veto era, strategy activation tests). The red PnL is test cost on paper, not a claim about live edge.
 
 | | Observed |
 |---|---|
-| Paper equity | ~$19,855 |
-| Desk realized PnL | **−$116** |
-| Scored closes | 32 open→close pairs |
-| Closes with a PnL figure | 23 |
-| Sum of those 23 | **−$125.73** |
-| Win rate | ~48.5% |
-| Max drawdown | ~−0.65% |
+| Paper equity | ~$19,804 |
+| Desk total PnL | **−$135.32** |
+| Realized PnL | **−$135.06** |
+| Win rate | **49.54%** |
+| Max drawdown | **−0.73%** |
 | Universe | AAPLUSDT, TSLAUSDT |
 | Live funds | none |
 
-Some early demo TSLA / AAPL names rejected (`symbol not available`, `Parameter … does not exist`). Those are old mapping misses, not risk blocks. Holds mean the cycle ran and chose not to send. There is no Sharpe on this window.
+Export closes in [`priva_completed_trades_2026-10-08.csv`](./priva_completed_trades_2026-10-08.csv): **36** closes, **34** with a PnL figure (sum **−$79.65**, 18 wins / 16 losses on those 34). Desk totals can differ slightly from the export sum (open lots, fees, multi-unit closes).
 
-Paper log:
+**Worker downtime (Render free tier slept / cold starts before the keepalive cron).** Large gaps in the tape are host pause, not “the agent chose silence”:
 
-- [`priva-activity-csv-2026-09-30.csv`](./priva-activity-csv-2026-09-30.csv) — raw export
-- [`priva_completed_trades.csv`](./priva_completed_trades.csv) — 32 scored closes
+| Quiet from (UTC) | Quiet until (UTC) | ~hours |
+|---|---|---|
+| 2026-09-11 12:53 | 2026-09-16 09:34 | ~117 |
+| 2026-09-16 11:19 | 2026-09-22 15:43 | ~148 |
+| 2026-09-26 18:03 | 2026-09-28 15:20 | ~45 |
+| 2026-10-03 07:09 | 2026-10-08 15:17 | ~128 |
+
+Smaller overnight gaps also appear. After the health-ping cron, the worker stays warm. Early `symbol not available` rows were mapping misses. Many `gemini veto` / `risk_rejected` rows are the wall working (size, leverage, allow-list). Holds mean the cycle ran and chose not to send. There is no Sharpe on this window.
+
+Paper log (keep all four):
+
+- [`priva-activity-csv-2026-09-30.csv`](./priva-activity-csv-2026-09-30.csv) — earlier snapshot
+- [`priva-activity-csv-2026-10-08.csv`](./priva-activity-csv-2026-10-08.csv) — full export through 8 Oct (includes downtime gaps)
+- [`priva_completed_trades.csv`](./priva_completed_trades.csv) — earlier scored closes
+- [`priva_completed_trades_2026-10-08.csv`](./priva_completed_trades_2026-10-08.csv) — 36 closes from the 8 Oct export
 
 ---
 
@@ -355,18 +368,19 @@ Open:
 Bearer (`Authorization: Bearer <Supabase access token>`):
 
 ```
-GET  /strategies
+GET /strategies
 POST /strategies/parse
 POST /strategies/{id}/activate
-GET  /risk-settings
+GET /risk-settings
 POST /risk-settings
 POST /risk-check
 POST /paper-trade
-GET  /account/balance
-GET  /account/balance-history
-GET  /pnl
-GET  /activity-log
-GET  /user/agent-loop
+GET /dashboard
+GET /account/balance
+GET /account/balance-history
+GET /pnl
+GET /activity-log
+GET /user/agent-loop
 POST /user/agent-settings
 POST /kill-switch
 ```
